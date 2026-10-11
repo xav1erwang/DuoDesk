@@ -35,7 +35,7 @@ body:
     id: mac-sill
     attributes:
       label: Sill for Mac's version
-      description: The line at the foot of Sill's Settings › General, such as "Sill 0.3.0 (214)".
+      description: The line at the foot of Sill's Settings › General, such as "Sill 0.5.1 (563)".
     validations:
       required: true
   - type: input
@@ -62,6 +62,8 @@ body:
         - Wired (USB cable)
         - Direct (Direct Wireless Connection)
         - Remote (Remote Access)
+        - Not paired (it asked to pair)
+        - Update Sill
         - It didn't connect
         - I don't know
     validations:
