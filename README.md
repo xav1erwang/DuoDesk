@@ -18,13 +18,12 @@ server in between.
 
 [![CI](https://github.com/Saffsanity/sill/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Saffsanity/sill/actions/workflows/ci.yml)
 
-<!-- App Store: once the iPhone and iPad app is listed, put Apple's "Download on
-     the App Store" badge here, linked to the listing, and delete the sentence
-     below. -->
+[![Download on the App Store](https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83)](https://apps.apple.com/app/id6816359860)
 
 Sill for Mac is a free, notarized download from
-[getsill.app](https://getsill.app/download). The iPhone and iPad app is not on
-the App Store yet; until it is, you can build it from source (below).
+[getsill.app](https://getsill.app/download). Sill for iPhone and iPad is free
+on the [App Store](https://apps.apple.com/app/id6816359860), and you can also
+build it from source (below).
 
 ## Requirements
 
