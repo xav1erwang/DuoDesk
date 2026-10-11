@@ -25,6 +25,15 @@ Sill for Mac is a free, notarized download from
 on the [App Store](https://apps.apple.com/app/id6816359860), and you can also
 build it from source (below).
 
+## Screenshots
+
+These are the iPad screenshots from the App Store; on iPhone and iPhone Duo,
+Sill has layouts of its own.
+
+| [!["Your Mac, on your iPad." The Mac's Weather app on an iPad held sideways, under Sill's bar of window thumbnails and buttons.](design/screenshots/ipad-1.jpg)](design/screenshots/ipad-1.jpg) | [!["Laptop mode." An iPad held upright, with the Mac's Clock app on top and Sill's bar, a row of keys and a trackpad below it.](design/screenshots/ipad-2.jpg)](design/screenshots/ipad-2.jpg) | [!["Sharp and smooth." Sill's Settings panel on an iPad held upright, with the Mac's Quality, Resolution and Frame Rate settings.](design/screenshots/ipad-3.jpg)](design/screenshots/ipad-3.jpg) |
+| :---: | :---: | :---: |
+| [!["Pair once. Private always." Sill's Connect to a Mac screen on an iPad, with a Mac listed as Wired and Add a Mac below it.](design/screenshots/ipad-4.jpg)](design/screenshots/ipad-4.jpg) | [!["Launch any Mac app." Sill's Apps list on an iPad held sideways, with a search field, the apps open now and every app installed on the Mac.](design/screenshots/ipad-5.jpg)](design/screenshots/ipad-5.jpg) | [!["Every window, one tap away." On an iPad held sideways, a window's thumbnail held in Sill's bar shows Close, Minimize and Full Screen.](design/screenshots/ipad-6.jpg)](design/screenshots/ipad-6.jpg) |
+
 ## Requirements
 
 - A Mac with Apple silicon, on macOS 14 or later.

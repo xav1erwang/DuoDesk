@@ -4920,6 +4920,8 @@ good.
   and its download, support and privacy pages, a commented App Store badge
   slot, requirements, how it works, tips, building from source in brief,
   contributing, the license. `LICENSE` — the Apache License 2.0.
+  `design/screenshots/` — the README's screenshots: the App Store's iPad set at
+  half size. Their raw URLs go to open-source app lists: keep the names.
   `.github/FUNDING.yml` — the Sponsor button: GitHub Sponsors (a `ko_fi:`
   line joins it once there is a Ko-fi handle). Tip links live there, in the
   README's Tips and on the site, never in the iOS app. `SECURITY.md` — how to
