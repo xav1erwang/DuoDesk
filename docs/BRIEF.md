@@ -2,6 +2,8 @@
 
 Last updated 2026-09-22. Owner: Noah.
 
+This is the brief as of 2026-09-22; the README says what Sill does today.
+
 ## The idea
 
 An iPhone/iPad app plus a free Mac companion. Streams individual Mac windows,
@@ -51,6 +53,8 @@ grid.
   signaling + ICE hole punching later, still no servers we run.
 - Input: touch, keyboard, Pencil-as-pointer via CGEvents on the Mac.
   Companion needs Screen Recording + Accessibility permissions.
+- License: Apache-2.0, final since the repository went public on 2026-09-26
+  (LICENSE).
 
 ## UI (mockups on the design canvas)
 
@@ -109,8 +113,3 @@ Costs: $99/yr developer account, domain, optionally a Duo for testing.
 ## Open questions
 
 - Hours per week Noah can really commit.
-- Apache-2.0 vs MPL-2.0: Apache-2.0 unless Noah says otherwise. PR #15 (merged
-  2026-09-25) added its text as LICENSE, and the README says so. It becomes
-  final when the repository goes public, since a grant for published code can't
-  be taken back; MPL-2.0 instead means replacing LICENSE and the README's
-  License section before then.

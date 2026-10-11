@@ -22,10 +22,11 @@ Pipeline: `SCStream (420f) → VTCompressionSession (HEVC, real time, no B-frame
 - `Sources/CaptureProbe/` and `Sources/VirtualDisplayProbe/`: tools for
   diagnosis and experiments, not shipped.
 - `iOSClient/`: the iPhone and iPad app, `Sill.xcodeproj`.
-- `Packaging/`: Sill.app's `Info.plist` and development entitlements.
-  `Scripts/`: `make-app.sh`, and the test tools below. `design/`: the icon and
-  the disk image's background (see its README). `docs/`: the brief and the
-  plans.
+- `Packaging/`: Sill.app's `Info.plist`, its development and release
+  entitlements, and the iOS app's export options for App Store Connect.
+  `Scripts/`: `make-app.sh`, and the test tools below. `design/`: the icon, the
+  disk image's background and the App Store screenshots (see its README).
+  `docs/`: the brief and the plans.
 
 `CLAUDE.md`, Layout, goes through the code file by file.
 
@@ -92,18 +93,20 @@ Settings: `defaults read me.saffer.sill.mac`.
 
 Updates: once a day (and when you click Check Now in Settings › General),
 Sill asks GitHub (api.github.com) whether a newer Sill has been released, and
-when one has, the menu offers "Sill 0.4 Is Available…" and Settings › General
+when one has, the menu offers "Sill 0.6 Is Available…" and Settings › General
 says so; either opens the release's page on GitHub, where you download it.
 Sill never downloads or installs anything by itself, and a failed check is one
 line in the log and in Settings, never an alert. The request carries the Mac's
 IP address (like any visit to a website), Sill's version in its User-Agent
-("Sill/0.3.0"), a fixed `Accept-Language: en` (URLSession would otherwise send
+("Sill/0.5.1"), a fixed `Accept-Language: en` (URLSession would otherwise send
 the Mac's languages) and, after a first answer, GitHub's own ETag back
 (If-None-Match); nothing else about the Mac or you: no identifier, no cookie,
 nothing about your devices. "Check for updates automatically" turns the daily
-check off (what an earlier check found stays in the menu); the check needs a
-published GitHub release, so while the repository has none it logs "GitHub has
-no release of Sill (HTTP 404)" once a day. It keeps `updateLastCheck`,
+check off (what an earlier check found stays in the menu); the check reads only
+the latest published release of Saffsanity/sill (`UpdatePolicy.feed`),
+whichever repository a build came from; should GitHub answer 404 there (no
+release, as before v0.3.0), it logs "Update check failed: GitHub has no
+release of Sill (HTTP 404)." once a day. It keeps `updateLastCheck`,
 `updateETag`, `updateLatestTag` and `updateLatestURL` in `me.saffer.sill.mac`;
 to make the next launch check again after 30 s: `for k in updateLastCheck
 updateETag updateLatestTag updateLatestURL; do defaults delete
@@ -128,8 +131,10 @@ swift run -c release SillHost --virtual-display-selftest   # create and destroy 
 swift run -c release SillHost --menu-selftest=TextEdit     # the menus a device would get for an app (a pid, or its name), read once
 ```
 
-The argument matches an app name or window title. Leave it off to see the list
-of on-screen windows.
+The argument streams the first on-screen window whose app name or title
+contains it (ignoring case), as if a device had picked it; without it nothing
+streams until a device picks a window, and the host prints only how many
+windows are on screen.
 
 Its home door stays as it always was, plain TCP with no pairing: any device
 on your network can connect to `SillHost`, without encryption, so use it only
@@ -171,8 +176,8 @@ with the rate (the knob is per 60 fps, 1–200 Mbps).
 ### The iOS app
 
 1. Open `iOSClient/Sill.xcodeproj`. It already links the local
-   `StreamProtocol` package (this folder), sets Swift 5 language mode for the
-   spike, and carries an `Info.plist` with `NSLocalNetworkUsageDescription`,
+   `StreamProtocol` package (this folder), sets Swift 5 language mode, and
+   carries an `Info.plist` with `NSLocalNetworkUsageDescription`,
    `NSBonjourServices = [_sill._tcp]`, the camera text for the pairing scanner
    and the `sill` URL scheme (a pairing link always asks before it pairs).
 2. Target → Signing & Capabilities → pick your team. Change the bundle
@@ -249,8 +254,10 @@ needs version 1.2 or later."), with "Update Sill in the App Store" under them,
 and the device does not reconnect by itself. Today's Macs refuse no device.
 
 The project is a plain Xcode project checked in by hand: its source files, an
-asset catalog, and the package reference. Nothing else. A new source file
-needs its four `project.pbxproj` entries added by hand.
+asset catalog, two Info.plists (Info.plist, and Info-Debug.plist for Debug
+with the test service type), the privacy manifest `PrivacyInfo.xcprivacy`, and
+the package reference. Nothing else. A new source file needs its four
+`project.pbxproj` entries added by hand.
 
 ## Permissions
 
@@ -375,9 +382,11 @@ turning it off disconnects a device that is still connected directly (a second
 and a half later); it comes back over the network if it shares one. A device
 finds a Mac this way by itself once it has seen the Mac with it on, or when you
 tap Search Nearby on its connect screen; such a Mac shows as "Direct". With it
-on, anyone nearby running Sill can find and connect to the Mac. Turning Wi-Fi
-off in Control Center does not end a direct connection (it leaves the radio on
-for AirDrop); Settings › Wi-Fi does.
+on, anyone nearby running Sill can find the Mac and ask to pair, which opens
+its pairing window (at most three times in ten minutes); only devices you
+paired connect, unless Require pairing is off (Pairing at home, below).
+Turning Wi-Fi off in Control Center does not end a direct connection (it
+leaves the radio on for AirDrop); Settings › Wi-Fi does.
 
 ## Pairing at home
 
@@ -415,7 +424,9 @@ paired for Remote Access connects at home with no further step.
   home, and any app on the Mac, connects without pairing, still encrypted;
   turned on again, it disconnects the devices that are not paired ("Mac mini
   now asks devices to pair."). Sill keeps it beside the paired devices in the
-  login keychain, not in its defaults.
+  keychain, not in its defaults: in the data-protection keychain in the Sill
+  for Mac you download (0.4.0 and later), and in the login keychain in a
+  Sill.app you build yourself without the Developer ID provisioning profile.
 - **Older builds:** a device from before pairing at home dials the home door
   without TLS and can no longer connect to this Sill.app; the menu says "An
   iPhone or iPad Needs Sill Updated". Update the device first, then the Mac. A
@@ -428,11 +439,16 @@ paired for Remote Access connects at home with no further step.
   after each device's ask; `--print-cable` prints what the cable rule reads on
   each interface and exits.
 - **To start over:** remove the device in Settings › Devices, or on the device
-  touch and hold the Mac's row and choose Forget. The paired devices, Require
-  pairing's setting and the Mac's key are in Keychain Access › login (the key
-  "Sill Remote Access" and the passwords of service `me.saffer.sill.remote`);
-  deleting them makes this Mac new to every device, and every device pairs
-  again.
+  touch and hold the Mac's row and choose Forget. The Sill for Mac you download
+  (0.4.0 and later) keeps the paired devices, Require pairing's setting and the
+  Mac's key in the data-protection keychain, under its own access group, not in
+  the login keychain; remove devices in Settings › Devices. A Sill.app you build
+  yourself without the Developer ID provisioning profile keeps them in Keychain
+  Access › login (the key "Sill Remote Access" and the passwords of service
+  `me.saffer.sill.remote`); deleting those makes that build new to every
+  device, and every device pairs again. The two keychains are separate, so
+  switching between the download and a build of your own also changes the
+  Mac's key.
 
 ## Remote access (away from home)
 
@@ -538,11 +554,14 @@ is the host to pair with for good.
 
 To start over on the Mac: quit Sill, then `for k in remoteAccess remotePort
 internetAccess remoteAddressName remoteDevicesSeen; do defaults delete
-me.saffer.sill.mac $k; done`. The Mac's identity, its paired devices and
-Require pairing are in Keychain Access › login: the key "Sill Remote Access"
-and the passwords of service `me.saffer.sill.remote`; deleting them makes this
-Mac new to every device, which must pair again. On the device, a paired Mac's row has Forget in
-its menu (touch and hold).
+me.saffer.sill.mac $k; done`. The downloaded Sill for Mac (0.4.0 and later)
+keeps the Mac's identity, its paired devices and Require pairing in the
+data-protection keychain, not the login keychain: remove devices in Settings ›
+Devices. A Sill.app you build yourself without the Developer ID provisioning
+profile keeps them in Keychain Access › login: the key "Sill Remote Access" and
+the passwords of service `me.saffer.sill.remote`. Deleting those makes that
+build new to every device, which must pair again. On the device, a paired
+Mac's row has Forget in its menu (touch and hold).
 
 ## Test tools
 
@@ -560,10 +579,12 @@ Mac's messages, the update check, the disk image's window, where everything goes
 on a phone held upright, who moves the Mac's pointer, the Mac's menus on both
 ends, which three-finger strokes are gestures and what the Mac does with one,
 which modifiers a device's keys leave set on the Mac,
-the first-run tour, and pairing at home: the doors, the cable, the device's
-rows) on their own with a check each, and runs them: about five minutes, no
-device, permission or encoder. `--mutants` also checks that each check fails
-when its file is changed in one place (well over an hour).
+the first-run tour, pairing at home (the doors, the cable, the device's rows),
+which keychain Sill.app keeps its identity in, the away quality and the link's
+judgement, and the iPhone Duo's layouts) on their own with a check each, and
+runs them: about five minutes, no device, permission or encoder. `--mutants`
+also checks that each check fails when its file is changed in one place (well
+over an hour).
 `Tests/checks/README.md` lists them. CI (`.github/workflows/ci.yml`) runs them
 on every pull request and push to `main`, with `swift build -c release` and the
 iOS app's build for the simulator.
@@ -670,9 +691,10 @@ simulator:
   Pro upright, `440x894` for a Pro Max): a fake screen of that size. The
   Duo's four sizes have the safe area that display gives Sill (the home
   indicator's 34; on the inner display the status bar's strip, 84 pt at the
-  right sideways and 82 at the top upright, but on the stream screen upright
-  with `-SillHinge half` or `flat`, which hides it; on the cover its camera's
-  84 pt strip, at the right upright and the left on its side);
+  right sideways and 82 at the top upright, but on the stream screen with
+  `-SillHinge half` or `flat`, upright or sideways, which hides it; on the
+  cover its camera's 84 pt strip, at the right upright and the left on its
+  side);
   `-SillSafeArea T,L,B,R` sets another.
   The first guesses, `1000x710`, `710x1000`, `500x710` and `710x500`, still
   work, with none. One larger than the simulator is drawn scaled down to fit,
@@ -868,13 +890,14 @@ AirDrop, Sidecar and Universal Control can hold AWDL on too.
 
 ## Releasing
 
-Distribution (M6): a release is a commit tagged `v` + Packaging/Info.plist's
-CFBundleShortVersionString (`v0.4.0` for 0.4.0: bump the version, commit, `git
-tag v0.4.0`, `git push origin v0.4.0`), and its GitHub release in
-Saffsanity/sill is published (not a draft, not a prerelease) with the
-notarized disk image and zip attached; every Sill.app's update check reads
-that repository's releases alone and compares the tag with the version it
-runs.
+Distribution: a release is a commit tagged `v` + the version both apps carry,
+set together since 0.5.1 (Packaging/Info.plist's CFBundleShortVersionString
+and the iOS project's MARKETING_VERSION in both configurations; `v0.5.1` for
+0.5.1: bump both, commit, `git tag v0.5.1`, `git push origin v0.5.1`), and its
+GitHub release in Saffsanity/sill is published (not a draft, not a prerelease)
+with the notarized disk image and zip attached; every Sill.app's update check
+reads that repository's releases alone and compares the tag with the version
+it runs.
 `Scripts/release.sh` makes the downloads. It runs `make-app.sh --release`
 (which refuses a HEAD without that tag, and any signature but Developer ID),
 zips the app, sends it to Apple's notary service and waits, staples the
@@ -909,16 +932,24 @@ that the layout tool writes.
 The one-time setup and each release's steps are in docs/release-checklist.md.
 A Developer ID signature has a different designated requirement, so
 permissions are granted once more.
+`make-app.sh --release` embeds `Packaging/embedded.provisionprofile` (the
+Developer ID provisioning profile, git-ignored) and signs with
+`Packaging/SillRelease.entitlements`, so Sill keeps its key and paired devices
+in the data-protection keychain, as 0.4.0 and later do; without the profile it
+builds on the login keychain and says so, and a Mac updating from 0.4.0 or
+later would get a new key and pair every device again
+(docs/release-checklist.md, Part 1 §5).
 The release workflow (`.github/workflows/release.yml`) runs on a pushed tag
 `v<version>`: it checks and builds, and with the repository variable
 `SILL_SIGN_IN_CI` set to `true` it also signs, notarizes and publishes with
 `release.sh --publish` (docs/release-checklist.md, "Releasing from GitHub
 Actions"). Its checkout is that tag, so there `--publish` checks the local
 tag (`SILL_RELEASE_TAG`) rather than ask origin. Pushing the tag, which a
-`--publish` from your Mac needs first, starts it too: with `SILL_SIGN_IN_CI`
-on, let that run publish instead. Apple's answers and logs for both
-submissions are the run's artifact `notary-v<version>` for 30 days: when the
-job's log says a notary log lists issues, read them there.
+`--publish` from your Mac needs first, starts it too. The release workflow has
+no profile yet, so publish from your Mac with `release.sh --publish` and leave
+`SILL_SIGN_IN_CI` off until the workflow gets one. Apple's answers and logs for
+both submissions are the run's artifact `notary-v<version>` for 30 days: when
+the job's log says a notary log lists issues, read them there.
 
 The iOS app goes to App Store Connect (TestFlight, then the App Store) from
 `Scripts/release-ios.sh`: a Release archive signed by Xcode's automatic
@@ -973,9 +1004,11 @@ record field by field.
   ONLY, above). `.github/`: the CI, release and TestFlight workflows, and the
   Sponsor button.
 - `site/`: the website, plain HTML for GitHub Pages: home, download, privacy
-  policy and support. Preview it with
-  `python3 -m http.server 8000 --directory site`.
+  policy, terms of service and support, with the App Store badge
+  (`app-store-badge.svg`) and the image link previews show (`preview.jpg`).
+  Preview it with `python3 -m http.server 8000 --directory site`.
 - `docs/`: the brief, the plans, `app-store-metadata.md` (what App Store
   Connect asks for) and `release-checklist.md` (the order of work for a
   release).
-- `design/`: the app icon, and the disk image's background.
+- `design/`: the app icon, the disk image's background, and the iPad App
+  Store screenshots the README shows (`screenshots/`).

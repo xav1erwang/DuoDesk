@@ -33,3 +33,6 @@
   (`Sources/SillMenuBar/StatusGlyph.swift`): the iMac outline with the tilted
   iPad, as a template image. `SillMenuBar -SillRenderPreviews <dir>` writes
   `glyphs.png` with every state on light and dark bars.
+- `screenshots/`: the App Store's iPad screenshots that the README shows, at
+  half size (1032 × 1376, JPEG). Open-source app lists link these files, so
+  keep their names.

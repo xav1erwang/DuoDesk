@@ -11,8 +11,8 @@ file" at the end). Paste blocks keep their line breaks.
 ## Values this file assumes
 
 Noah confirmed the site and the contact address on 2026-09-25; Remote Access
-in 1.0 is still his call. The paste blocks below repeat them literally, and
-the command under the table changes every copy in this file.
+is in every version since 0.5. The paste blocks below repeat them literally,
+and the command under the table changes every copy in this file.
 
 | What | Value | Status |
 |---|---|---|
@@ -22,8 +22,8 @@ the command under the table changes every copy in this file.
 | Mac download | `https://getsill.app/download` | `site/download.html`; the same link as `SillLinks.download` in the app. |
 | Contact address | `support@getsill.app` | Noah's: Cloudflare Email Routing forwards it to his mailbox (2026-09-25). |
 | Mac requirement | Apple silicon, macOS 14 or later | Today's Sill.app is arm64 only; `LSMinimumSystemVersion` is 14.0. If the release build becomes universal, take "with Apple silicon" out of the description and the review notes. |
-| App Store Connect record | "Sill – Mac Streaming", Apple ID 6816359860, SKU `sill-ios` | Created 2026-09-26 (section 1). Builds 0.5 (1) to (3) went to TestFlight, and 0.5 (3) to App Review as the first version. The next is 0.5.1 (4), the version both apps share from Sill for Mac 0.5.1 on (section 5). |
-| Remote Access in 1.0 | Undecided: main has it since ba91136 (PR #13) | Noah decides, before anything is pasted, whether 1.0 keeps it or ships without it (the audit's advice, given before it merged). |
+| App Store Connect record | "Sill – Mac Streaming", Apple ID 6816359860, SKU `sill-ios` | Created 2026-09-26 (section 1). Builds 0.5 (1) to (3) went to TestFlight; 0.5 (3) went to App Review as the first version, live 2026-10-08; 0.5.1 (4), the version both apps share from Sill for Mac 0.5.1 on, live 2026-10-10 (section 5). |
+| Remote Access | In every version since 0.5, and in Sill for Mac since 0.3.0 (PR #13) | The live listing names it; the Remote Access switch below is only for a build without it. |
 
 To change the domain or the contact address in this file, with both values
 filled in (the address first: the domain's expression would change it too):
@@ -35,9 +35,9 @@ sed -i '' -e 's#support@getsill\.app#THE.REAL.ADDRESS#g' -e 's#getsill\.app#NEW.
 The app's own copy of the site and of the download, support and privacy links
 is `iOSClient/SillLinks.swift`.
 
-**Remote Access switch.** The blocks below describe a 1.0 that includes Remote
-Access (PR #13, on main since ba91136). Guideline 2.3.1(a) forbids describing
-what the build lacks, so if 1.0 ships without it, make every one of these cuts.
+**Remote Access switch.** The blocks below describe the app as shipped since
+0.5, with Remote Access; for a build without it, make every one of these cuts,
+since guideline 2.3.1(a) forbids describing what the build lacks.
 Pairing and the camera stay either way: since pairing at home (PR #37, Sill for
 Mac 0.4.0 with build 0.5 (2)) every device pairs, at home too.
 
@@ -45,7 +45,7 @@ Mac 0.4.0 with build 0.5 (2)) every device pairs, at home too.
 |---|---|
 | Description | Delete the bullet that starts "Away from home". |
 | Keywords | Use the local-only line. |
-| Review notes | Delete from `REMOTE ACCESS` to the end (the local-only size is given). |
+| Review notes | Delete the REMOTE ACCESS (optional) paragraph (the local-only size is given). |
 | What's New | Use the local-only line. |
 | Demo video | Skip shot 11. |
 | Site | Delete every block marked `<!-- Remote Access`. Step 3 of the release checklist has the check. |
@@ -55,10 +55,9 @@ Mac 0.4.0 with build 0.5 (2)) every device pairs, at home too.
 
 These texts are only true once these are:
 
-- The paste blocks match the build. Main has had Remote Access since
-  ba91136; the audit, before that, advised a 1.0 without it. For a build
-  without it, make every cut in the Remote Access switch above, the site's
-  included.
+- The paste blocks match the build. They describe the app as shipped since
+  0.5, with Remote Access; for a build without it, make every cut in the
+  Remote Access switch above, the site's included.
 - The support, privacy and download URLs load in a private window, signed out.
   The support page shows a way to reach you (guideline 1.5).
 - Sill for Mac at the download URL is Developer ID signed, notarized and
@@ -153,6 +152,10 @@ included, out of the name, the subtitle and the keywords (2.3.7), and keep
 ```text
 Remote display for your Mac
 ```
+
+The App Store shows "Remote Mac window management" (28 of 30) with 0.5.1,
+which reads like a window-tiling utility; paste this one at the next version
+(the subtitle changes only with a version).
 
 ### Category
 
@@ -273,6 +276,12 @@ Free, with no account and no servers. Use any window on your Mac, or the whole d
 
 ### Description (4,000 characters at most)
 
+The App Store shows another description with 0.5.1 (3,302 characters,
+beginning "Sill shows a window from your Mac, or its whole desktop…"), which
+this file doesn't hold. Paste this block at the next version: it has what that
+one leaves out, the Mac requirement, iPhone Duo, away from home and no sound
+among them.
+
 ```text
 Sill puts your Mac on your iPhone and iPad. Pick any window, or the whole desktop, and use it with touch, a trackpad, a keyboard or Apple Pencil. Your apps keep running on your Mac. Sill shows them and sends back what you do.
 
@@ -309,6 +318,7 @@ Your Mac, your network
 Private
 • No account, no ads, no tracking.
 • Sill has no servers and collects no data. The picture and what you type go between your devices and your Mac, and to no one else.
+• Sill is free and open source (Apache 2.0): https://github.com/Saffsanity/sill
 
 Good to know
 • Sill shows one window, or the whole desktop, at a time.
@@ -318,9 +328,9 @@ Good to know
 
 Local-only build: delete the bullet that starts "Away from home".
 
-Before the source is public with a LICENSE file, don't call Sill open source
-anywhere in the listing (2.3.1(a)). Once it is, a line such as "Sill is free
-and open source." can join "Private".
+The source is public under the Apache License 2.0 (since 2026-09-26), so the
+listing may call Sill open source, as the live description does and the last
+bullet of "Private" does.
 
 The pairing bullet says "By default" because Require pairing, in Sill for
 Mac's Settings › Devices, can be turned off: then any device on the Mac's
@@ -429,73 +439,82 @@ both.
 | Sign-in required | Unchecked. There is no account. |
 | Contact | Noah Saffer, a phone number starting with + and the country code, and an email you read (`support@getsill.app` or your own; App Review only) |
 | Notes | The block below |
-| Attachment | The demo video (section 8) |
+| Attachment | The screen recording (section 8) |
 
 ### Notes (4,000 bytes at most)
 
 Plain ASCII on purpose, so every character is one byte.
 
 ```text
-WHAT SILL IS
-Sill is a remote display for the user's own Mac. The iPhone and iPad app shows any window, or the whole desktop, of a Mac running the free Sill for Mac, and sends touch, trackpad, keyboard and Apple Pencil input back to it. Every app runs and draws on the Mac. The iOS app shows the picture and the Mac app's menus, and sends input. Its Apps list shows only apps already installed on that Mac.
+PURPOSE AND AUDIENCE
+Sill is a general-purpose remote desktop for the user's own Mac: it mirrors the whole Mac (the Desktop button) or any window of any app the user picks. It lets people use their Mac from their iPhone or iPad. It shows any Mac window, or the whole desktop, on the device and sends touch, trackpad, keyboard and Apple Pencil input back, so a Mac app can be used from another room, the couch or away from home, with no cloud service. It is for people who own a Mac and an iPhone or iPad. Every app runs and draws on the Mac; the iOS app shows the picture, lists the menu items of the Mac app in front so they can be chosen by touch (choosing one performs it on the Mac), and sends input. Its Apps list shows only apps already installed on that Mac.
 
-There is no account, no sign-in, no in-app purchase, no ads and no server. The app talks only to the user's own Mac, which it finds with Bonjour on the local network.
+ACCOUNTS AND PURCHASES
+None: no account, no sign-in, no in-app purchase, no ads. No demo account is needed.
+
+EXTERNAL SERVICES
+None. The app talks only to the user's own Mac, found with Bonjour on the local network, over TLS 1.3 after a one-time pairing. Optional Remote Access uses a VPN the user already runs (such as Tailscale) or a port the user forwards; Sill runs no server. No analytics, AI, payment or login service.
+
+REGIONS
+The app works the same in every region, with no regional differences.
+
+REGULATED OR THIRD-PARTY MATERIAL
+Not applicable. Sill shows only the user's own Mac and its apps.
+
+NO VPN FUNCTIONALITY
+Sill creates, configures and operates no VPN and uses no Network Extension (no NEVPNManager, tunnel or proxy provider, no such entitlement). Only Network.framework, for TCP with TLS 1.3 to the user's own Mac. "VPN" appears only because a user may optionally reach their Mac through a VPN they already run themselves (such as Tailscale); Sill just connects to the Mac's address over the network the device has and names that connection. It collects no user information through VPN or anything else, and shares nothing with third parties.
 
 WHAT YOU NEED
 - A Mac with Apple silicon and macOS 14 or later.
-- An iPhone or iPad on the same Wi-Fi network as the Mac.
-- Sill for Mac 0.4.0 or later, free: https://getsill.app/download (Developer ID, notarized).
+- An iPhone or iPad on the same Wi-Fi network.
+- Sill for Mac 0.5.1 or later, free: https://getsill.app/download (Developer ID, notarized).
 
 SET UP THE MAC (about 2 minutes)
-1. Download Sill for Mac from the link above, move Sill to Applications and open it (click Open if macOS asks). It lives in the menu bar, with no Dock icon, and opens its Settings on Permissions.
-2. Screen Recording (so Sill can show windows): click Allow..., turn on Sill in System Settings, then click Quit & Reopen when macOS offers it (or Relaunch Sill in Sill's Settings).
-3. Accessibility (so the device can click and type): click Allow... and turn on Sill in System Settings.
-4. If macOS asks whether Sill may find devices on your local network, click Allow.
-The Permissions pane then says "You're all set."
+1. Download Sill for Mac, move it to Applications and open it. It lives in the menu bar and opens its Settings on Permissions.
+2. Screen Recording: click Allow..., turn on Sill in System Settings, then click Quit & Reopen.
+3. Accessibility: click Allow... and turn on Sill.
+4. If macOS asks about the local network, click Allow. The pane then says "You're all set."
 
 CONNECT AND PAIR (once per device)
-5. Open Sill on the iPhone or iPad. Tap Allow when it asks for Local Network access.
-6. The Mac appears under "Connect to a Mac" within a few seconds, marked "Not paired". Tap it.
-7. The Mac opens a window with a QR code and a 12-digit code. Point the device's camera at the QR code (allow camera access; the camera only reads that code), or tap Enter Code Instead and type the digits. The Mac's desktop appears. Over a USB-C cable (the row says "Wired") the device pairs by itself while the Mac is unlocked.
+5. Open Sill on the iPhone or iPad and allow Local Network access.
+6. The Mac appears under "Connect to a Mac", marked "Not paired". Tap it.
+7. The Mac shows a QR code and a 12-digit code. Scan it with the device's camera, or tap Enter Code Instead and type it. The Mac's desktop appears. Over a USB-C cable the device pairs by itself while the Mac is unlocked.
 
 WHAT TO TRY
-- The first time the Mac's picture shows, a short tour points out the controls. Take the Tour in Settings shows it again.
-- Apps (magnifying glass): pick an open window, or search the list and open an app.
-- Tap to click. Drag to scroll. Touch and hold to right-click. Apple Pencil works as a mouse.
-- Three fingers: swipe up for Mission Control, left or right for Spaces, spread for Show Desktop.
-- Keyboard: type into the window. A hardware keyboard works too, with shortcuts.
-- Menus (in the bar; on iPad with iPadOS 26 or later also the menu bar at the top of the screen): the menus of the app on the Mac. Choose an item and the Mac does it.
-- Move the mouse on the Mac: its pointer shows on the device too.
-- Aa: touch and slide to change the text size.
-- Window thumbnails in the bar: tap to switch. Touch and hold for the window's close, minimize and full screen buttons. Keep holding and drag to reorder.
-- Desktop: the whole Mac screen.
-- Hold the device upright (portrait): a laptop layout with a trackpad and a row of keys.
-- Settings (gear, last in the bar): the Mac's Quality, Resolution and Frame Rate. Disconnect is at the bottom.
+- Apps (magnifying glass): pick a window, or search and open an app.
+- Tap to click, drag to scroll, touch and hold to right-click. Apple Pencil works as a mouse.
+- Three fingers: swipe up for Mission Control, spread for Show Desktop.
+- Keyboard, Menus, Aa (text size), window thumbnails, Desktop.
+- Hold the device upright for a laptop layout with a trackpad and keys.
+- Settings (gear): Quality, Resolution and Frame Rate; Disconnect at the bottom.
 
 IF THE MAC DOES NOT APPEAR
-Some networks (guest, office, hotel) keep devices from seeing each other. Then connect an iPad to the Mac with a USB-C cable, or turn on Direct Wireless Connection in the Sill menu on the Mac and tap Search Nearby on the device, which needs no shared network.
+Guest or office networks can keep devices apart: use a USB-C cable, or turn on Direct Wireless Connection in the Sill menu and tap Search Nearby.
+
+REMOTE ACCESS (optional)
+In the Sill menu choose Remote Access... and turn it on while the device is connected. The device can then reach the Mac from another network through the user's own VPN. It starts at a lower quality for slower links.
 
 VIDEO
-The attached video, filmed with a camera, shows a Mac and an iPad together: setup, pairing, streaming, touch and keyboard input, and the Settings panel.
-
-REMOTE ACCESS
-On the Mac, choose Remote Access... in the Sill menu and turn it on while the paired device is connected: the device then learns how to reach it from another network through the user's own VPN (such as Tailscale on both). To try it, move the device to cellular or a hotspot with the VPN on and tap the Mac. It starts at a lower quality for slower links. The attached video shows this too.
+The attached screen recording (a physical device, latest OS) starts at launch: pairing, streaming a window, input, menus, Settings.
 ```
 
-Local-only build: delete from `REMOTE ACCESS` to the end.
+Local-only build: delete the REMOTE ACCESS (optional) paragraph.
 
-The notes in App Store Connect grew answers to App Review's questions about
-0.5 (purpose and audience, accounts, external services, regions, no VPN
-functionality) and say the rest more briefly; a new version starts with
-them. For 0.5.1, add the same sentence, "It starts at a lower quality for
-slower links.", to the end of their REMOTE ACCESS paragraph (47 bytes; they
-stay under 4,000).
+These are the notes as App Store Connect holds them since App Review's
+questions about 0.5, which they answer (purpose and audience, accounts,
+external services, regions, no VPN functionality); a new version starts with
+them. For 0.5.1 this block adds the last sentence of REMOTE ACCESS, "It starts
+at a lower quality for slower links." (47 bytes), and asks for Sill for Mac
+0.5.1 in WHAT YOU NEED, whose away quality that sentence describes: check that
+App Store Connect's copy has both.
 
 ## 8. Demo video
 
-App Review asks for "a video, not a screen recording" when an app needs
-hardware they may not have. Sill needs a Mac, so film the Mac and the device
-together with a camera:
+For 0.5, App Review asked for a screen recording captured on a physical
+device running the latest OS, starting at the app's launch: that is the
+attachment (pairing, streaming a window, input, menus, Settings). If App Review
+asks to see the Mac as well, film the Mac and the device together with a
+camera:
 
 - A phone on a tripod, landscape, 1080p. The Mac's screen and the device
   together in frame and readable. Close enough to read the Mac's menu bar.
@@ -542,7 +561,19 @@ update. Screenshots can only change with a new version once one is approved.
 
 ### Which screens
 
-Five per set, the app in use first (2.3.3).
+Six per set in the listing with 0.5.1, the app in use first (2.3.3), each
+with its caption drawn in:
+
+| # | iPhone | iPad |
+|---|---|---|
+| 1 | Your Mac, in your hand. | Your Mac, on your iPad. |
+| 2 | Launch any Mac app. | Laptop mode. |
+| 3 | Every window, one tap away. | Sharp and smooth. |
+| 4 | Laptop mode. | Pair once. Private always. |
+| 5 | Sharp and smooth. | Launch any Mac app. |
+| 6 | Pair once. Private always. | Every window, one tap away. |
+
+The first plan, five per set, before the captions:
 
 | # | iPhone 6.9" | iPad 13" |
 |---|---|---|
@@ -682,10 +713,14 @@ Safe:
   rule that Remote Access is turned on while the paired device is connected
   (a device learns the Mac's addresses only from a session with Remote Access
   on); the rest unchanged.
-- For 0.5.1 (4) with Sill for Mac 0.5.1, PR #39's away from home and PR #46,
-  the same script: description 2,603 (local-only 2,382) of 4,000 characters;
-  review notes 3,995 bytes (local-only 3,592) of 4,000, all ASCII; What's
-  New 523 and 128 characters; the rest unchanged.
+- For 0.5.1 (4) with Sill for Mac 0.5.1, PR #39's away from home, PR #46 and
+  the iPhone Duo text, the same script: description 2,792 (local-only 2,571)
+  of 4,000 characters; review notes 3,995 bytes (local-only 3,592) of 4,000,
+  all ASCII; What's New 753 and 358 characters; the rest unchanged.
+- After the launch review (2026-10-11), with the open-source bullet in the
+  description and App Store Connect's notes in section 7, the same way:
+  description 2,872 (local-only 2,651) of 4,000 characters; review notes
+  3,952 bytes (local-only 3,709) of 4,000, all ASCII; the rest unchanged.
 - The encryption key, now in `iOSClient/Info.plist`: Release builds of this
   branch for the simulator and for a device each have
   `"ITSAppUsesNonExemptEncryption" => false` in the built Sill.app's
@@ -713,7 +748,7 @@ Safe:
   connect screen, the bars (Apps, Keyboard, Desktop, Settings), the panel, the
   Mac's Permissions pane and menu, and on remote-access "Add a Mac…",
   "Remote Access…", "Pair iPhone or iPad…" and "Enter Code Instead".
-- No em-dashes in this file; no email address in it.
+- No em-dashes in this file; its only email address is support@getsill.app.
 - Pairing at home (PR #37, 2026-09-27): the description, the review notes,
   the export compliance, the privacy answers, the demo video and the
   screenshot steps describe it, since every connection at home is TLS with

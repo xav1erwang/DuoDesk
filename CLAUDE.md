@@ -4917,8 +4917,9 @@ good.
   test tools in brief (Build and run below has them all), measuring latency,
   troubleshooting (slow, frozen, the encoder), releasing, known limitations.
 - `README.md` — the public front page: the site's lede, links to getsill.app
-  and its download, support and privacy pages, a commented App Store badge
-  slot, requirements, how it works, tips, building from source in brief,
+  and its download, support, privacy and terms pages, the App Store badge
+  (live since 2026-10-10), requirements, how it works, tips, building from
+  source in brief,
   contributing, the license. `LICENSE` — the Apache License 2.0.
   `design/screenshots/` — the README's screenshots: the App Store's iPad set at
   half size. Their raw URLs go to open-source app lists: keep the names.
