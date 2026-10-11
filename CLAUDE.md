@@ -49,7 +49,9 @@ item) and the release's order ("The away release").
   site republished, the check signed out; the results in sill-handoff's `release-051/STATUS.md`.
   Still open, and shipped without them on Noah's call: his device tests of away from home (P4–P13
   below) and of the iPhone Duo (the Duo entry's P1–P13, on a Duo from October 23); on the App
-  Store, 0.5.1 once 0.5 is Ready for Distribution, with the Duo screenshots.
+  Store, 0.5 went live on 2026-10-08 and 0.5.1 (4) on 2026-10-10, approved within hours
+  (https://apps.apple.com/app/id6816359860; the large-display iPhone screenshots follow as a
+  standalone Asset Library submission). The site and README name the listing since PR #49.
 
 **The iPhone Duo with the iOS 27.1 SDK (2026-10-08, branch `duo-layout` from main at e6b3265,
 main at 05f2bb8 (PR #39) merged in at 7bd7c41, not rebased; docs/iphone-duo-plan.md has the probe's

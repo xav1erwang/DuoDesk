@@ -17,7 +17,7 @@ came with the App Store Connect record (2026-09-26). Each lives in the places li
 | The site's domain | getsill.app (bought at Cloudflare 2026-09-25; live) | `site/CNAME`, the iOS app's links (`iOSClient/SillLinks.swift`), `README.md`, `docs/DEVELOPMENT.md`, `docs/app-store-metadata.md`, `Scripts/release.sh`, this file |
 | The support address | `support@getsill.app` (Cloudflare Email Routing, 2026-09-25) | `site/privacy.html`, `site/support.html`, `README.md`, `docs/app-store-metadata.md`, this file |
 | The current Mac build | none in the page: it links `releases/latest/download/Sill.dmg` and `Sill.dmg.sha256` (since Sill for Mac 0.3.1, PR #33), which GitHub redirects to the newest release; `release.sh --publish` uploads them under those names, with `Sill.zip` and `Sill.zip.sha256` beside them for older links | `site/download.html` (never edited per release, part 2) |
-| The App Store address | `https://apps.apple.com/app/id6816359860`, the record's Apple ID (PR #27, 2026-09-26). It answers only once the app is on the App Store; until then a Mac's update notice links a page that isn't there yet | `iOSClient/SillLinks.swift` (`appStoreText`; `release-ios.sh` stops on a line that isn't an App Store address) |
+| The App Store address | `https://apps.apple.com/app/id6816359860`, the record's Apple ID (PR #27, 2026-09-26). Live since 2026-10-08 (0.5; 0.5.1 since 2026-10-10), so a Mac's update notice, the site and the README link a page that answers | `iOSClient/SillLinks.swift` (`appStoreText`; `release-ios.sh` stops on a line that isn't an App Store address) |
 
 To change one, with the new value in place of `<address>` or `<domain>`: the first command
 changes the support address, the second the domain everywhere, the address's own included.
