@@ -4741,7 +4741,9 @@ good.
 - `site/` — the website, for GitHub Pages at the domain in `site/CNAME`:
   `index.html`, `download.html` (links the newest GitHub Release's `Sill.dmg`
   and `Sill.dmg.sha256`; never edited per release), `privacy.html` (the policy
-  App Store Connect and the app link to), `support.html`, `style.css` (system
+  App Store Connect and the app link to), `support.html`, `terms.html` (the terms of service: the
+  Apache license, Apple's EULA for the App Store copy, no warranty, no fees;
+  linked in every footer), `style.css` (system
   fonts, light and dark) and `icon.svg` (a copy of design/AppIcon.svg). No
   scripts and nothing loaded from elsewhere: every page's
   Content-Security-Policy is `default-src 'none'`. Links are relative and
