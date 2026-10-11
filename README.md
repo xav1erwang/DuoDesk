@@ -14,7 +14,8 @@ server in between.
 **[getsill.app](https://getsill.app)** ·
 [Download for Mac](https://getsill.app/download) ·
 [Support](https://getsill.app/support) ·
-[Privacy](https://getsill.app/privacy)
+[Privacy](https://getsill.app/privacy) ·
+[Terms](https://getsill.app/terms)
 
 [![CI](https://github.com/Saffsanity/sill/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Saffsanity/sill/actions/workflows/ci.yml)
 
@@ -41,7 +42,9 @@ Sill has layouts of its own.
 - On your Mac, Sill asks for Screen Recording, to show your windows, and
   Accessibility, to click, scroll and type for you and to move and size the
   window it shows. On macOS 15 or later, also allow Local Network. On your
-  iPhone or iPad, Sill asks for Local Network, to find your Mac.
+  iPhone or iPad, Sill asks for Local Network, to find your Mac, and for the
+  camera when you scan your Mac's pairing code (you can type the code
+  instead).
 - Your Mac and your device on the same network, joined by a USB cable, or near
   each other with Direct Wireless Connection on. Away from home, your own VPN,
   such as Tailscale, with Remote Access on.
@@ -106,9 +109,8 @@ the iPhone and iPad app shows an older Sill for Mac as "Update Sill", and an
 older iPhone and iPad app can't connect to Sill for Mac 0.4.0 or later at
 home. Since 0.5.1 the two apps share one version number for each release. With
 Sill for Mac 0.3.1 or earlier, connections on your local network, over the
-cable and over Direct Wireless Connection are not encrypted, and any iPhone or
-iPad with Sill on the same network, or nearby while Direct Wireless Connection
-is on, can connect to your Mac: update it.
+cable and over Direct Wireless Connection are not encrypted, and anything that
+reaches your Mac there can connect without pairing: update it.
 
 ## Tips
 
@@ -130,12 +132,23 @@ Scripts/make-app.sh --install --open
 ```
 
 This builds Sill.app with SwiftPM, signs it with your Apple Development
-identity, replaces /Applications/Sill.app and opens it. Without `--install` it
-only builds `.build/Sill.app`. With no Apple Development identity it signs ad
-hoc, and then Screen Recording and Accessibility have to be granted again
-after every build. For work on the host itself, `swift run -c release
-SillHost` runs the same host on the command line, and with `--synthetic` it
-streams a test pattern with no Screen Recording needed.
+identity, replaces /Applications/Sill.app and opens it. If that was the Sill
+for Mac you downloaded, grant Screen Recording and Accessibility again and
+pair each device again: the download keeps its key and paired devices in the
+data-protection keychain, which only a Developer ID build with the project's
+provisioning profile reads, and a build of your own keeps them in your login
+keychain. Without `--install` it only builds `.build/Sill.app`. With no Apple
+Development identity it signs ad hoc, and then Screen Recording and
+Accessibility have to be granted again after every build.
+
+For work on the host itself, `swift run -c release SillHost` runs the same
+host on the command line, with one difference: unless you add `--pairing`, its
+home door is plain and open, with no pairing and no encryption, and any device
+on your network can connect to it, so run it only while developing. The App
+Store's Sill for iPhone and iPad never dials such a door ("Update Sill"); a
+Debug build from this repository can ([docs/DEVELOPMENT.md](docs/DEVELOPMENT.md),
+Pairing at home). With `--synthetic` it streams a test pattern with no Screen
+Recording needed.
 
 The iPhone and iPad app:
 
