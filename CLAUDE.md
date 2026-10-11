@@ -4744,7 +4744,9 @@ good.
   App Store Connect and the app link to), `support.html`, `terms.html` (the terms of service: the
   Apache license, Apple's EULA for the App Store copy, no warranty, no fees;
   linked in every footer), `style.css` (system
-  fonts, light and dark) and `icon.svg` (a copy of design/AppIcon.svg). No
+  fonts, light and dark) `icon.svg` (a copy of design/AppIcon.svg) and `preview.jpg` (the
+  1200 × 630 share image that the Open Graph and Twitter card tags in every
+  page's head name). No
   scripts and nothing loaded from elsewhere: every page's
   Content-Security-Policy is `default-src 'none'`. Links are relative and
   name a file (`download.html`; Home is `index.html`, since `./` opens nothing
