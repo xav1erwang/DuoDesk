@@ -78,11 +78,12 @@ import StreamProtocol
 ///                                              offscreen; no identity is loaded, no listener)
 ///
 /// These are the bare SillMenuBar binary's (defaults domain "SillMenuBar"; delete it after). Sill.app
-/// itself, an app bundle's executable, ignores every `-Sill…After` hook, `-SillTestScreenHeight`,
-/// `-SillSettingsShot` and `-requirePairing`, each with one line (docs/home-pairing-plan.md §6.6):
-/// they open, answer or remove pairings, or change what the doors admit, and any process of this
-/// user can start Sill.app with arguments, which then runs with Sill's Screen Recording and
-/// Accessibility grants. `--synthetic`, `-SillLogFile`,
+/// itself, an app bundle's executable, ignores every `-Sill…After` hook and `-requirePairing`, each
+/// with one line (docs/home-pairing-plan.md §6.6): they open, answer or remove pairings, or change
+/// what the doors admit, and any process of this user can start Sill.app with arguments, which then
+/// runs with Sill's Screen Recording and Accessibility grants. `-SillTestScreenHeight` and
+/// `-SillSettingsShot` go with `-SillSettingsAfter` and are ignored the same way: Sill.app has no
+/// use for them. `--synthetic`, `-SillLogFile`,
 /// `-SillRenderPreviews` and the update check's `-SillUpdateFeed`, `-SillUpdateNow`,
 /// `-SillUpdateVersion` and `-SillUpdateInterval` stay: they bear on no door and no pairing (a feed
 /// on this Mac only).
@@ -293,7 +294,7 @@ enum DebugHooks {
         return spec.split(separator: ";").compactMap { raw in
             let parts = raw.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1).map(String.init)
             guard parts.count == 2, let delay = Double(parts[0]), delay > 0 else {
-                print("SillSettingsAfter: can’t read “\(raw)”; expected '<seconds> <tab>' or '<seconds> close'")
+                print("SillSettingsAfter: can’t read “\(raw)”; expected '<seconds> <tab or step>'")
                 return nil
             }
             let word = parts[1].lowercased().replacingOccurrences(of: " ", with: "")
@@ -311,7 +312,7 @@ enum DebugHooks {
                 $0.rawValue.lowercased().hasPrefix(word) || $0.title.lowercased().replacingOccurrences(of: " ", with: "").hasPrefix(word)
             }
             guard matches.count == 1, let tab = matches.first else {
-                print("SillSettingsAfter: no one tab called “\(parts[1])” (general, devices, streaming, virtual display, permissions, remote access)")
+                print("SillSettingsAfter: “\(parts[1])” is no step: a tab (general, devices, streaming, virtual display, permissions, remote access, or the start of one), close, report, end or height=<points>")
                 return nil
             }
             return (parts[0], delay, .tab(tab))
