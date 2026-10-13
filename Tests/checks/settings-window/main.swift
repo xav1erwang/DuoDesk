@@ -25,15 +25,18 @@ let m = Fit.margin
 same(m, 12, "the margin")
 same(Fit.minimumContent, 200, "the least a pane is given")
 
-// The title bar and the toolbar of Settings as macOS 27.0.1 draws them (the plan's probe): 88 pt.
-let chrome: CGFloat = 88
+// The title bar and the toolbar of Sill's Settings window as macOS 27.0.1 draws them: 80 pt
+// (-SillSettingsAfter's "chrome"; the plan's probe, with a toolbar of its own, had 88).
+let chrome: CGFloat = 80
 /// What the window shows of a pane `pane` points tall under a cap `limit`, and its frame height.
 func shown(_ pane: CGFloat, _ limit: CGFloat) -> CGFloat { min(pane, limit) }
 func windowHeight(_ pane: CGFloat, _ limit: CGFloat) -> CGFloat { shown(pane, limit) + chrome }
 
-// The panes' natural heights (the previews at 985a733, pixels ÷ 2), and rosstex's window (951 pt).
-let remoteInternet: CGFloat = 983, remoteTailscale: CGFloat = 701, general: CGFloat = 738
-let streaming: CGFloat = 474, permissions: CGFloat = 275, rosstexPane: CGFloat = 951 - chrome
+// The panes' natural heights: Remote Access's from the previews at 985a733 (pixels ÷ 2), with the
+// internet switch on and with Tailscale; the others from the live window in test pattern mode
+// (-SillSettingsAfter); and rosstex's window, 951 pt.
+let remoteInternet: CGFloat = 983, remoteTailscale: CGFloat = 701, general: CGFloat = 727
+let streaming: CGFloat = 568, permissions: CGFloat = 275, rosstexPane: CGFloat = 951 - chrome
 
 // MARK: The cases
 
@@ -41,22 +44,22 @@ let streaming: CGFloat = 474, permissions: CGFloat = 275, rosstexPane: CGFloat =
 // (this Mac), the Dock hidden.
 let mbp = CGRect(x: 0, y: 0, width: 1512, height: 949)
 let mbpLimit = Fit.contentLimit(visible: mbp, chrome: chrome)
-same(mbpLimit, 949 - 88 - 24, "14-inch, default scaling, no Dock")
+same(mbpLimit, 949 - 80 - 24, "14-inch, default scaling, no Dock")
 same(windowHeight(remoteInternet, mbpLimit), 925, "Remote Access with the internet switch on: capped, 12 pt clear of each edge")
 check(shown(rosstexPane, mbpLimit) < rosstexPane, "rosstex's 951 pt window is capped on a 14-inch")
-same(windowHeight(remoteTailscale, mbpLimit), 789, "Remote Access with Tailscale: its natural height")
-same(windowHeight(general, mbpLimit), 826, "General: its natural height")
+same(windowHeight(remoteTailscale, mbpLimit), 781, "Remote Access with Tailscale: its natural height")
+same(windowHeight(general, mbpLimit), 807, "General: its natural height")
 
 // The same with a Dock at the bottom taking 70 pt.
 let mbpDock = CGRect(x: 0, y: 70, width: 1512, height: 879)
 let mbpDockLimit = Fit.contentLimit(visible: mbpDock, chrome: chrome)
-same(mbpDockLimit, 767, "14-inch, default scaling, Dock")
-check(shown(rosstexPane, mbpDockLimit) == 767, "rosstex's pane capped above the Dock")
-same(windowHeight(general, mbpDockLimit), 826, "General still fits above the Dock")
+same(mbpDockLimit, 775, "14-inch, default scaling, Dock")
+check(shown(rosstexPane, mbpDockLimit) == 775, "rosstex's pane capped above the Dock")
+same(windowHeight(general, mbpDockLimit), 807, "General still fits above the Dock")
 
 // The scalings with larger text: 1,352 × 878, 1,147 × 745 and 1,024 × 665 pt, the 33-pt menu bar,
 // with and without the Dock.
-for (screen, noDock, dock) in [(878.0, 733.0, 663.0), (745.0, 600.0, 530.0), (665.0, 520.0, 450.0)] as [(CGFloat, CGFloat, CGFloat)] {
+for (screen, noDock, dock) in [(878.0, 741.0, 671.0), (745.0, 608.0, 538.0), (665.0, 528.0, 458.0)] as [(CGFloat, CGFloat, CGFloat)] {
     let v = CGRect(x: 0, y: 0, width: 1024, height: screen - 33)
     same(Fit.contentLimit(visible: v, chrome: chrome), noDock, "larger text, \(screen) pt tall, no Dock")
     let d = CGRect(x: 0, y: 70, width: 1024, height: screen - 33 - 70)
@@ -69,34 +72,34 @@ check(shown(permissions, Fit.contentLimit(visible: small, chrome: chrome)) == pe
 
 // An external 4K display, as the main screen: looking like 1,920 × 1,080 (a 25-pt menu bar), with and
 // without the Dock, and like 2,560 × 1,440, where every pane has its natural height.
-same(Fit.contentLimit(visible: CGRect(x: 0, y: 0, width: 1920, height: 1055), chrome: chrome), 943, "4K at 1,920 × 1,080")
-same(Fit.contentLimit(visible: CGRect(x: 0, y: 70, width: 1920, height: 985), chrome: chrome), 873, "4K at 1,920 × 1,080, Dock")
+same(Fit.contentLimit(visible: CGRect(x: 0, y: 0, width: 1920, height: 1055), chrome: chrome), 951, "4K at 1,920 × 1,080")
+same(Fit.contentLimit(visible: CGRect(x: 0, y: 70, width: 1920, height: 985), chrome: chrome), 881, "4K at 1,920 × 1,080, Dock")
 let k4 = Fit.contentLimit(visible: CGRect(x: 0, y: 0, width: 2560, height: 1415), chrome: chrome)
-same(k4, 1303, "4K at 2,560 × 1,440")
+same(k4, 1311, "4K at 2,560 × 1,440")
 for pane in [remoteInternet, rosstexPane, general, streaming] { check(shown(pane, k4) == pane, "4K at 2,560 × 1,440: a \(pane) pt pane at its natural height") }
 
 // That 4K display above the laptop, its own origin: the limit and the move use its own frame.
 let above = CGRect(x: -200, y: 982, width: 2560, height: 1415)
-same(Fit.contentLimit(visible: above, chrome: chrome), 1303, "a screen above the laptop: its own height")
-same(Fit.placed(CGRect(x: 800, y: 1500, width: 520, height: 1071), in: above),
-     CGRect(x: 800, y: 2397 - 12 - 1071, width: 520, height: 1071), "a window whose top is above that screen's: moved down")
-same(Fit.placed(CGRect(x: 800, y: 900, width: 520, height: 1071), in: above),
-     CGRect(x: 800, y: 982 + 12, width: 520, height: 1071), "a window reaching below that screen: moved up onto it")
+same(Fit.contentLimit(visible: above, chrome: chrome), 1311, "a screen above the laptop: its own height")
+same(Fit.placed(CGRect(x: 800, y: 1500, width: 520, height: 1063), in: above),
+     CGRect(x: 800, y: 2397 - 12 - 1063, width: 520, height: 1063), "a window whose top is above that screen's: moved down")
+same(Fit.placed(CGRect(x: 800, y: 900, width: 520, height: 1063), in: above),
+     CGRect(x: 800, y: 982 + 12, width: 520, height: 1063), "a window reaching below that screen: moved up onto it")
 // Beside it, to the right of the laptop and lower.
 let beside = CGRect(x: 1512, y: -300, width: 1920, height: 1055)
 same(Fit.placed(CGRect(x: 1700, y: -500, width: 520, height: 925), in: beside),
      CGRect(x: 1700, y: -300 + 12, width: 520, height: 925), "a screen beside and lower: moved up within it")
 
 // A fractional visible height (a scaled mode can give one): whole points, rounded down.
-same(Fit.contentLimit(visible: CGRect(x: 0, y: 0, width: 1800, height: 1136.5), chrome: chrome), 1024, "whole points")
+same(Fit.contentLimit(visible: CGRect(x: 0, y: 0, width: 1800, height: 1136.5), chrome: chrome), 1032, "whole points")
 
 // A screen too short for a usable pane: the least is given, and the window's top stays reachable.
 let tiny = CGRect(x: 0, y: 0, width: 800, height: 250)
 same(Fit.contentLimit(visible: tiny, chrome: chrome), 200, "a tiny screen still gets 200 pt")
-same(Fit.placed(CGRect(x: 100, y: -100, width: 520, height: 288), in: tiny),
-     CGRect(x: 100, y: 250 - 288, width: 520, height: 288), "taller than the screen: its top at the top")
-same(Fit.placed(CGRect(x: 100, y: 50, width: 520, height: 288), in: tiny),
-     CGRect(x: 100, y: 250 - 288, width: 520, height: 288), "taller than the screen, its top below the top: moved up to it")
+same(Fit.placed(CGRect(x: 100, y: -100, width: 520, height: 280), in: tiny),
+     CGRect(x: 100, y: 250 - 280, width: 520, height: 280), "taller than the screen: its top at the top")
+same(Fit.placed(CGRect(x: 100, y: 50, width: 520, height: 280), in: tiny),
+     CGRect(x: 100, y: 250 - 280, width: 520, height: 280), "taller than the screen, its top below the top: moved up to it")
 
 // MARK: Where the window goes
 
@@ -148,7 +151,7 @@ check(Fit.screenIndex(windowOn: nil, screens: []) == nil, "no screen: none")
 // MARK: The test height (-SillTestScreenHeight)
 
 same(Fit.visible(mbp, testHeight: 700), CGRect(x: 0, y: 249, width: 1512, height: 700), "700 pt: the top 700 of the visible frame")
-same(Fit.contentLimit(visible: Fit.visible(mbp, testHeight: 700), chrome: chrome), 588, "700 pt: the limit")
+same(Fit.contentLimit(visible: Fit.visible(mbp, testHeight: 700), chrome: chrome), 596, "700 pt: the limit, as the live window showed")
 same(Fit.visible(mbpDock, testHeight: 700), CGRect(x: 0, y: 249, width: 1512, height: 700), "with the Dock: still the top 700")
 same(Fit.visible(above, testHeight: 700), CGRect(x: -200, y: 1697, width: 2560, height: 700), "another screen: its own top")
 same(Fit.visible(mbp, testHeight: nil), mbp, "no test")
