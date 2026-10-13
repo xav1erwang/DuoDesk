@@ -633,8 +633,9 @@ extension StreamClient {
                     reconnect = r
                     if status != line { status = line }
                     #if DEBUG
-                    if lastRedialNote != due.recheckAt {
-                        lastRedialNote = due.recheckAt
+                    let note = "\(r.rowDials) \(due.recheckAt ?? -1) \(appInForeground)"
+                    if lastRedialNote != note {
+                        lastRedialNote = note
                         let next = due.recheckAt.map { String(format: "the next in %.1f s", $0 - now) }
                             ?? (appInForeground ? "no more of this listing" : "the next once back in the foreground")
                         print("reconnect: \(mac.name) is listed; \(r.rowDials) dial\(r.rowDials == 1 ? "" : "s") of it did not connect; \(next)")

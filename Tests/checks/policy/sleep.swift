@@ -59,6 +59,8 @@ func afterSleepPolicy() {
     check("browserResults: a name in both is the new browser's", results(kept, [("B", "new")], ends: 103, 102.9) == ["B@new", "A@old"])
     check("browserResults: settled at its end, the new browser's alone", results(kept, [("A", "new")], ends: 103, 103) == ["A@new"]
           && results(kept, [], ends: 103, 200) == [])
+    check("browserResults: while a failed browser waits to be made again (no end), the rows as they were, and what it still says joins them",
+          results(kept, [], ends: .infinity, 1e9) == ["A@old", "B@old"] && results(kept, [("C", "new")], ends: .infinity, 1e9) == ["C@new", "A@old", "B@old"])
     check("rebuildSettle: the network's first word, 3 s", P.rebuildSettle == P.networkFirst && P.rebuildSettle == 3)
 
     // A model of a rebuild as the glue makes it (StreamClient.rebuildBrowser, showResults,

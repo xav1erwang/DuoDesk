@@ -511,7 +511,7 @@ final class StreamClient: ObservableObject {
     /// app's connection defunct.
     private static let browserFailCount = UserDefaults.standard.integer(forKey: "SillBrowserFail")
     /// The automatic reconnect's last "next dial" line on the console, so that each prints once.
-    var lastRedialNote: Double?
+    var lastRedialNote: String?
     #endif
     /// Launch, the last connection ending, or Local Network access coming back: the network gets its
     /// first seconds from here.
@@ -1026,6 +1026,14 @@ final class StreamClient: ObservableObject {
         let failures = DiscoveryPolicy.browserFailures(previous: self[keyPath: key].failures, startedAt: self[keyPath: key].startedAt, now: now)
         self[keyPath: key].failures = failures
         self[keyPath: key].failedAt = now
+        // Until the new one comes, the rows stay as they are now: a settle still running for this
+        // browser (it was made again moments ago) does not end while it waits, and a result it still
+        // delivers only joins them.
+        self[keyPath: key].settleWork?.cancel()
+        self[keyPath: key].settleWork = nil
+        self[keyPath: key].kept = self[keyPath: resultsKey(kind)]
+        self[keyPath: key].fresh = []
+        self[keyPath: key].settleEnds = .infinity
         self[keyPath: browserKey(kind)]?.cancel()
         #if DEBUG
         let wait = DiscoveryPolicy.browserRetryDelay(afterFailures: failures)
