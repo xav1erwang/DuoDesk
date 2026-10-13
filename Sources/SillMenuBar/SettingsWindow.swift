@@ -45,6 +45,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let model: AppModel
     private let tabs: SettingsTabController
     private let heightCap: NSLayoutConstraint
+    /// The cap's constant until a screen is known (none at all, or only Sill's virtual display, as a
+    /// Mac with no display of its own could have): taller than any display, so no cap, as before.
+    private static let noCap: CGFloat = 10_000
     /// A move that waits for the mouse buttons to be released (`placeOnRelease`).
     private var releaseWatch: Timer?
 
@@ -55,7 +58,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.collectionBehavior.insert(.moveToActiveSpace)
-        heightCap = tabs.view.heightAnchor.constraint(lessThanOrEqualToConstant: SettingsWindowFit.minimumContent)
+        heightCap = tabs.view.heightAnchor.constraint(lessThanOrEqualToConstant: Self.noCap)
         heightCap.priority = .defaultHigh
         heightCap.identifier = "Sill.settingsScreenCap"
         super.init(window: window)

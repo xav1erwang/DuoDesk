@@ -248,4 +248,7 @@ With Sill.app from this branch (`Scripts/make-app.sh --install --open`) on the 1
   cap, the move and the hooks (f009b09); the check at Sill's measured chrome (367e8c8); a move
   that waits for the buttons, the docs (654d782); the `end` step (c4a39a7). Every result above on
   c4a39a7 (after it only the hooks' messages and the docs changed). PR #74 opened; left open for
-  Noah.
+  Noah. Then the cap's constant starts at 10,000 pt (no cap) instead of 200 until a screen is
+  known, so a Mac with no usable screen (none, or only Sill's virtual display) never gets a 200 pt
+  pane; a run of every step kind on it (General and Streaming natural, capped at a 600 pt screen,
+  scrolled to the end, back to the screen's own, closed and reopened) gave the same numbers.
