@@ -70,6 +70,8 @@ app on my iPad before it would reconnect."
   and a remote dial for `networkGrace`; `quitWait`'s `networkSince`; `PathSightings.wiredSince`,
   the cable's settle and its refused listing; `directSince`), and the reconnect's count of dials of
   a listing (below) is not reset by a rebuild. A Mac that went leaves 3 s after the rebuild.
+  While a failed browser waits to be made again, the rows stay as they are (a settle still running
+  does not end then, and a result the failed browser still delivers only joins them).
 - The failed browse's status line goes: the browser is made again, and the console says so
   ("browser: the network browser failed (…); making it again in 1 s", "browser: rebuilt the network
   browser (back from the background)", "browser: the new network browser has settled: …").
@@ -221,6 +223,12 @@ stamped as it came) and the host's log; the loss is the device's "connection sil
   pixel main's build (0 pixels differ). The live photos show this Mac's name and windows and stay
   out of the repository.
 - **Checks and builds**: below, in Progress.
+- **Found, and left as it is** (older than this branch, the same on main): on the return from the
+  background the ping timer, on the network queue, can run before the main queue's
+  willEnterForeground handler resets liveness, so a session whose connection is still alive (a short
+  trip away, under the Mac's 4 s eviction) is called "silent for 10 s" and ended; the reconnect then
+  brings it back at once (0.1 s here), with a flash of the connect screen. A ping tick that comes
+  long after the last one (the app was suspended) could reset liveness itself.
 
 ## Progress
 
