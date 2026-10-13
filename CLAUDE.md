@@ -9,8 +9,8 @@ Formerly winstream; the folder still carries the old name.
 ## Current step
 
 **Finding the Mac again after hours idle (2026-10-14, branch `reconnect-after-sleep` from main at
-985a733, issue #69; the plan, the causes with line numbers, the decisions and the results are in
-`docs/reconnect-after-sleep-plan.md`).** The report: after a few hours dormant nothing reconnected
+985a733, PR #77, issue #69; the plan, the causes with line numbers, the decisions and the results are
+in `docs/reconnect-after-sleep-plan.md`).** The report: after a few hours dormant nothing reconnected
 until the Mac was logged in to and Sill relaunched on the iPad. Device code, the support page and the
 docs; no wire change, nothing on the Mac.
 - The browsers: iOS makes a suspended app's connection to mDNSResponder defunct (-65569), and the
