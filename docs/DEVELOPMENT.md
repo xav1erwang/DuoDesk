@@ -119,6 +119,7 @@ swift run -c release SillHost                        # nothing streams until a d
 swift run -c release SillHost Safari                 # optional: preselect a matching window
 swift run -c release SillHost --virtual-display      # each streamed window on its own HiDPI display; Ctrl-C restores it
 swift run -c release SillHost --direct-wireless      # also over peer-to-peer Wi-Fi, for a device with no shared network
+swift run -c release SillHost --no-clipboard         # share nothing of the clipboard with devices (on by default, as in Sill.app)
 swift run -c release SillHost --synthetic            # the Desktop streams a test pattern; no Screen Recording needed
 SILL_TEST_PATTERN=picture:/path/to.jpg swift run -c release SillHost --synthetic   # the Desktop a still picture instead (TEST ONLY)
 swift run -c release SillHost --remote               # the remote door for this run, on any free port (--remote=PORT)
@@ -146,7 +147,8 @@ too; `SillHost` saves nothing, so a change lasts until it quits, and the
 device's panel says so. Its Virtual Display switch works only when `SillHost`
 runs with `--virtual-display`. `--direct-wireless` starts it with Direct
 Wireless Connection on (see Direct Wireless Connection below); it is off by
-default here too.
+default here too. The clipboard is shared as in Sill.app (The clipboard,
+below); `--no-clipboard` turns it off for the run.
 
 `--virtual-display` (off by default, 2026-09-22) moves the picked window onto a
 virtual HiDPI display created with a private CoreGraphics API and captures that
@@ -336,6 +338,47 @@ logs the shortcut it would post with "(not posted: a test host)", so
 `python3 Scripts/sillclient.py PORT 8 none --gesture=swipeUp@3` tests the wire
 without touching the Mac, and `SILL_TEST_HOTKEYS=108=off` (or `defaults`) gives
 such a host a table of its own instead of this Mac's shortcuts.
+
+## The clipboard
+
+Text goes both ways between the Mac and a device (kind 32; the plan and its
+results are in docs/clipboard-plan.md). On the Mac, Settings › General's "Share
+clipboard with devices" (saved as `shareClipboard`, on by default, applied at
+once; `-SillSetAfter '<s> shareClipboard=0'` in the bare app) and the CLI's
+`--no-clipboard`; on the device, Settings › This iPad's Share Clipboard
+(`Sill.shareClipboard`, on by default), shown while the Mac's window list says
+`clipboard` 1. With both on, the device subscribes with an empty kind 32 and
+the Mac sends it the text copied on the Mac while it is subscribed, four looks
+a second at the pasteboard's change count. What was on the clipboard when the
+first device subscribed is never sent, nor anything a password manager or
+another app marks `org.nspasteboard.ConcealedType` or
+`org.nspasteboard.TransientType` (or three older markers: ClipboardPolicy's
+`markerTypes`), nor what came from another device through Universal Clipboard
+(`com.apple.is-remote-clipboard`: reading it would fetch it from there), nor
+the Mac's own write. The device writes the Mac's text with
+`.localOnly` and a 10-minute expiration. The other way, Sill never reads the
+device's clipboard by itself (iOS would ask "Allow Paste?"): when it becomes
+active and the clipboard's change count is new while it holds text, a chip
+near the bar offers "Paste on ‹Mac›" with the system's Paste control
+(UIPasteControl), whose tap reads it without asking; the Settings group has the
+same button. The Mac writes it for this Mac only (`.currentHostOnly`), marked
+with its launch ID so it never sends it back, and passes it to its other
+subscribers; the person presses ⌘V. Text is capped at 256 KB. The log says
+"Clipboard: iPad (iPad14,1) shares the clipboard." and "… stopped sharing the
+clipboard." and nothing per copy, never what was copied; the stats line has
+`clip.sent` and `clip.recv` in seconds they happen.
+
+A synthetic host never touches this Mac's clipboard: it shares a pasteboard of
+its own, `me.saffer.sill.test.<pid>`, or the one TEST ONLY
+`SILL_TEST_PASTEBOARD=<name>` names, which a test writes and reads with
+`NSPasteboard(name:)`; `SILL_TEST_CLIPBOARD_LOG=1` prints each decision ("change
+4 not sent (marked)") with sizes, never text. `sillclient.py --clipboard`
+subscribes and prints each kind 32, `--copy=TEXT@T` (or `--copy-bytes=N@T`)
+sends text as a device's Paste does, `--raw32='{"stop":true}@T'` stops, and
+`--expect=clipboard=TEXT` (or `none`) checks the last one at exit. In the
+harness, `-SillClipboardChip 1` puts the chip on the mock's stream and
+`-SillClipboardNote sent|long` its note; `-Sill.shareClipboard 0` turns the
+device's switch off for one run.
 
 ## The Mac's menus on the device
 
@@ -581,7 +624,8 @@ ends, which three-finger strokes are gestures and what the Mac does with one,
 which modifiers a device's keys leave set on the Mac,
 the first-run tour, pairing at home (the doors, the cable, the device's rows),
 which keychain Sill.app keeps its identity in, the away quality and the link's
-judgement, and the iPhone Duo's layouts) on their own with a check each, and
+judgement, the iPhone Duo's layouts, and what of the clipboard goes between
+the Mac and a device) on their own with a check each, and
 runs them: about five minutes, no device, permission or encoder. `--mutants`
 also checks that each check fails when its file is changed in one place (well
 over an hour).
@@ -624,7 +668,10 @@ python3 Scripts/sillclient.py PORT 3 desktop --input='{"key":{"hidUsage":44,"dow
 (`$T/path` holds one line, `0 756 474`: the scripted pointer gives the test
 pattern a place for input to land.) `--gesture=NAME[,FINGERS]@T` sends a
 trackpad gesture (kind 28), and, like the input flags, only to a `--synthetic`
-host on this Mac, which posts nothing.
+host on this Mac, which posts nothing. The clipboard's flags (`--clipboard`,
+`--copy`, `--copy-bytes`, `--raw32`, `--expect=clipboard=`) are under The
+clipboard, above: with `SILL_TEST_PASTEBOARD` the host's pasteboard is a
+private one, never this Mac's clipboard.
 
 `Scripts/sillrelay.py --listen 0 --to HOST:PORT [--delay-ms N] [--rate-mbps R]
 [--blackhole-after S] [--record PREFIX]` sits between a client and a host, and

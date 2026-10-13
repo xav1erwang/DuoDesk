@@ -65,6 +65,11 @@ Sill has layouts of its own.
   needs Accessibility. Three fingers swipe and pinch as on a Mac's trackpad:
   Mission Control, App Exposé, the Spaces, Apps and Show Desktop, through the
   keyboard shortcuts your Mac has for them.
+- **The clipboard** goes both ways while Share Clipboard is on, in both apps:
+  text you copy on your Mac is ready to paste on your device, and Paste in
+  Sill sends what you copied on your device to your Mac's clipboard, where you
+  press ⌘V. Sill never reads your device's clipboard by itself, and copies a
+  password manager marks as concealed stay on your Mac.
 - **On iPhone Duo**, Sill follows the hinge: open it flat and your Mac fills
   the inner display; half open, the picture is above the fold with a trackpad
   and keys below; closed, Sill runs on the cover display. Nothing you touch
@@ -101,16 +106,18 @@ Sill has layouts of its own.
   from the website and not from the Mac App Store.
 
 Good to know: Sill shows one window, or the whole desktop, at a time, and it
-does not play sound from your Mac. Only the iPhones and iPads you paired can
-connect, unless you turn off Require pairing in Settings › Devices; then any
-device on your network can, still encrypted. Pairing at home came with Sill
-for Mac 0.4.0 and Sill for iPhone and iPad 0.5 (2), and each needs the other:
-the iPhone and iPad app shows an older Sill for Mac as "Update Sill", and an
-older iPhone and iPad app can't connect to Sill for Mac 0.4.0 or later at
-home. Since 0.5.1 the two apps share one version number for each release. With
-Sill for Mac 0.3.1 or earlier, connections on your local network, over the
-cable and over Direct Wireless Connection are not encrypted, and anything that
-reaches your Mac there can connect without pairing: update it.
+does not play sound from your Mac. The clipboard carries text only, up to
+256 KB at a time, and only between apps that both have it. Only the iPhones
+and iPads you paired can connect, unless you turn off Require pairing in
+Settings › Devices; then any device on your network can, still encrypted.
+Pairing at home came with Sill for Mac 0.4.0 and Sill for iPhone and iPad 0.5
+(2), and each needs the other: the iPhone and iPad app shows an older Sill for
+Mac as "Update Sill", and an older iPhone and iPad app can't connect to Sill
+for Mac 0.4.0 or later at home. Since 0.5.1 the two apps share one version
+number for each release. With Sill for Mac 0.3.1 or earlier, connections on
+your local network, over the cable and over Direct Wireless Connection are not
+encrypted, and anything that reaches your Mac there can connect without
+pairing: update it.
 
 ## Tips
 
