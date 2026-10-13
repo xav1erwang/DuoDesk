@@ -380,7 +380,7 @@ func largerModel(_ w: CGFloat, _ h: CGFloat, keyboard: CGFloat, video: CGSize = 
 }
 let macBook = CGSize(width: 3024, height: 1964)
 let largerDesktop = largerModel(440, 894, keyboard: 320, video: macBook), largerFitted = largerModel(440, 894, keyboard: 320, video: CGSize(width: 848, height: 844))
-let largerSE = largerModel(375, 647, keyboard: 216, video: macBook), largerFive = largerModel(440, 894, keyboard: 320, video: macBook, menus: false)
+let largerSE = largerModel(375, 647, keyboard: 233, video: macBook), largerFive = largerModel(440, 894, keyboard: 320, video: macBook, menus: false)
 check(largerDesktop.stream == CGRect(x: 8, y: 8, width: 424, height: 275) && largerDesktop.room == CGRect(x: 8, y: 8, width: 424, height: 422)
       && largerDesktop.union(.bar)! == CGRect(x: 14, y: 454, width: 272, height: 50) && largerDesktop.targets[.keys]!.minY == 520
       && largerDesktop.targets[.trackpad]! == CGRect(x: 14, y: 574, width: 412, height: 304), "the 18 Pro Max with Larger Picture and the Desktop: \(largerDesktop.targets)")
@@ -537,8 +537,9 @@ pinned(largerFitted, .touch, 230, CGRect(x: 40, y: 104, width: 360, height: 230)
 check(TourPolicy.place(card: CGSize(width: 360, height: 230), targets: largerDesktop.union(.bar), isStream: false, screen: largerDesktop.size, layout: F,
                        stream: largerDesktop.stream, bottomInset: 0) == TourPlacement(card: CGRect(x: 16, y: 41, width: 360, height: 230), tail: nil),
       "without the room: in the short picture, no tail")
-// The SE with Larger Picture (the room 359×279): the bar card in the room, its tail at row 1 (311).
-pinned(largerSE, .bar, 230, CGRect(x: 16, y: 45, width: 343, height: 230), tail: TourTail(edge: .down, x: largerSE.union(.bar)!.midX))
+// The SE with Larger Picture (the room 359×262 above its 233 pt keyboard): the bar card in the room,
+// its tail at row 1 (294).
+pinned(largerSE, .bar, 230, CGRect(x: 16, y: 28, width: 343, height: 230), tail: TourTail(edge: .down, x: largerSE.union(.bar)!.midX))
 check(abs(largerSE.union(.bar)!.midX - 385.0 / 3) < 0.001, "the SE's bar targets: Apps to Keyboard of six, centred at 128.3")
 pinned(duoPhone, .bar, 320, CGRect(x: 70, y: 16, width: 360, height: 306), tail: TourTail(edge: .down, x: 250))
 // A window too small for a card beside its targets (under 200 pt of room): only then over them, with
@@ -576,9 +577,9 @@ for w0 in widths {
         gridScreens.append(model(w0, h0))
         if h0 > w0 && w0 < 600 {
             gridScreens.append(phoneModel(w0, h0))
-            // Larger Picture, where the room over the keyboard is 120 pt or more (every phone's is 180
-            // or more: the SE with Display Zoom's).
-            for keyboard: CGFloat in [216, 301, 320] where h0 - keyboard - 152 >= 120 {
+            // Larger Picture, where the room over the keyboard is 120 pt or more (every phone's is 163
+            // or more: the SE with Display Zoom's), above each keyboard measured.
+            for keyboard: CGFloat in [233, 301, 310, 320] where h0 - keyboard - 152 >= 120 {
                 let fitted = PhonePortraitLayout(size: CGSize(width: w0, height: h0), keyboard: keyboard).picture.size
                 gridScreens.append(largerModel(w0, h0, keyboard: keyboard, video: macBook))
                 gridScreens.append(largerModel(w0, h0, keyboard: keyboard, video: CGSize(width: fitted.width * 2, height: fitted.height * 2), menus: false))

@@ -71,14 +71,19 @@ struct PhonePortraitLayout: Equatable {
     /// Larger Picture: the key row's bottom at least this far above the software keyboard's top.
     static let keyboardClearance: CGFloat = 10
     /// The software keyboard as Sill's input view shows it on an iPhone held upright (autocorrection
-    /// is off, so it has no suggestions bar; docs/iphone-portrait-plan.md, The keyboard, and
-    /// docs/larger-picture-plan.md): the classic 216 pt on an iPhone with a Home button (the SE),
-    /// 301 on one with Face ID narrower than `wideKeyboardFrom`, 320 from it (the Plus and Pro Max
-    /// sizes). Measured on the iOS 27 simulators: 320 on the 18 Pro Max, 301 on the 18 Pro and the 17e.
-    static let homeButtonKeyboard: CGFloat = 216
+    /// is off, so it has no suggestions bar), measured on the iOS 27 simulators
+    /// (docs/larger-picture-plan.md, Results): 233 pt on an iPhone with a Home button (the SE); with
+    /// Face ID, by the stream screen's width, 320 from 414 pt (the 11 and 11 Pro Max, the Plus and
+    /// Pro Max sizes, the Air), 301 from 390 (the 12 to 18, 16e, 17e, the Pros), and 310 from 375
+    /// (the 12 and 13 mini; the 11 Pro's is 301). Narrower than any phone (Display Zoom), the
+    /// tallest, 320, so the key row stays clear of a keyboard nobody measured.
+    static let homeButtonKeyboard: CGFloat = 233
     static let faceIDKeyboard: CGFloat = 301
+    static let miniKeyboard: CGFloat = 310
     static let wideKeyboard: CGFloat = 320
-    static let wideKeyboardFrom: CGFloat = 428
+    static let wideKeyboardFrom: CGFloat = 414
+    static let faceIDKeyboardFrom: CGFloat = 390
+    static let miniKeyboardFrom: CGFloat = 375
     /// A Home-button iPhone's stream screen is less than this many times as tall as it is wide (the
     /// SE's 375×647, 1.73; with Display Zoom 320×548, 1.71); one with Face ID is 2.0 or more (from
     /// the 13 mini's 375×762 to a Plus's 428×879, and the same shape with Display Zoom), so the shape
@@ -263,10 +268,13 @@ struct PhonePortraitLayout: Equatable {
     }
 
     /// The software keyboard's height on a phone whose stream screen is `container` (its screen less
-    /// the top inset), upright: an estimate from the shape and the width (see `homeButtonKeyboard`).
+    /// the top inset), upright: from the shape and the width, as measured (see `homeButtonKeyboard`).
     static func keyboardHeight(for container: CGSize) -> CGFloat {
         guard container.width > 0, container.height / container.width >= faceIDShape else { return homeButtonKeyboard }
-        return container.width >= wideKeyboardFrom ? wideKeyboard : faceIDKeyboard
+        if container.width >= wideKeyboardFrom { return wideKeyboard }
+        if container.width >= faceIDKeyboardFrom { return faceIDKeyboard }
+        if container.width >= miniKeyboardFrom { return miniKeyboard }
+        return wideKeyboard
     }
 
     /// Larger Picture's keyboard for a stream screen of `container`: its estimate while the switch is

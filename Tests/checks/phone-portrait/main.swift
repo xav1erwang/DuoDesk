@@ -35,8 +35,9 @@ struct Phone {
     let inset: CGFloat
     /// The software keyboard's height as the input view shows it (autocorrection off, so no
     /// suggestions bar): measured on the iOS 27 simulators for the 18 Pro Max (320), the 18 Pro and
-    /// the 17e (301, both), 2026-09-27; the 15 Pro and the 13 mini taken as the 18 Pro's, the SE
-    /// as the classic 216. A keyboard with a candidate bar (an IME) is about 44 pt taller.
+    /// the 17e (301, both), 2026-09-27; then (docs/larger-picture-plan.md, 2026-10-14) the 15 Pro (301),
+    /// the 12 and 13 mini (310) and the SE (233; the plan had taken the classic 216). A keyboard with
+    /// a candidate bar (an IME) is about 44 pt taller.
     let keyboard: CGFloat?
     var container: CGSize { CGSize(width: screen.width, height: screen.height - inset) }
 }
@@ -55,8 +56,8 @@ let proMax = Phone(name: "iPhone 18 Pro Max", screen: CGSize(width: 440, height:
 let pro = Phone(name: "iPhone 18 Pro (and 17)", screen: CGSize(width: 402, height: 874), inset: 62, keyboard: 301)
 let fifteenPro = Phone(name: "iPhone 15 Pro", screen: CGSize(width: 393, height: 852), inset: 59, keyboard: 301)
 let seventeenE = Phone(name: "iPhone 17e", screen: CGSize(width: 390, height: 844), inset: 47, keyboard: 301)
-let mini = Phone(name: "iPhone 13 mini", screen: CGSize(width: 375, height: 812), inset: 50, keyboard: 301)
-let se = Phone(name: "iPhone SE (3rd generation)", screen: CGSize(width: 375, height: 667), inset: 20, keyboard: 216)
+let mini = Phone(name: "iPhone 13 mini", screen: CGSize(width: 375, height: 812), inset: 50, keyboard: 310)
+let se = Phone(name: "iPhone SE (3rd generation)", screen: CGSize(width: 375, height: 667), inset: 20, keyboard: 233)
 let duoOuter = Phone(name: "the Duo's outer display (the harness)", screen: CGSize(width: 500, height: 710), inset: 0, keyboard: nil)
 /// The iPhone Duo's cover upright on the iOS 27.1 simulator (docs/iphone-duo-plan.md): 466×678 with its
 /// camera's 84 pt strip down the right edge (a side inset, so the container is 382 wide) and no top one.
@@ -161,8 +162,9 @@ check("360 wide: the ruler's step 34", near(threeSixty.rulerStep, 34))
 //
 // With the keyboard up (the layout never moves for it), in the screen's coordinates: row 1 ends
 // above the keyboard's top on every phone, so its Keyboard button can take the keyboard down, and
-// rows 2 and 3 too on every phone but the SE, whose key row the keyboard covers by 7 pt (its assumed
-// 216 pt keyboard; open question 5 accepts it: a latch set before the keyboard comes up still works).
+// rows 2 and 3 too on every phone but the SE, whose key row the keyboard covers by 24 pt (its 233 pt
+// keyboard, measured on 2026-10-14; the plan took 216 and 7 pt; open question 5 accepts it: a latch
+// set before the keyboard comes up still works, and Larger Picture puts the key row above it).
 // The trackpad is under it on every phone. The plan assumed keyboards with a suggestions bar (346,
 // 336, 260); the input view has none (the heights above), and a keyboard with a candidate bar still
 // leaves row 1 clear on every phone. The Duo's outer display (the harness's 500×710, no inset, its
@@ -175,8 +177,8 @@ let keyboardTable: [KeyboardRow] = [
     KeyboardRow(phone: pro, top: 573, row1: 385, row2: 463, row3: 517),
     KeyboardRow(phone: fifteenPro, top: 551, row1: 376, row2: 454, row3: 508),
     KeyboardRow(phone: seventeenE, top: 543, row1: 362, row2: 440, row3: 494),
-    KeyboardRow(phone: mini, top: 511, row1: 356, row2: 434, row3: 488),
-    KeyboardRow(phone: se, top: 451, row1: 326, row2: 404, row3: 458),
+    KeyboardRow(phone: mini, top: 502, row1: 356, row2: 434, row3: 488),
+    KeyboardRow(phone: se, top: 434, row1: 326, row2: 404, row3: 458),
 ]
 for k in keyboardTable {
     let l = L(size: k.phone.container)
@@ -195,8 +197,8 @@ for p in [proMax, pro, fifteenPro, seventeenE, mini] {
 }
 do {
     let l = L(size: se.container), top = se.screen.height - se.keyboard!
-    check("iPhone SE: row 2 clear of the keyboard (47 pt), the key row 7 pt under it (open question 5)",
-          top - (se.inset + l.strip.maxY) == 47 && (se.inset + l.keys.maxY) - top == 7)
+    check("iPhone SE: row 2 clear of the keyboard (30 pt), the key row 24 pt under it (open question 5)",
+          top - (se.inset + l.strip.maxY) == 30 && (se.inset + l.keys.maxY) - top == 24)
 }
 check("measured: 95 pt between row 3 and the keyboard on the 18 Pro Max, 56 on the 18 Pro, 49 on the 17e",
       [(proMax, 95), (pro, 56), (seventeenE, 49)].allSatisfy { p, gap in
@@ -368,32 +370,38 @@ for p in [proMax, pro, fifteenPro, seventeenE, mini, se, duoOuter, duoCover] {
             && l.strip.height == 62)
 }
 
-// The keyboard's height: an estimate from the stream screen's shape and width (216 with a Home
-// button, under 1.9 times as tall as wide; 301 with Face ID; 320 from 428 pt wide).
+// The keyboard's height, from the stream screen's shape and width as measured on the iOS 27
+// simulators (2026-10-14): 233 with a Home button (under 1.9 times as tall as wide); with Face ID
+// 320 from 414 pt wide, 301 from 390, 310 from 375, and the tallest, 320, narrower (Display Zoom).
 struct Estimate { let name: String; let container: CGSize; let keyboard: CGFloat }
 let estimates: [Estimate] = [
     Estimate(name: "18 Pro Max", container: proMax.container, keyboard: 320),
     Estimate(name: "15 Pro Max, 16 Plus (430×932, inset 59)", container: CGSize(width: 430, height: 873), keyboard: 320),
     Estimate(name: "14 Plus (428×926, inset 47)", container: CGSize(width: 428, height: 879), keyboard: 320),
-    Estimate(name: "Air (420×912, inset 62)", container: CGSize(width: 420, height: 850), keyboard: 301),
+    Estimate(name: "Air (420×912, inset 68)", container: CGSize(width: 420, height: 844), keyboard: 320),
+    Estimate(name: "11 Pro Max (414×896, inset 44)", container: CGSize(width: 414, height: 852), keyboard: 320),
+    Estimate(name: "11 (414×896, inset 48)", container: CGSize(width: 414, height: 848), keyboard: 320),
     Estimate(name: "18 Pro", container: pro.container, keyboard: 301),
     Estimate(name: "15 Pro", container: fifteenPro.container, keyboard: 301),
-    Estimate(name: "17e", container: seventeenE.container, keyboard: 301),
-    Estimate(name: "13 mini", container: mini.container, keyboard: 301),
-    Estimate(name: "SE", container: se.container, keyboard: 216),
-    Estimate(name: "SE with Display Zoom (320×568, inset 20)", container: CGSize(width: 320, height: 548), keyboard: 216),
-    Estimate(name: "a Face ID phone with Display Zoom (320×693, inset 48)", container: CGSize(width: 320, height: 645), keyboard: 301),
-    Estimate(name: "a Pro Max with Display Zoom (375×812, inset 50)", container: CGSize(width: 375, height: 762), keyboard: 301),
-    Estimate(name: "the Duo's cover (382×678, no top inset)", container: duoCover.container, keyboard: 216),
+    Estimate(name: "17e and 16e", container: seventeenE.container, keyboard: 301),
+    Estimate(name: "12 and 13 mini", container: mini.container, keyboard: 310),
+    Estimate(name: "11 Pro (375×812, inset 44; its own 301)", container: CGSize(width: 375, height: 768), keyboard: 310),
+    Estimate(name: "SE", container: se.container, keyboard: 233),
+    Estimate(name: "SE with Display Zoom (320×568, inset 20)", container: CGSize(width: 320, height: 548), keyboard: 233),
+    Estimate(name: "a Face ID phone with Display Zoom (320×693, inset 48)", container: CGSize(width: 320, height: 645), keyboard: 320),
+    Estimate(name: "a Pro Max with Display Zoom (375×812, inset 50)", container: CGSize(width: 375, height: 762), keyboard: 310),
+    Estimate(name: "the Duo's cover (382×678, no top inset)", container: duoCover.container, keyboard: 233),
 ]
 for e in estimates {
     check("the keyboard estimated on the \(e.name), \(Int(e.container.width))×\(Int(e.container.height)): \(Int(e.keyboard)) pt (\(L.keyboardHeight(for: e.container)))",
           L.keyboardHeight(for: e.container) == e.keyboard)
 }
-check("the estimate's edges: 1.9 times as tall reads Face ID, a hair less a Home button; 428 pt wide is the wide keyboard, 427 not; no width a Home button",
-      L.keyboardHeight(for: CGSize(width: 400, height: 760)) == 301 && L.keyboardHeight(for: CGSize(width: 400, height: 759.9)) == 216
-        && L.keyboardHeight(for: CGSize(width: 428, height: 900)) == 320 && L.keyboardHeight(for: CGSize(width: 427, height: 900)) == 301
-        && L.keyboardHeight(for: .zero) == 216)
+check("the estimate's edges: 1.9 times as tall reads Face ID, a hair less a Home button; 414, 390 and 375 pt wide begin their keyboards; no width a Home button",
+      L.keyboardHeight(for: CGSize(width: 400, height: 760)) == 301 && L.keyboardHeight(for: CGSize(width: 400, height: 759.9)) == 233
+        && L.keyboardHeight(for: CGSize(width: 414, height: 900)) == 320 && L.keyboardHeight(for: CGSize(width: 413, height: 900)) == 301
+        && L.keyboardHeight(for: CGSize(width: 390, height: 800)) == 301 && L.keyboardHeight(for: CGSize(width: 389, height: 800)) == 310
+        && L.keyboardHeight(for: CGSize(width: 375, height: 760)) == 310 && L.keyboardHeight(for: CGSize(width: 374, height: 760)) == 320
+        && L.keyboardHeight(for: .zero) == 233)
 check("the switch off: no keyboard (today's arrangement), on a phone or a Duo",
       L.keyboard(for: proMax.container, largerPicture: false, foldable: false) == nil
         && L.keyboard(for: proMax.container, largerPicture: false, foldable: true) == nil)
@@ -413,27 +421,30 @@ struct Larger {
     let desktop: CGSize
 }
 let fifteenProMax = Phone(name: "iPhone 15 Pro Max (and 16 Plus)", screen: CGSize(width: 430, height: 932), inset: 59, keyboard: 320)
-let air = Phone(name: "iPhone Air", screen: CGSize(width: 420, height: 912), inset: 62, keyboard: 301)
-let seZoom = Phone(name: "iPhone SE with Display Zoom", screen: CGSize(width: 320, height: 568), inset: 20, keyboard: 216)
+let air = Phone(name: "iPhone Air", screen: CGSize(width: 420, height: 912), inset: 68, keyboard: 320)
+let elevenProMax = Phone(name: "iPhone 11 Pro Max", screen: CGSize(width: 414, height: 896), inset: 44, keyboard: 320)
+let seZoom = Phone(name: "iPhone SE with Display Zoom", screen: CGSize(width: 320, height: 568), inset: 20, keyboard: 233)
 let largerTable: [Larger] = [
     Larger(phone: proMax, room: CGSize(width: 424, height: 422), today: 265, row1: (454, 504), keys: (520, 564),
            trackpad: CGSize(width: 412, height: 304), padTop: 574, panelRoom: 366, desktop: CGSize(width: 424, height: 275)),
     Larger(phone: fifteenProMax, room: CGSize(width: 414, height: 401), today: 258, row1: (433, 483), keys: (499, 543),
            trackpad: CGSize(width: 402, height: 304), padTop: 553, panelRoom: 366, desktop: CGSize(width: 414, height: 268)),
-    Larger(phone: air, room: CGSize(width: 404, height: 397), today: 252, row1: (429, 479), keys: (495, 539),
-           trackpad: CGSize(width: 392, height: 285), padTop: 549, panelRoom: 347, desktop: CGSize(width: 404, height: 262)),
+    Larger(phone: air, room: CGSize(width: 404, height: 372), today: 252, row1: (404, 454), keys: (470, 514),
+           trackpad: CGSize(width: 392, height: 304), padTop: 524, panelRoom: 366, desktop: CGSize(width: 404, height: 262)),
+    Larger(phone: elevenProMax, room: CGSize(width: 398, height: 380), today: 248, row1: (412, 462), keys: (478, 522),
+           trackpad: CGSize(width: 386, height: 304), padTop: 532, panelRoom: 366, desktop: CGSize(width: 398, height: 258)),
     Larger(phone: pro, room: CGSize(width: 386, height: 359), today: 241, row1: (391, 441), keys: (457, 501),
            trackpad: CGSize(width: 374, height: 285), padTop: 511, panelRoom: 347, desktop: CGSize(width: 386, height: 250)),
     Larger(phone: fifteenPro, room: CGSize(width: 377, height: 340), today: 235, row1: (372, 422), keys: (438, 482),
            trackpad: CGSize(width: 365, height: 285), padTop: 492, panelRoom: 347, desktop: CGSize(width: 377, height: 244)),
     Larger(phone: seventeenE, room: CGSize(width: 374, height: 344), today: 233, row1: (376, 426), keys: (442, 486),
            trackpad: CGSize(width: 362, height: 285), padTop: 496, panelRoom: 347, desktop: CGSize(width: 374, height: 242)),
-    Larger(phone: mini, room: CGSize(width: 359, height: 309), today: 224, row1: (341, 391), keys: (407, 451),
-           trackpad: CGSize(width: 347, height: 285), padTop: 461, panelRoom: 347, desktop: CGSize(width: 359, height: 233)),
-    Larger(phone: se, room: CGSize(width: 359, height: 279), today: 224, row1: (311, 361), keys: (377, 421),
-           trackpad: CGSize(width: 347, height: 200), padTop: 431, panelRoom: 262, desktop: CGSize(width: 359, height: 233)),
-    Larger(phone: seZoom, room: CGSize(width: 304, height: 180), today: 188, row1: (212, 262), keys: (278, 322),
-           trackpad: CGSize(width: 292, height: 200), padTop: 332, panelRoom: 262, desktop: CGSize(width: 277, height: 180)),
+    Larger(phone: mini, room: CGSize(width: 359, height: 300), today: 224, row1: (332, 382), keys: (398, 442),
+           trackpad: CGSize(width: 347, height: 294), padTop: 452, panelRoom: 356, desktop: CGSize(width: 359, height: 233)),
+    Larger(phone: se, room: CGSize(width: 359, height: 262), today: 224, row1: (294, 344), keys: (360, 404),
+           trackpad: CGSize(width: 347, height: 217), padTop: 414, panelRoom: 279, desktop: CGSize(width: 359, height: 233)),
+    Larger(phone: seZoom, room: CGSize(width: 304, height: 163), today: 188, row1: (195, 245), keys: (261, 305),
+           trackpad: CGSize(width: 292, height: 217), padTop: 315, panelRoom: 279, desktop: CGSize(width: 250, height: 163)),
 ]
 let macBookDesktop = CGSize(width: 3024, height: 1964)
 for row in largerTable {
@@ -466,12 +477,13 @@ for row in largerTable {
     check("\(n): with a candidate bar (44 pt more) row 1 is still clear of the keyboard (\(Int(size.height - k - 44 - l.row1.maxY)) pt)",
           l.row1.maxY < size.height - k - 44)
 }
-check("Larger Picture is larger on every phone but the SE with Display Zoom, which keeps its key row above the keyboard instead (180 pt against 188)",
+check("Larger Picture is larger on every phone but the SE with Display Zoom, which keeps its key row above the keyboard instead (163 pt against 188)",
       largerTable.allSatisfy { r in r.phone.name == seZoom.name ? r.room.height < r.today : r.room.height > r.today })
-check("the triage's numbers: the 15 Pro 377×235 → 377×340, the 18 Pro Max 424×265 → 424×422, the SE 359×224 → 359×279",
+check("the triage's numbers: the 15 Pro 377×235 → 377×340, the 18 Pro Max 424×265 → 424×422, the SE 359×224 → 359×279 above the 216 pt keyboard it assumed (359×262 above the 233 measured)",
       L(size: fifteenPro.container, keyboard: 301).picture.size == CGSize(width: 377, height: 340)
         && L(size: proMax.container, keyboard: 320).picture.size == CGSize(width: 424, height: 422)
-        && L(size: se.container, keyboard: 216).picture.size == CGSize(width: 359, height: 279))
+        && L(size: se.container, keyboard: 216).picture.size == CGSize(width: 359, height: 279)
+        && L(size: se.container, keyboard: 233).picture.size == CGSize(width: 359, height: 262))
 check("the keyboard and the switch are inputs: another keyboard, another layout",
       L(size: pro.container, keyboard: 301) != L(size: pro.container) && L(size: pro.container, keyboard: 301) != L(size: pro.container, keyboard: 320))
 
@@ -485,7 +497,7 @@ do {
             && near(b[1].minX, 154) && near(b[2].minX, 224) && near(b[3].minX, 294) && near(b[4].minX, 364) && near(b[4].maxX, 426))
     check("Pro Max: the ruler on that Aa, 204 wide, 36 a detent", near(l.rulerStepBesideMenus, 36)
           && near(l.rulerBesideMenus, CGRect(x: b[1].midX - 102, y: 454, width: 204, height: 50)))
-    let w320 = L(size: CGSize(width: 320, height: 548), keyboard: 216)
+    let w320 = L(size: CGSize(width: 320, height: 548), keyboard: 233)
     check("320 pt: six buttons of 42, the ruler still 36 a detent (Aa is third)",
           w320.buttonsBesideMenus.allSatisfy { near($0.width, 42) } && near(w320.menus.width, 42) && near(w320.rulerStepBesideMenus, 36)
             && near(w320.rulerStep, 28))
@@ -523,7 +535,7 @@ do {
           tiny.picture.height == 0 && tiny.row1.minY == 32 && tiny.keys.maxY == 142 && tiny.trackpad.minY == 152)
 }
 
-// Every width from 300 to 599, every height from the width + 1 to 1,400, each of the three keyboards,
+// Every width from 300 to 599, every height from the width + 1 to 1,400, each of the four keyboards,
 // where the room is not empty.
 let lInside = Rule("Larger Picture: everything inside the screen")
 let lOrdered = Rule("Larger Picture: the room, row 1, the key row, the trackpad top to bottom, no thumbnails' row")
@@ -538,7 +550,7 @@ let largerRules = [lInside, lOrdered, lGaps, lRoom, lRow1, lCaps, lRulers, lPane
 let frameVideos = [CGSize.zero, CGSize(width: 3024, height: 1964), CGSize(width: 2560, height: 1080), CGSize(width: 1000, height: 1000),
                    CGSize(width: 1000, height: 2000), CGSize(width: 1512, height: 949)]
 var largerSizes = 0
-for keyboard: CGFloat in [216, 301, 320] {
+for keyboard: CGFloat in [233, 301, 310, 320] {
     for w in 300...599 {
         for h in (w + 1)...1400 {
             let W = CGFloat(w), H = CGFloat(h)
