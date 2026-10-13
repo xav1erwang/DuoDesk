@@ -8,8 +8,8 @@ and when a stream gets a new encoder session, who moves the Mac's pointer and wh
 pointer sprite shows, how the Mac download's disk image lays out its window, where everything goes
 on a phone held upright, which modifiers a device's keys leave set on the Mac, what the Mac sends of its menus and what the device makes of it, when the
 first-run tour shows and where its card goes, pairing at home: who each door admits, what
-counts as the USB cable, the device's home rows and dials, and where the layouts meet the iPhone
-Duo's fold) are plain Swift files that compile on
+counts as the USB cable, the device's home rows and dials, where the layouts meet the iPhone
+Duo's fold, and when a window Sill sized goes back) are plain Swift files that compile on
 their own. Each folder here compiles one or a few of those files, exactly as they are in
 `Sources/`, `iOSClient/` and `Scripts/`, together with its own `main.swift`, and runs the result.
 Nothing here needs a device, Screen Recording, Accessibility, the video encoder or any network but
@@ -71,6 +71,7 @@ exit status is the number of checks that failed. Binaries, data and logs go to
 | `remote-rules` | `iOSClient/DiscoveryPolicy.swift`, `RemoteDialPolicy.swift`, `SavedMacs.swift` with `Sources/StreamProtocol` (`build.sh`), with `main.swift` and `home.swift` | the Remote rows and automatic remote dial, the order a saved Mac's addresses are tried in, what a failure means, saved Macs; pairing at home's model, a look-alike under a saved Mac's name among it, and the saved Macs' home fields (`home.swift`) | 123 | 72 |
 | `tour` | `iOSClient/TourPolicy.swift` (with `PhonePortraitLayout.swift`) | the first-run tour's rules: the steps and targets per layout (sideways, the halves, a phone's rows; and under VoiceOver), what is owed, when the tour shows by itself (a beat after the picture, nothing touched, sent, used or open; a turn), memory and runs, Skip in Take the Tour, what a session decided and the automatic reconnect's, a rotation mid-run, the crease, the card's width and place, beside its targets (pinned at the Duo's four sizes, the iPhone SE's two and four phones upright against PhonePortraitLayout's rects, an oracle, a grid of screens and heights), every string (the Duo's own words for its keys) | 51,840 | 72 |
 | `update-policy` | `Sources/SillMenuBar/UpdatePolicy.swift` with `Sources/StreamProtocol` (`build.sh`) | Sill.app's update check: what each answer from GitHub's releases feed means, the offer, the schedule, the feeds and pages it accepts, every text | 124 | 18 |
+| `window-restore` | `Sources/SillHost/WindowRestore.swift` (`build.sh`) | a window Sill sized for a device goes back when it stops streaming (issue #57): `keep` at every edge; each fit's record (the first frame kept, a move since noted at 2 pt); what becomes of the window at the stop (gone, full screen, home, settled for an app that applies a size late, resized on the Mac and left, its whole frame back, or its own size where it was moved, kept on its display); the virtual display's way home; the ledger (stopping in window ID order, `take`); every line. Then a model of the coordinator's glue against a stand-in Mac: 5,000 random sessions of picks, viewports, restarts, the catalog's resize check, the person moving, resizing, closing and full-screening windows, apps that clamp, snap or apply a size late, the virtual display on and off, the last device leaving and Quit, each window held to where the person expects it | 41,391 | 48 |
 
 The counts are those of the `remote-away` branch (PR #39) after its merge with main at e6b3265
 (2026-10-08), where every check passes. The mutants of the 27 checks whose files that merge changed

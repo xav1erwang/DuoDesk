@@ -8,6 +8,57 @@ Formerly winstream; the folder still carries the old name.
 
 ## Current step
 
+**A window Sill sized goes back (2026-10-14, branch `restore-window-frames` from main at 985a733,
+PR #PRNUM; docs/restore-window-frames-plan.md has the rule, the open questions with the defaults taken,
+the results and Noah's steps).** Issue #57 (rosstex): "disconnecting on the iOS app doesn't revert
+apps back to their original shape/size on Mac". In regular mode (Virtual Display off) Aa resized the
+real window (`StreamCoordinator.fitToViewport`) and nothing put it back, on purpose until now. Host
+only; no wire change, nothing on the device, nothing stored.
+- The rule (`WindowRestore`, pure; `Tests/checks/window-restore`): each fit's record (`original`,
+  the AX frame before Sill first touched it; `set`, the frame read back; `asked`; `moved`, a move
+  noted at a later fit; 2 pt tolerance) and, when the window stops streaming, `decide`: gone
+  (nothing), full screen (left, a line), home (nothing), `settle` (Sill asked another size and the
+  read-back never showed it: an app that applies a size late, stopped first; the original written
+  again, no line), resized on the Mac after Sill's last fit (left entirely, a line), unmoved (the
+  whole original frame), moved (its own size where it is, kept on its display by `keep`, moved here
+  from WindowSizer). Lines in the stage's style: "Restored ‹app› — ‹title› to (x,y,w×h)", "…, its
+  own size where it was moved", "Left … at (…): it was resized on the Mac", "Left … as it is: it is
+  full screen", "Could not restore …", "…: it is not answering Accessibility"; `win.restored` in the
+  `[1s]` lines.
+- Where: `fitToViewport` records every resize the app took (`WindowSizer.resize` returns `Fit`: the
+  element and the frames before and after, and puts back its own nudge when the size is refused;
+  no fit once `shuttingDown`); `select` restores every fitted window but the next source's once the
+  old pipeline has stopped (a pick, the Desktop, `.none` when the last device leaves or the stream
+  stops), and its defer every one when nothing streams (a window gone, a failed start);
+  `shutdownForExit` (Quit, the signals under `HostShutdown.install`) and `releaseKeysForExit` (the
+  CLI's default path at a signal) restore every one. The per-window restore is WindowSizer's
+  (`stopDecision`: one AX read first, an app that does not answer left after at most a second;
+  `putBack` through `restore`). Virtual Display turned on while a fitted window streams:
+  `VirtualStage.prepare(…, home:)` keeps the frame it would have gone back to (`stageHome`,
+  `WindowRestore.homeForStage`) and the record is handed over (`Ledger.take`) only once staged;
+  `restoreFits` skips the staged window (Quit mid-`prepare`).
+- Defaults taken (the plan's 14): the CLI's Ctrl-C restores too (a line only when a window was
+  sized, the same exit status); full screen left; resized left, position included; moved keeps its
+  place, also after a re-fit (`moved`); a resize a re-fit undid is forgotten; a failed restore tried
+  once; nothing after a crash or `kill -9` (memory only); the App Store text unchanged.
+- Verified: `swift build -c release` (only the CaptureProbe warning); `Tests/checks/run-all.sh`, all
+  41 (383 s); `window-restore` 41,391 checks (90 cases and a model of the glue, 5,000 random
+  sessions against a stand-in Mac; its first run found the late app's race, now `settle`) and 48 of
+  48 mutants (in CI's matrix); H2 against 985a733 from `git archive`: idle 35 s identical masked and
+  sorted, a Desktop client identical but for the last partial second's `[Ns]` line, as base against
+  base. No iOS file changed.
+- Not verified here: anything live. AX was trusted, but the screen was locked with the display
+  asleep (7.8 h idle): the window server listed a new window at about 0.9 of its frame and
+  Accessibility listed none, so `resize` matched nothing. `Scripts/restore-probe/run.sh` (a window of
+  its own, twelve steps, the real WindowSizer and restore, the front app unchanged) is built and
+  refuses while locked (exit 2).
+- **Untested, for Noah** (the plan's Results): `Scripts/restore-probe/run.sh` unlocked, "0 failed";
+  then Sill.app from this branch with the iPad, Virtual Display off, Aa at 1.5×: pick another window,
+  Disconnect, Quit: the window back each time ("Restored …"); moved on the Mac then disconnect: its
+  size where it is; resized on the Mac then disconnect within 2 s: left; Virtual Display on after an
+  Aa resize, then deselect or Quit: back at its old frame; full screen then disconnect: left;
+  Terminal, an Electron app and System Settings.
+
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
 once that is merged do #48. Then run the release procedure").** Noah: "I want the release in the GitHub to line up with the app version, I want
@@ -4073,7 +4124,9 @@ Milestone 3, scaling and the virtual display. Two paths exist; adopt the second.
   scale (`Viewport`); the host resizes the real Mac window through
   Accessibility (`WindowSizer`) to panel ÷ scale points, so text renders at
   that scale on the device. Until the slider is first touched the scale is nil
-  and the Mac window is left alone (the control shows 1×). Harness:
+  and the Mac window is left alone (the control shows 1×). Since 2026-10-14
+  (issue #57) the window goes back to its own frame when it stops streaming
+  (`WindowRestore`; Current step, "A window Sill sized goes back"). Harness:
   `-SillScaleOpen 1` photographs the unfolded state.
 - **Virtual display (implemented 2026-09-22 behind `--virtual-display`, off by
   default; Noah flips the default after trying it).** With the flag, SillHost
@@ -4498,13 +4551,18 @@ good.
   `KeyUpCheck`, whether an up took its modifiers out of the HID state table;
   `DroppedInput`, what of input with nowhere to land still goes; pure,
   `Tests/checks/key-strokes`),
-  `WindowSizer` (Accessibility resize for the Aa scale; `placement/move/
-  restore` for the virtual display), `VirtualDisplay` (private-API wrapper),
+  `WindowSizer` (Accessibility resize for the Aa scale, returning what it did,
+  `Fit`; `placement/move/restore` for the virtual display; `stopDecision` and
+  `putBack`, a fitted window's way back), `WindowRestore` (a window Sill sized
+  for a device goes back when it stops streaming: each fit's record, the
+  decision at the stop, the ledger, the lines; pure,
+  `Tests/checks/window-restore`), `VirtualDisplay` (private-API wrapper),
   `VirtualStage` (`--virtual-display`: owns the display and the moved window,
   geometry, prepare/release, emergency restore), `HostShutdown` (signal
   sources + atexit, installed only with the flag in the CLI, always in the app;
   `releaseForQuit` for the app's Quit; `installKeyRelease` for the CLI's
-  default path: a device's keys let go, then the signal's own end),
+  default path: a device's keys let go and a sized window goes back, then the
+  signal's own end),
   `VirtualDisplaySelfTest`
   (`--virtual-display-selftest`), `Stats` (1 s lines while active, 30 s
   heartbeat when idle). Remote access: `OriginPolicy` + `InterfaceSnapshot`
@@ -4703,7 +4761,14 @@ good.
   Probe a new NSMenu; `menufixture label PID` reads its label over
   Accessibility. `Scripts/menu-check/run.sh` runs the real MenuReader and
   MenuMirror against it with no host and no encoder (safe while Sill.app
-  streams; it needs Accessibility for whatever runs it). `Scripts/sillrelay.py` is a
+  streams; it needs Accessibility for whatever runs it).
+  `Scripts/restore-probe/run.sh` (TEST ONLY; issue #57) drives the real
+  `WindowSizer.resize` and a fitted window's way back (`stopDecision`,
+  `putBack`, WindowRestore) against a window of its own (`owner.swift`, built
+  into a bundle that never activates and ordered behind every window), frames
+  before, during and after, twelve steps; the front app must not change. It
+  needs Accessibility, Screen Recording and an unlocked screen, and exits 2
+  saying which is missing. `Scripts/sillrelay.py` is a
   shaping passthrough relay (`--listen 0 --to HOST:PORT [--delay-ms N]
   [--rate-mbps R] [--blackhole-after S] [--record PREFIX]`; TLS passes
   through). `Scripts/pacing/` is the remote pacing harness
@@ -4982,8 +5047,10 @@ good.
   MenuPolicy, and MacMenu.swift's JSON), `message-reader`, `origin`,
   `pairing-address`, `phone-portrait`, `pointer-control`, `pointer-presence`,
   `pointer-watch`, `policy` (with its `home.swift`), `protocol`,
-  `remote-rules` (with its `home.swift`), `tour`, `update-policy` (the two
-  encoder checks refuse a binary that links VideoToolbox). `run-all.sh
+  `remote-rules` (with its `home.swift`), `tour`, `update-policy`,
+  `window-restore` (WindowRestore, with a model of the coordinator's glue
+  against a stand-in Mac) (the two encoder checks refuse a binary that links
+  VideoToolbox). `run-all.sh
   [--mutants] [-v] [name…]` runs them and exits
   with the number that failed (a folder whose `run.sh` is not executable
   fails); `common.sh` is sourced by each `run.sh`; `README.md` lists what each
@@ -5045,6 +5112,7 @@ Scripts/make-dmg.sh --sign - .build/Sill.app .build/Sill.dmg   # the download's 
 python3 -m http.server 8000 --directory site   # the website at http://localhost:8000
 Scripts/encoder-check/run.sh            # the encoder checks that never touch an encoder (safe while Sill.app streams)
 Scripts/menu-check/run.sh               # the menus' reader and mirror against Scripts/menufixture.swift, no host, no encoder (needs Accessibility)
+Scripts/restore-probe/run.sh            # TEST ONLY: a window Sill sized goes back, against a window of its own (needs Accessibility, Screen Recording, an unlocked screen)
 Tests/duorig/run.sh UDID pose book && Tests/duorig/run.sh UDID shot book book.png   # TEST ONLY: fold and photograph an iPhone Duo simulator (laptop, flat-portrait, flat-landscape, closed-upright, closed-side)
 SILL_TEST_ENCODER_RECYCLE=0 swift run -c release SillHost   # =0 keeps every hardware session, =1 replaces one in the slow state, as by default (A/B on the real Desktop: --synthetic moves every frame and never reaches the slow state)
 Scripts/encoder-check/verify-hardware.sh harness   # USES THE HARDWARE ENCODER; skips each run while a device is connected

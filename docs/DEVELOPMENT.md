@@ -294,6 +294,30 @@ me.saffer.sill.mac <key>` (`bitrate`, `maxFPS`, `captureScale`, `awayBitrate`,
 `awayCaptureScale`, `prioritizeSpeed`, `virtualDisplay` or `directWireless`)
 and open Sill again.
 
+## Windows sized for a device
+
+Without the virtual display, Aa (text size) on the device resizes the window
+it streams on the Mac itself, through Accessibility, to the device's panel at
+that scale (nothing happens until Aa is first touched). The window goes back to
+its own frame when it stops streaming: another window or the Desktop picked,
+the last device disconnecting, the stream stopping (the window closed, a stream
+that failed to start), and Sill quitting (Quit, logout, a `kill` or hangup, and
+Ctrl-C of `SillHost`). Moved on the Mac meanwhile, it gets its own size back
+where it is now, kept on its display; resized on the Mac after Sill last sized
+it, or full screen, it is left as it is. A resize on the Mac while it streams
+is undone by the next fit within about two seconds, so it does not count.
+Turning the virtual display on while such a window streams stages it with that
+frame as its way home. Each window acted on gets one line in the log:
+"Restored Safari — Apple Developer to (212,95,1280×800)", "…, its own size
+where it was moved", "Left … at (…): it was resized on the Mac", "Left … as it
+is: it is full screen", or "Could not restore …" (an app that does not answer
+Accessibility is left where it is rather than wait out a second for each
+write). The frames are kept in memory only: after a crash or `kill -9` the
+window stays at the size Sill gave it. `Sources/SillHost/WindowRestore.swift`
+is the rule, checked in `Tests/checks/window-restore`;
+docs/restore-window-frames-plan.md has the reasons, and The restore probe
+(below) checks it against a real window.
+
 ## Trackpad gestures
 
 Three fingers on the device's glass, on the portrait trackpad or over the
@@ -661,6 +685,21 @@ device's does: the host reads a menu only under that title).
 fixture without a host (it needs Accessibility for whatever runs it). The
 file's header says how to build and run it.
 
+### The restore probe
+
+`Scripts/restore-probe/run.sh` checks that a window Sill sized goes back, with
+the real `WindowSizer.resize` and the restore the host runs, against a window
+of its own (`owner.swift`, in a bundle that never comes to the front, at the
+lower left behind every other window): twelve steps (a stop, a rotation's
+re-fit, moved, moved then re-fitted, resized, an app's minimum, a window that
+closes, the nudge at a display's edge, a window that cannot be resized, an app
+that does not answer, the virtual display's way home worked out without a
+display, and two windows), each frame before, during and after. It touches no
+other window, posts no input and makes no virtual display, and the front app
+must not change. It needs Accessibility and Screen Recording for the terminal,
+and an unlocked screen: while the screen is locked the window server shows a
+new window transformed and Accessibility lists none, so it says so and exits 2.
+
 ### Test arguments for the bare app
 
 `.build/release/SillMenuBar` is Sill.app without its bundle. It keeps its
@@ -975,6 +1014,8 @@ record field by field.
   or QUIC with FEC; measure before deciding.
 - The encoder is fixed to one size, so a resized window restarts the pipeline
   (a brief black frame on the device).
+- A window Sill sized for a device goes back when it stops streaming, but not
+  after a crash or `kill -9`: the frames are kept in memory only.
 - Single window at a time. Every connection runs over TLS 1.3 to paired
   devices only (with Require pairing off, to any device at home, still
   encrypted); only the command-line host without `--pairing` keeps a plain,
@@ -996,9 +1037,10 @@ record field by field.
   iOS app's build for App Store Connect and TestFlight), `sillclient.py` (a
   wire-format test client), `sillrelay.py` (a relay that slows or cuts the
   link, for tests), `sillfeed.py` (a stand-in for GitHub's releases feed,
-  for the update check's tests), `pacing/` (the pacing harness, above), and
+  for the update check's tests), `pacing/` (the pacing harness, above),
   `menufixture.swift` and `menu-check/` (the menus' test app, and the menu
-  reader's checks against it).
+  reader's checks against it), and `restore-probe/` (a window Sill sized goes
+  back, against a window of its own, above).
 - `Tests/checks/`: the pure checks (above). `Tests/touchrig/`: the touch rig
   (above). `Tests/duorig/`: folds and turns the iPhone Duo simulator (TEST
   ONLY, above). `.github/`: the CI, release and TestFlight workflows, and the
