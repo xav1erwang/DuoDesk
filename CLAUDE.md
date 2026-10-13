@@ -9,7 +9,7 @@ Formerly winstream; the folder still carries the old name.
 ## Current step
 
 **The Settings window on a small screen (2026-10-14, branch `settings-window-height` from main at
-985a733, PR #PRNUM; issue #59; the probe, the plan and the results are in
+985a733, PR #74; issue #59; the probe, the plan and the results are in
 `docs/settings-window-plan.md`).** rosstex, a 14-inch MacBook Pro on macOS 26.6.2 with Sill 0.5.1:
 "The Remote Access settings on Mac are too tall and cannot be resized." Mac app only: no wire change,
 nothing on the iOS side, the CLI untouched.

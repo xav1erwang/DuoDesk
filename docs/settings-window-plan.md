@@ -1,7 +1,7 @@
 # The Settings window on a small screen: the plan
 
-2026-10-14. Branch `settings-window-height` (worktree `/Users/noah/Downloads/winstream-settings-height`)
-from origin/main at 985a733; line numbers are at 985a733. Issue #59 (rosstex, a 14-inch MacBook Pro
+2026-10-14. Branch `settings-window-height` (worktree `/Users/noah/Downloads/winstream-settings-height`,
+PR #74) from origin/main at 985a733; line numbers are at 985a733. Issue #59 (rosstex, a 14-inch MacBook Pro
 on macOS 26.6.2, Sill 0.5.1 (563)): "The Remote Access settings on Mac are too tall and cannot be
 resized." Mac app only: no wire change, nothing on the iOS side, the CLI untouched.
 
@@ -247,4 +247,5 @@ With Sill.app from this branch (`Scripts/make-app.sh --install --open`) on the 1
 - 2026-10-14: the probe; this plan (3b8c61d). `SettingsWindowFit` and its check (ec0d850); the
   cap, the move and the hooks (f009b09); the check at Sill's measured chrome (367e8c8); a move
   that waits for the buttons, the docs (654d782); the `end` step (c4a39a7). Every result above on
-  c4a39a7.
+  c4a39a7 (after it only the hooks' messages and the docs changed). PR #74 opened; left open for
+  Noah.
