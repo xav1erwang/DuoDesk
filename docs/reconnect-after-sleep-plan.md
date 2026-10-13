@@ -170,8 +170,61 @@ most every 10 s, as it already was at its next window list. No host change.
 
 ## Results
 
-(Filled in as the steps run.)
+All on 2026-10-14, on a private simulator, "Sill reconnect" (iPad mini (A17 Pro), iOS 27.0; deleted
+after), with the Debug app built ad hoc (`CODE_SIGN_IDENTITY=-`, so the simulator gives it a
+keychain), against `SillHost --synthetic --pairing` on 127.0.0.1 alone (SILL_TEST_LOOPBACK,
+SILL_TEST_SOFTWARE_ENCODER, SILL_TEST_NO_ROUTER, SILL_TEST_SERVICE_TYPE=_silltest._tcp, its identity
+and trust list in SILL_TEST_REMOTE_DIR), the app with `-SillServiceType _silltest._tcp -SillTapRow
+"Sill test"`, so the host was a real Bonjour row and its reconnect a row's. The device was paired
+once, with the code at the host's remote door (`--remote` for that run only): this Mac's console was
+locked, so the host answered the ask "locked", as it should. Times are from the console (each line
+stamped as it came) and the host's log; the loss is the device's "connection silent for 6 s".
+
+- **main (985a733), the repro**: streaming, then `kill -STOP` on the host for 20 s. The loss 6.2 s
+  after the stop; dials at +0 and +6.3 s, each "not ready in 5.0 s (preparing); letting it go and
+  looking again"; then nothing for the 62.8 s after the host was continued, under "Reconnecting to
+  Noah’s MacBook Pro…", and the host saw no connection. As the triage read it.
+- **This branch, the same run**: the loss 6.0 s after the stop; dials at +0, +5.3, +15.3 and
+  +35.3 s; the fourth connected at +35.3 s, without a tap. The third began 0.14 s before the host
+  was continued, which then refused it over its pre-auth cap of two pending connections from one
+  source ("1 over the limit": the two dials the device had cancelled were still in its listen
+  backlog), an artifact of SIGSTOP. "‹Mac› isn’t answering. It may be asleep. Sill keeps trying, or
+  tap it to try now." from +20.5 s.
+- **The bound**: the host stopped for 300 s. Dials at +0, 5.3, 15.3, 35.3, 65.3, 95.8, 125.8, 155.8,
+  186.0, 216.4, 246.7 and 276.8 s (the rule's 0, 5, 15, 35, then every 30 s, with the let-go's
+  0.25 s and the timers' slack); the quiet line at +20.5 s; "Stopped trying to reach Noah’s MacBook
+  Pro. Tap it to try again." at +281.8 s, and no dial after it, also once the host was back at
+  +299.5 s (no new listing: the bound's price, open question 4). Sill sent to the background (the
+  Settings app) at +360.9 s and back at +371.1 s: "browser: rebuilt the network browser (back from
+  the background); ["Sill test 2676"] kept beside it for 3 s", a dial at once, connected 40 ms later.
+- **The return from the background while streaming** (the Settings app for 15 s): the host had
+  dropped the suspended app; on the return the device found the connection silent, the browser was
+  made again with the row kept beside it, and the reconnect dialled at once: the session was back
+  0.1 s after the return, and the new browser settled 3.0 s later with the row. No rebuild at launch.
+- **The browser after a failure** (`-SillBrowserFail 3`): failures 0.45, 2.03 and 4.66 s after
+  launch; made again 1.05, 2.12 and 4.21 s after each (the rule's 1, 2, 4); the fourth browser
+  settled 3.13 s after it was made; the host's row listed throughout (one "discovery:" line). The
+  first build let the second rebuilt browser's settle run out while it waited for its next rebuild,
+  so the rows read for a moment from a browser that had failed: fixed in 03ca390 (a failure keeps
+  the rows as they are), and the run then had one settle, the last browser's.
+- **The Desktop asked for again** (a stand-in Mac in Python on 127.0.0.1, a plain door, dialled by
+  `-SillConnect`, sending a list with the Desktop streaming and 3 s later one with nothing): this
+  branch asked for the Desktop 10 ms after the second list ("session: the Mac stopped the Desktop;
+  asking for it again"); main's build asked for nothing in the 12 s after it.
+- **Not provoked here**: the defunct connection itself. The simulator's apps use this Mac's
+  mDNSResponder, which does not know an iOS app is suspended; `-SillBrowserFail` and the return
+  from the background stand in for it. R6 (whether macOS stops a capture when the display sleeps or
+  the Mac locks) needs Noah's display to sleep.
+- **Photos** (`-SillConnectCase asleep`): the new line at 951×669, 669×951, 466×678, 678×466 and
+  744×1133, at the default text size and at accessibility-extra-large: it wraps to two lines and
+  reads whole beside the rows; the connect case `homerows` at 951×669, 669×951 and 466×678 pixel for
+  pixel main's build (0 pixels differ). The live photos show this Mac's name and windows and stay
+  out of the repository.
+- **Checks and builds**: below, in Progress.
 
 ## Progress
 
-- 2026-10-14: the plan.
+- 2026-10-14: the plan (211e98c); the browsers made again, the reconnect kept alive, the Desktop
+  asked for again, with `Tests/checks/policy`'s `sleep.swift` and 28 mutants (83f96ba); a failure
+  keeps the rows as they are (03ca390); the runs above; the support page, README, the App Store
+  text for the next version, DEVELOPMENT.md and CLAUDE.md.

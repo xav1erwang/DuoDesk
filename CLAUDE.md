@@ -8,6 +8,65 @@ Formerly winstream; the folder still carries the old name.
 
 ## Current step
 
+**Finding the Mac again after hours idle (2026-10-14, branch `reconnect-after-sleep` from main at
+985a733, issue #69; the plan, the causes with line numbers, the decisions and the results are in
+`docs/reconnect-after-sleep-plan.md`).** The report: after a few hours dormant nothing reconnected
+until the Mac was logged in to and Sill relaunched on the iPad. Device code, the support page and the
+docs; no wire change, nothing on the Mac.
+- The browsers: iOS makes a suspended app's connection to mDNSResponder defunct (-65569), and the
+  Bonjour browser was made once (`startBrowsing`), so after hours in the background the rows were
+  what it saw then, and a failed browse only said "Browse failed: …". Now the network browser, and
+  the nearby one if it runs, is made again on the return from the background
+  (`StreamClient.cameForward`: willEnterForeground after didEnterBackground) and after a failure, 1,
+  2, 4, 8, 16, then 30 s later and in the foreground only (`DiscoveryPolicy.rebuildBrowser`,
+  `browserFailures`: one that ran 30 s is the first again). The old results stay beside the new
+  browser's for 3 s (`browserResults`, `rebuildSettle` = `networkFirst`), and a failed browser's rows
+  stay as they are until it is made again, so a Mac that stays listed keeps its sightings. No line
+  for a failed browse.
+- The reconnect: a listed row was dialled at once, a dial not ready in 5 s was let go and nothing
+  looked again (`tearDown` never does, whatever the comment said), and the retry chain ended at its
+  first dial: two dials, then "Reconnecting…" for good, also under a Bonjour Sleep Proxy's record of
+  a sleeping Mac. A dial that waited or failed began a new `Reconnect` and dialled at once (every 5 s
+  for good to a stale row). Now `reconnectIfListed` dials a listing of the row at once, then 5, 10,
+  20 and every 30 s after the last started, 12 at most, in the foreground only
+  (`DiscoveryPolicy.redialRow`; `Reconnect.rowListing`, `rowDials`, `lastRowDialAt`); the row listed
+  afresh, the return from the background, or a tap starts again. The line (`reconnectLine`):
+  "Reconnecting to ‹Mac›…", after 3 "‹Mac› isn’t answering. It may be asleep. Sill keeps trying, or
+  tap it to try now.", after 12 "Stopped trying to reach ‹Mac›. Tap it to try again.". The let-go
+  looks again; a reconnect dial that ends without a goodbye before it connects is one dial
+  (`sessionEnded`); "Waiting for ‹Mac›…" is a tap's line only; the retry chain lives while a
+  reconnect is wanted, one at a time.
+- A Desktop the Mac stopped (its capture stopped, so the host selects nothing) is asked for again
+  at once, under the old 10 s spacing (`DiscoveryPolicy.autoDesktop`).
+- DEBUG `-SillBrowserFail N` (each of the first N network browsers reported failed with -65569 half
+  a second after it starts) and `-SillConnectCase asleep`. The support page's "Your Mac isn’t listed"
+  gains a sleeping Mac (Sill can't wake it: Energy, or Battery) and a restarted one (Sill opens after
+  a login, with Launch at Login); README's Good to know, the next What's New
+  (docs/app-store-metadata.md), DEVELOPMENT.md.
+- Verified (the plan's Results): on a private simulator against `SillHost --synthetic --pairing` as
+  a `_silltest._tcp` row, the host stopped for 20 s: main's build dialled at +0 and +6.3 s after the
+  loss and then nothing for the minute after the host came back; this branch dialled at +0, 5.3,
+  15.3 and 35.3 s and the session came back without a tap. Stopped for 300 s: 12 dials at the rule's
+  times, the quiet line at +20.5 s, "Stopped trying…" at +281.8 s and no dial after it; back from the
+  background, a dial at once and the session in 40 ms. `-SillBrowserFail 3`: made again 1.05, 2.12 and
+  4.21 s after each failure, the row listed throughout. The return from the background while
+  streaming: the browser made again with the row kept, the session back 0.1 s after the return. The
+  Desktop: asked for again 10 ms after a stand-in Mac said nothing streams (main: never). Photos of
+  `asleep` at the Duo's four sizes and 744×1133, default and accessibility-extra-large; `homerows`
+  pixel for pixel main's. `Tests/checks/policy` 441 cases (`sleep.swift`, models of a host stopped,
+  a sleep proxy, a new listing and the background), 158 mutants (28 new); the other DiscoveryPolicy
+  checks; the builds; `run-all.sh` (numbers in the PR).
+- **Untested, for Noah:** the real overnight case on the iPad mini (Sill left streaming or on the
+  connect screen for hours, the iPad locked; back: the console's "browser: rebuilt the network
+  browser (back from the background)", the Mac's row as it is now, and the session back by itself if
+  the Mac is awake with Sill open); a Mac asleep behind an Apple TV or HomePod (`dns-sd -B
+  _sleep-proxy._udp` lists one; the Mac's "Wake for network access" on): the row stays, dials every
+  5, 10, 20, 30 s, the quiet line, and whether a dial wakes the Mac and connects; R6, whether macOS
+  stops a capture when the display sleeps or the Mac locks (Sill.app streaming the Desktop, then
+  `pmset displaysleepnow` or ⌃⌘Q: whether Sill.log says "Capture stopped: …", and whether the
+  picture comes back by itself once the Mac is woken and unlocked: this build asks for the Desktop
+  again when the Mac says the stream stopped, 0.5.1 never does).
+
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
 once that is merged do #48. Then run the release procedure").** Noah: "I want the release in the GitHub to line up with the app version, I want
@@ -4760,8 +4819,9 @@ good.
 - `Sources/VirtualDisplayProbe/` — CLI experiment for milestone 3; run it from
   Terminal (needs Screen Recording + Accessibility): `.build/release/VirtualDisplayProbe "Activity Monitor" --seconds 20`.
 - `iOSClient/` — `Sill.xcodeproj` and its sources: `StreamClient` (Bonjour: a
-  network browser and, when `DiscoveryPolicy` says, a nearby peer-to-peer one;
-  `FoundMac` rows; connection, parsing, reconnect, the move of a session over
+  network browser and, when `DiscoveryPolicy` says, a nearby peer-to-peer one,
+  each made again after the background and after a failure (`cameForward`,
+  `rebuildBrowser`); `FoundMac` rows; connection, parsing, reconnect, the move of a session over
   AWDL to the network, a live session following the best path
   (`followBestPath`: to the cable, to Wi-Fi, made again over either), a remote
   session's move home (`moveHomeIfListed`, `MoveKind.fromRemote`), ping,
@@ -4784,7 +4844,11 @@ good.
   refused by row: `moveHomeRow`, `HomeRows`, its kind 18 held to the floor taken
   as the move starts: `HomeMoveInfo`), the memory of Macs with
   Direct Wireless on, the Remote rows and when a lost saved Mac is dialed away
-  from home; pairing at home's rows and words, a tap's dial, the device's
+  from home; when a browser is made again and what the rows show meanwhile
+  (`rebuildBrowser`, `browserFailures`, `browserResults`), when the automatic
+  reconnect dials a row that stays listed and its line (`redialRow`,
+  `reconnectLine`), and when the device asks for the Desktop by itself
+  (`autoDesktop`; issue #69); pairing at home's rows and words, a tap's dial, the device's
   cable check and how a session at home ends: `rowWord`, `homeDial`,
   `onCable`, `rowMac`, `reconnectEnd`, `macInfoNamesSession`,
   `removalRevokes`; pure, checked with swiftc), `StreamScreen`
@@ -5267,7 +5331,13 @@ iPad…'s overlay; `-SillOverlayLine asking|shown|openonmac|locked|noanswer` the
 line its ask's answer sets; under `-SillLive 1` it opens over the live session
 and asks), pairing at home's connect cases `homerows|homeasking|homecard|homecode|
 homecodeerror|homelocked|homeopenonmac|homerevoked|homecabledone|homeolder|
-pairingrequired` and settings cases `paired|pairedoff|openpair`,
+pairingrequired` and settings cases `paired|pairedoff|openpair`, the connect
+case `asleep` (issue #69: a saved Mac's row listed, the reconnect's line after
+three dials of it that did not connect), `-SillBrowserFail N` (the normal app
+and `-SillLive 1`: each of the first N network browsers is reported failed with
+-65569, as iOS reports a suspended app's, half a second after it starts, so it
+is made again after 1, 2, 4… s; the console's "browser: …" lines, and the
+reconnect's "reconnect: …"),
 `-SillPointer mac@X,Y|device@X,Y|hidden|pencil@X,Y` (the pointer sprite in one
 of docs/pointer-visibility-plan.md's states over the mock's frame, which it
 draws as a dim rectangle; `-SillPencilPointer 1` is Q2's flip), and in
