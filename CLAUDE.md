@@ -8,6 +8,45 @@ Formerly winstream; the folder still carries the old name.
 
 ## Current step
 
+**The Settings window on a small screen (2026-10-14, branch `settings-window-height` from main at
+985a733, PR #PRNUM; issue #59; the probe, the plan and the results are in
+`docs/settings-window-plan.md`).** rosstex, a 14-inch MacBook Pro on macOS 26.6.2 with Sill 0.5.1:
+"The Remote Access settings on Mac are too tall and cannot be resized." Mac app only: no wire change,
+nothing on the iOS side, the CLI untouched.
+- Cause (a scratch probe of the same setup on macOS 27.0.1): AppKit gives the selected pane's view a
+  constraint named `NSViewController.preferredContentSize.height` (the hosting controller's
+  preferredContentSize, SwiftUI's whole Form) at priority 501, just over the window's own 500, and
+  lays the window out to it, keeping its top-left; the window is not resizable, so nothing shortens
+  it (a 50-row pane made a 2,028 pt window). The constraint follows growth and every tab switch,
+  never shrinking. Sill's window adds 80 pt of title bar and toolbar; Remote Access with the
+  internet switch on is 909 to 983 pt, General 727, so neither fits a 14-inch with the Dock.
+- Fix: `SettingsWindowController.heightCap`, the content view's height at most
+  `SettingsWindowFit.contentLimit` (the screen's visible frame less the chrome and 12 pt above and
+  below, whole points, at least 200) at priority 750; the Forms scroll. Set at show, on every tab
+  switch (`SettingsTabController.onSelect`), on `NSApplication.didChangeScreenParametersNotification`
+  and `windowDidChangeScreen`; a new cap lays a window on screen out at once. `place()` (after
+  `windowDidResize` and `refit`) moves the window back inside the visible frame, 12 pt over the
+  Dock, when Sill's own changes leave it partly outside; never sideways, never while a mouse button
+  is down (then once all are up, `placeOnRelease`). Sill's virtual display is never the screen
+  (`SettingsWindowFit.screenIndex`). Rejected in the probe: an NSHostingController subclass clamping
+  preferredContentSize (SwiftUI never calls its setter) and a SwiftUI `.frame(maxHeight:)` on the
+  pane (lowered while a pane showed, the window stayed tall, since the 501 constraint never shrinks).
+- `SettingsWindowFit` (pure, CoreGraphics): `Tests/checks/settings-window`, 307,689 checks (the
+  issue's screens, an external 4K display, screens above and beside, windows partly off the screen,
+  the virtual display, the test height, then 20,000 seeded random cases) and 27 of 27 mutants, in
+  CI's mutants matrix.
+- TEST ONLY, the bare binary; Sill.app ignores each with one line: `-SillSettingsAfter '<s>
+  <tab>|close|report|height=<points>; …'` (opens Settings as the menu does and prints the window's
+  frame, the pane's whole height and how much shows), `-SillTestScreenHeight <points>`,
+  `-SillSettingsShot <dir>` (docs/DEVELOPMENT.md).
+- Verified: see the PR and the plan's Results (filled in below once every run is in).
+- **Untested, for Noah:** the plan's U1 to U6: on the 14-inch MacBook with Sill.app built from
+  this branch, at each scaling with larger text and the Dock showing, every tab fits and Remote
+  Access (Remote Access and "Allow connections from the internet" on) scrolls to its last row;
+  changing the scaling, the Dock or the display with Settings open; dragging Settings to a smaller
+  external display and back; a click held on a toolbar tab; VoiceOver in a capped pane; macOS 14
+  and 15.
+
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
 once that is merged do #48. Then run the release procedure").** Noah: "I want the release in the GitHub to line up with the app version, I want
@@ -4587,8 +4626,11 @@ good.
   (owns the coordinator, presentation, App Nap guard, onboarding),
   `HostSettings` (UserDefaults; the presets are StreamProtocol's
   `QualityPreset`), `StatusItemController` (+ `MenuBuilder`), `StatusText`
-  (all status copy), `StatusCard`, `StatusGlyph`, `SettingsWindow` +
-  `SettingsPanes`, `Permissions`, `LoginItem`, `LogWindow`, `MainMenu` (key
+  (all status copy), `StatusCard`, `StatusGlyph`, `SettingsWindow` (its
+  height capped to the screen, issue #59) + `SettingsPanes`,
+  `SettingsWindowFit` (how tall Settings may be on its screen and where it
+  goes; pure, `Tests/checks/settings-window`), `Permissions`, `LoginItem`,
+  `LogWindow`, `MainMenu` (key
   equivalents), `DebugHooks`, `AppLog` (its print shadow), `DevicesPane`
   (Settings › Devices: Require pairing, the paired devices, Remove and
   rename), `RemoteAccessPane` (Settings › Remote Access), `PairDeviceWindow`
@@ -4982,7 +5024,8 @@ good.
   MenuPolicy, and MacMenu.swift's JSON), `message-reader`, `origin`,
   `pairing-address`, `phone-portrait`, `pointer-control`, `pointer-presence`,
   `pointer-watch`, `policy` (with its `home.swift`), `protocol`,
-  `remote-rules` (with its `home.swift`), `tour`, `update-policy` (the two
+  `remote-rules` (with its `home.swift`), `settings-window` (Sill.app's
+  `SettingsWindowFit`), `tour`, `update-policy` (the two
   encoder checks refuse a binary that links VideoToolbox). `run-all.sh
   [--mutants] [-v] [name…]` runs them and exits
   with the number that failed (a folder whose `run.sh` is not executable
@@ -5064,7 +5107,11 @@ defaults domain `SillMenuBar`; delete it after): `--synthetic` (test pattern,
 off Bonjour; the port is in the "Status: Test Pattern Mode" line),
 `-SillLogFile <path>`, `-SillSetAfter '<s> key=value[,key=value][; <s> …]'`,
 `-SillQuitAfter <s>`, `-SillRenderPreviews <dir>` (panes, cards, glyphs,
-menu.txt; no permission needed). The update check, in the bare binary (which
+menu.txt; no permission needed), and for the Settings window's height
+`-SillSettingsAfter '<s> <tab>|close|report|height=<points>[; …]'` (opens it,
+then prints its frame, the pane's whole height and how much shows),
+`-SillTestScreenHeight <points>` and `-SillSettingsShot <dir>`
+(docs/DEVELOPMENT.md, Test arguments for the bare app). The update check, in the bare binary (which
 has no version and never checks without these) and the app: `-SillUpdateFeed
 http://127.0.0.1:P/latest` (a feed on this Mac only: 127.0.0.1, ::1 or
 localhost; `Scripts/sillfeed.py P` serves one; test pattern mode checks only

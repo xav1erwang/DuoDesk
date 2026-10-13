@@ -45,6 +45,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let model: AppModel
     private let tabs: SettingsTabController
     private let heightCap: NSLayoutConstraint
+    /// A move that waits for the mouse buttons to be released (`placeOnRelease`).
+    private var releaseWatch: Timer?
 
     init(model: AppModel) {
         self.model = model
@@ -129,13 +131,31 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     /// Moves the window back inside its screen's visible frame when it runs off it top or bottom
     /// (SettingsWindowFit.placed), only while it is on screen (a hidden window's frame waits for its
-    /// next layout; `show` places it after that) and never while a mouse button is down: a window the
-    /// user is dragging stays under the pointer, and stays where they leave it until Sill next changes
-    /// its size or shows it.
+    /// next layout; `show` places it after that), and never while a mouse button is down: a window
+    /// the user is dragging (across screens, its cap changing on the way) stays under the pointer and
+    /// is placed once every button is up. A window the user leaves partly off the screen stays there
+    /// until Sill next changes its size or shows it.
     private func place() {
-        guard let window, window.isVisible, NSEvent.pressedMouseButtons == 0, let visible = fitVisibleFrame() else { return }
+        guard let window, window.isVisible, let visible = fitVisibleFrame() else { return }
+        guard NSEvent.pressedMouseButtons == 0 else { placeOnRelease(); return }
         let placed = SettingsWindowFit.placed(window.frame, in: visible)
         if placed.origin != window.frame.origin { window.setFrameOrigin(placed.origin) }
+    }
+
+    /// Places the window once no mouse button is down, looking ten times a second until then. A
+    /// run-loop Timer in the common modes, so it also fires while AppKit tracks the mouse.
+    private func placeOnRelease() {
+        guard releaseWatch == nil else { return }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard NSEvent.pressedMouseButtons == 0 else { return }
+                timer.invalidate()
+                self?.releaseWatch = nil
+                self?.place()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        releaseWatch = timer
     }
 
     /// The visible frame the window must fit in: its screen's or, when it is on none or on Sill's
