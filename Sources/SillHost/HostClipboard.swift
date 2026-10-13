@@ -1,0 +1,225 @@
+import AppKit
+import Network
+import StreamProtocol
+
+/// The clipboard, the host's side (kind 32; docs/clipboard-plan.md). The rules are ClipboardPolicy's;
+/// this reads and writes the pasteboard and keeps who subscribed.
+///
+/// - A device subscribes with any kind 32 (an empty one at connect, while its Share Clipboard is on)
+///   and stops with `stop`; one line each ("Clipboard: iPad (iPad14,1) shares the clipboard."). A
+///   device that leaves is forgotten without a line.
+/// - While at least one subscribes, the pasteboard's change count is looked at four times a second.
+///   The count as it stands when the first subscribes is taken as seen: what was on the clipboard then
+///   is never sent, only what is copied while a device shares it. A change ClipboardPolicy.hostDecides
+///   takes goes to every subscriber. A password manager's copy (`markerTypes`) is never read.
+/// - A device's text becomes the pasteboard's, written for this Mac only (`.currentHostOnly`: Universal
+///   Clipboard does not carry it to the person's other devices, the sender among them) with the
+///   marker `ClipboardPolicy.ownType` naming this launch; it goes to every other subscriber at once,
+///   and the look never sends it again.
+/// - Off (`HostConfig.shareClipboard`, `setEnabled`): every subscription dropped, nothing looked at,
+///   and a kind 32 ignored without a word or an answer. The coordinator's window lists say
+///   `clipboard` only while it is on.
+///
+/// Never logs what was copied. Stats: `clip.sent` (messages sent), `clip.recv` (texts taken).
+///
+/// Threading: main actor. The look is a Task.sleep loop, not a RunLoop timer, which the CLI's
+/// dispatchMain never runs; NSPasteboard is used from whichever thread drains the main queue there,
+/// one call at a time.
+@MainActor
+final class HostClipboard {
+    /// Share clipboard with devices.
+    private(set) var enabled: Bool
+    /// The window lists' `clipboard`: the generation while on, nil while off.
+    var advertised: Int? { enabled ? ClipboardPolicy.generation : nil }
+
+    private let server: StreamServer
+    private let launchID: String
+    /// `NSPasteboard.general`; a synthetic host's own (`pasteboardName`).
+    private let board: NSPasteboard
+    /// A synthetic host's own pasteboard: its name, said at its first subscription. Nil for the Mac's.
+    private let testBoardName: String?
+    private var saidTestBoard = false
+    /// TEST ONLY (SILL_TEST_CLIPBOARD_LOG=1, a synthetic host): each decision, with sizes, never text.
+    private let testLog: Bool
+    /// The test hooks' line for `start` (one, when a variable is set), nil without them.
+    let testHookLine: String?
+
+    /// The subscribers, by connection, and each one's name for the lines.
+    private var subscribers: [ObjectIdentifier: (connection: NWConnection, who: String)] = [:]
+    /// In the order they subscribed, for a stable order of sends.
+    private var order: [ObjectIdentifier] = []
+    /// The change count the look has dealt with, and the one after this host's own last write.
+    private var seen = 0
+    private var ownChangeCount: Int?
+    private var look: Task<Void, Never>?
+    /// Each connection's kind 32s of the last second (ClipboardPolicy.admits).
+    private var arrivals: [ObjectIdentifier: [Double]] = [:]
+    private lazy var ignored = RefusalSummary(queue: .main, categories: ["rate", "tooLong", "undecodable"]) { counts in
+        ClipboardPolicy.Copy.ignoredLine(rate: counts["rate"] ?? 0, tooLong: counts["tooLong"] ?? 0,
+                                         undecodable: counts["undecodable"] ?? 0)
+    }
+
+    /// `synthetic`: a host that never touches this Mac's clipboard (as it never reads the real
+    /// pointer): a pasteboard of its own, `me.saffer.sill.test.<pid>`, or the one TEST ONLY
+    /// `SILL_TEST_PASTEBOARD` names, so a test can write and read it.
+    init(server: StreamServer, enabled: Bool, launchID: String, synthetic: Bool,
+         environment env: [String: String] = ProcessInfo.processInfo.environment) {
+        self.server = server
+        self.enabled = enabled
+        self.launchID = launchID
+        var lines: [String] = []
+        if synthetic {
+            let named = env["SILL_TEST_PASTEBOARD"].flatMap { $0.isEmpty ? nil : $0 }
+            let name = named ?? "me.saffer.sill.test.\(getpid())"
+            board = NSPasteboard(name: NSPasteboard.Name(name))
+            testBoardName = name
+        } else {
+            board = .general
+            testBoardName = nil
+            if let named = env["SILL_TEST_PASTEBOARD"], !named.isEmpty {
+                lines.append("SILL_TEST_PASTEBOARD ignored: only a --synthetic host takes it.")
+            }
+        }
+        switch (env["SILL_TEST_CLIPBOARD_LOG"], synthetic) {
+        case (nil, _), ("", _):
+            testLog = false
+        case ("1", true):
+            testLog = true
+            lines.append("Test clipboard log: each change and each device's text is printed with its size, never its text.")
+        case ("1", false):
+            testLog = false
+            lines.append("SILL_TEST_CLIPBOARD_LOG ignored: only a --synthetic host takes it.")
+        case (let value?, _):
+            testLog = false
+            lines.append("SILL_TEST_CLIPBOARD_LOG=\(value) ignored: 1 turns it on.")
+        }
+        testHookLine = lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    // MARK: The setting
+
+    /// Turns sharing on or off at once; true when it changed (the caller sends the lists again). Off
+    /// drops every subscription without a line: the devices see the list without `clipboard`.
+    @discardableResult
+    func setEnabled(_ on: Bool) -> Bool {
+        guard on != enabled else { return false }
+        enabled = on
+        if !on {
+            subscribers = [:]
+            order = []
+            arrivals = [:]
+            stopLooking()
+        }
+        return true
+    }
+
+    // MARK: A device's message
+
+    /// A kind 32 from `connection`, named `who` for the lines.
+    func received(_ payload: Data, from connection: NWConnection, who: String) {
+        guard enabled else { return }
+        let id = ObjectIdentifier(connection)
+        let admitted = ClipboardPolicy.admits(arrivals: arrivals[id] ?? [], now: ProcessInfo.processInfo.systemUptime)
+        arrivals[id] = admitted.kept
+        guard admitted.taken else { ignored.count("rate"); return }
+        switch ClipboardPolicy.fromDevice(payload) {
+        case .subscribe:
+            subscribe(connection, who: who)
+        case .set(let text):
+            subscribe(connection, who: who)
+            write(text)
+            Stats.shared.bump("clip.recv")
+            let others = ClipboardPolicy.forward(to: order, from: id).compactMap { subscribers[$0]?.connection }
+            if testLog { print("Test clipboard: \(text.utf8.count) bytes from \(who) set on the pasteboard, sent to \(others.count) other device\(others.count == 1 ? "" : "s").") }
+            send(payload: ClipboardPolicy.payload(text: text), to: others)
+        case .stop:
+            guard let gone = subscribers.removeValue(forKey: id) else { return }
+            order.removeAll { $0 == id }
+            print(ClipboardPolicy.Copy.stoppedLine(device: gone.who))
+            if subscribers.isEmpty { stopLooking() }
+        case .refuse(let why):
+            ignored.count(why == .tooLong ? "tooLong" : "undecodable")
+        }
+    }
+
+    /// The device left: forgotten without a line.
+    func clientLeft(_ connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        arrivals[id] = nil
+        guard subscribers.removeValue(forKey: id) != nil else { return }
+        order.removeAll { $0 == id }
+        if subscribers.isEmpty { stopLooking() }
+    }
+
+    private func subscribe(_ connection: NWConnection, who: String) {
+        let id = ObjectIdentifier(connection)
+        guard subscribers[id] == nil else { return }
+        if let testBoardName, !saidTestBoard {
+            saidTestBoard = true
+            print("Test clipboard: a pasteboard of this host's own, \(testBoardName), never this Mac's clipboard.")
+        }
+        subscribers[id] = (connection, who)
+        order.append(id)
+        print(ClipboardPolicy.Copy.sharesLine(device: who))
+        startLooking()
+    }
+
+    // MARK: The pasteboard
+
+    private func startLooking() {
+        guard look == nil else { return }
+        seen = board.changeCount       // what is on the clipboard now is never sent
+        look = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(ClipboardPolicy.lookInterval))
+                guard !Task.isCancelled, let self else { return }
+                self.lookAtBoard()
+            }
+        }
+    }
+
+    private func stopLooking() {
+        look?.cancel()
+        look = nil
+    }
+
+    /// One look: nothing unless the change count moved; then ClipboardPolicy decides from the items'
+    /// types, reading the marker and the text only when it needs them.
+    private func lookAtBoard() {
+        let count = board.changeCount
+        guard count != seen else { return }
+        seen = count
+        let items = board.pasteboardItems ?? []
+        let types = items.flatMap { $0.types.map(\.rawValue) }
+        let own = NSPasteboard.PasteboardType(ClipboardPolicy.ownType)
+        let decision = ClipboardPolicy.hostDecides(types: types, changeCount: count, ownChangeCount: ownChangeCount, launchID: launchID,
+                                                   ownMarker: { [board] in board.string(forType: own) },
+                                                   text: { [board] in board.string(forType: .string) })
+        switch decision {
+        case .send(let payload):
+            let to = order.compactMap { subscribers[$0]?.connection }
+            if testLog { print("Test clipboard: change \(count) sent to \(to.count) device\(to.count == 1 ? "" : "s") (\(payload.count) bytes of JSON).") }
+            send(payload: payload, to: to)
+        case .skip(let why):
+            if testLog { print("Test clipboard: change \(count) not sent (\(why.rawValue)).") }
+        }
+    }
+
+    /// A device's text, for this Mac only, marked as this launch's, its change count kept.
+    private func write(_ text: String) {
+        board.prepareForNewContents(with: .currentHostOnly)
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setString(launchID, forType: NSPasteboard.PasteboardType(ClipboardPolicy.ownType))
+        board.writeObjects([item])
+        ownChangeCount = board.changeCount
+        seen = board.changeCount
+    }
+
+    private func send(payload: Data?, to connections: [NWConnection]) {
+        guard let payload, !connections.isEmpty else { return }
+        let message = StreamMessage(kind: .clipboard, timestamp: Date().timeIntervalSince1970, isKeyframe: false, payload: payload)
+        server.send(each: connections.map { ($0, message) })
+        for _ in connections { Stats.shared.bump("clip.sent") }
+    }
+}
