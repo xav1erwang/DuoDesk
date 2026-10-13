@@ -50,7 +50,8 @@ nothing on the iOS side, the CLI untouched.
   it, with the window low: moved up to 12 pt over the bottom; rosstex's 951 pt saved frame restored
   capped at 925; General and Streaming scrolled to their ends inside a 600 pt screen (231 and 72
   pt); Sill.app's ignore lines, from the binary in a scratch bundle under `sandbox-exec` with binds
-  denied. Photos without personal details in `~/Downloads/sill-handoff/settings-window/`.
+  denied; CI's "Build and check" on c2339e2. Photos without personal details in
+  `~/Downloads/sill-handoff/settings-window/`.
 - **Untested, for Noah** (the plan's U1 to U6, with Sill.app from this branch on the 14-inch): at
   the scaling at the far left with the Dock showing, every tab fits between the menu bar and the
   Dock, General scrolls to Quit Sill and Remote Access (Remote Access and "Allow connections from

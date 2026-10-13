@@ -252,3 +252,6 @@ With Sill.app from this branch (`Scripts/make-app.sh --install --open`) on the 1
   known, so a Mac with no usable screen (none, or only Sill's virtual display) never gets a 200 pt
   pane; a run of every step kind on it (General and Streaming natural, capped at a 600 pt screen,
   scrolled to the end, back to the screen's own, closed and reopened) gave the same numbers.
+  `swift build -c release` of c2339e2 from `git archive`: only the CaptureProbe warning. CI's
+  "Build and check" passed on c2339e2 (run 38483417858: the build, all the pure checks, the iOS
+  app for the simulator, the CLI).
