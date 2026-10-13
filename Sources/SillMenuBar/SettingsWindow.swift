@@ -191,8 +191,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let pane = host?.preferredContentSize.height ?? 0
         var shows = "no scroll view"
         if let scroll = host.flatMap({ Self.firstScrollView(in: $0.view) }) {
-            let clip = scroll.contentView.bounds.height, document = scroll.documentView?.frame.height ?? 0
-            shows = "shows \(n(clip)) of \(n(document))" + (document > clip + 0.5 ? ", scrolls" : "")
+            let clip = scroll.contentView.bounds, document = scroll.documentView?.frame.height ?? 0
+            shows = "shows \(n(clip.height)) of \(n(document))" + (document > clip.height + 0.5 ? ", scrolls" : "")
+                + (clip.minY > 0.5 ? " (scrolled \(n(clip.minY)))" : "")
         }
         var screen = "no screen"
         if let used = fitVisibleFrame() {
@@ -203,6 +204,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         return "\(tabs.current.title): window \(r(frame)) (content \(n(content)), chrome \(n(frame.height - content))); "
             + "pane \(n(pane)) tall, \(shows); limit \(n(heightCap.constant)); \(screen)\(window.isVisible ? "" : "; not on screen")"
+    }
+
+    /// Scrolls the pane's Form to its last row, as a scroll to the end would: what a capped pane hides
+    /// below the window can be reached.
+    func scrollPaneToEnd() -> Bool {
+        guard let host = tabs.tabViewItems[max(0, tabs.selectedTabViewItemIndex)].viewController,
+              let scroll = Self.firstScrollView(in: host.view), let document = scroll.documentView else { return false }
+        let clip = scroll.contentView
+        let end = max(0, document.frame.height - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: document.isFlipped ? end : 0))
+        scroll.reflectScrolledClipView(clip)
+        return true
     }
 
     /// Writes the window, its title bar and toolbar included, as cacheDisplay draws them.

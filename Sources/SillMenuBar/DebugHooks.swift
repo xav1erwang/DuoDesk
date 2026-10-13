@@ -59,7 +59,8 @@ import StreamProtocol
 ///                                              the visible frame it fits and the cap (issue #59).
 ///                                              A tab by its name or the start of one (remote,
 ///                                              general, virtual); close closes the window; report
-///                                              prints it as it stands; height=<points> sets
+///                                              prints it as it stands; end scrolls the pane to its
+///                                              last row; height=<points> sets
 ///                                              -SillTestScreenHeight (0: the screen's own) and
 ///                                              posts the screens' change, as the Dock or a
 ///                                              display would
@@ -253,6 +254,10 @@ enum DebugHooks {
                     report(tab.rawValue)
                 case .report:
                     report("report")
+                case .end:
+                    let scrolled = model.settingsWindowForTests?()?.scrollPaneToEnd() ?? false
+                    print("SillSettingsAfter \(label) s: \(scrolled ? "scrolled the pane to its end" : "no pane to scroll")")
+                    report("end")
                 case .height(let h):
                     testScreenHeight = h > 0 ? h : nil
                     print("SillSettingsAfter \(label) s: the test screen height is \(h > 0 ? "\(Int(h)) pt" : "the screen's own") now; posting the screens' change")
@@ -278,7 +283,7 @@ enum DebugHooks {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private enum SettingsStep { case tab(SettingsTab), close, report, height(CGFloat) }
+    private enum SettingsStep { case tab(SettingsTab), close, report, end, height(CGFloat) }
 
     /// "2 remote; 4 report; 6 height=700; 8 close" (-SillSettingsAfter): each step's seconds as
     /// written, as a number, and what it does. A tab by its raw value or title, or the start of one,
@@ -294,6 +299,7 @@ enum DebugHooks {
             let word = parts[1].lowercased().replacingOccurrences(of: " ", with: "")
             if word == "close" { return (parts[0], delay, .close) }
             if word == "report" { return (parts[0], delay, .report) }
+            if word == "end" { return (parts[0], delay, .end) }
             if word.hasPrefix("height=") {
                 guard let h = Double(word.dropFirst("height=".count)), h >= 0 else {
                     print("SillSettingsAfter: can’t read “\(parts[1])”; expected height=<points>")

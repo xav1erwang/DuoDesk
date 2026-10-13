@@ -36,7 +36,7 @@ nothing on the iOS side, the CLI untouched.
   the virtual display, the test height, then 20,000 seeded random cases) and 27 of 27 mutants, in
   CI's mutants matrix.
 - TEST ONLY, the bare binary; Sill.app ignores each with one line: `-SillSettingsAfter '<s>
-  <tab>|close|report|height=<points>; …'` (opens Settings as the menu does and prints the window's
+  <tab>|close|report|end|height=<points>; …'` (opens Settings as the menu does and prints the window's
   frame, the pane's whole height and how much shows), `-SillTestScreenHeight <points>`,
   `-SillSettingsShot <dir>` (docs/DEVELOPMENT.md).
 - Verified: see the PR and the plan's Results (filled in below once every run is in).
@@ -5108,7 +5108,7 @@ off Bonjour; the port is in the "Status: Test Pattern Mode" line),
 `-SillLogFile <path>`, `-SillSetAfter '<s> key=value[,key=value][; <s> …]'`,
 `-SillQuitAfter <s>`, `-SillRenderPreviews <dir>` (panes, cards, glyphs,
 menu.txt; no permission needed), and for the Settings window's height
-`-SillSettingsAfter '<s> <tab>|close|report|height=<points>[; …]'` (opens it,
+`-SillSettingsAfter '<s> <tab>|close|report|end|height=<points>[; …]'` (opens it,
 then prints its frame, the pane's whole height and how much shows),
 `-SillTestScreenHeight <points>` and `-SillSettingsShot <dir>`
 (docs/DEVELOPMENT.md, Test arguments for the bare app). The update check, in the bare binary (which

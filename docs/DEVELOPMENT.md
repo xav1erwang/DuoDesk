@@ -687,7 +687,8 @@ settings in the defaults domain `SillMenuBar` (delete it after), and takes:
   after launch, as the menu does, and 0.6 s later prints the window's frame,
   the pane's whole height and how much of it shows ("shows 596 of 909,
   scrolls"), the visible frame it fits in and the cap. A step can also be
-  `close`, `report` (print the window as it stands) or `height=<points>`
+  `close`, `report` (print the window as it stands), `end` (scroll the pane
+  to its last row) or `height=<points>`
   (as `-SillTestScreenHeight`, `0` for the screen's own, then the screens'
   change is posted as the Dock or a display would). `-SillTestScreenHeight
   <points>` makes the window fit the top `<points>` of the screen's visible
