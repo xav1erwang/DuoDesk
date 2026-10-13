@@ -224,6 +224,20 @@ struct StreamScreen: View {
                 .onChange(of: DuoLayout.of(geo.size).isPortrait, initial: true) { _, portrait in
                     client.setPointerLayout(portrait: portrait)
                 }
+                // The clipboard's chip (docs/clipboard-plan.md): a sibling after the layouts, so its
+                // Paste button and Dismiss take their touches over the stream's UIKit input view, and
+                // nothing else does (the frame around it is empty). Near the bar, off the link's line,
+                // inside the stream panel's corner; never while something is open over the stream.
+                if clipboardChipAllowed, client.clipboardChip || client.clipboardNote != nil, let panel = tourTargets[.stream] {
+                    let corner = ClipboardPolicy.chipCorner(landscape: layout == .landscape, linkLineShown: shownLinkLine != nil)
+                    ClipboardChip(client: client)
+                        .frame(maxWidth: max(0, panel.width - 16), alignment: .trailing)
+                        .padding(8)
+                        .frame(width: panel.width, height: panel.height,
+                               alignment: corner == .topTrailing ? .topTrailing : .bottomTrailing)
+                        .position(x: panel.midX, y: panel.midY)
+                        .transition(.opacity)
+                }
                 // The tour: a sibling above the layouts, as the pairing overlay is, and under it: an
                 // outside link puts the tour aside until the overlay has closed.
                 if let run = tour, !overlayShown {
@@ -342,6 +356,10 @@ struct StreamScreen: View {
     /// Nothing open over the stream: the Settings panel (which has the callout), the drawer, the
     /// pairing overlay, the first-run tour (its dim and card; VoiceOver is on its card meanwhile).
     private var linkLineAllowed: Bool { !settingsOpen && !drawerOpen && !overlayShown && !tourOnScreen }
+
+    /// The clipboard's chip shows where the link's line may, and not over a thumbnail's lights or the
+    /// Aa ruler either (the Settings panel has its own Paste).
+    private var clipboardChipAllowed: Bool { linkLineAllowed && windowMenu == nil && !scaleOpen }
 
     /// Runs LinkLine on the report and what is open, says the line once a spell, and looks again at
     /// the linger's end.

@@ -198,6 +198,12 @@ struct ContentView: View {
 ///   three-finger gestures (the Settings panel's last group, This iPad) off for one run, in the
 ///   normal app too. The mock Mac takes gestures (`WindowList.gestures` 1) in every settings case
 ///   but `legacy`, whose group then says to update Sill on the Mac.
+/// * `-Sill.shareClipboard 0` — not a harness argument either: this device's Share Clipboard (the
+///   Settings panel's This iPad group) off for one run, in the normal app too. The mock Mac shares its
+///   clipboard (`WindowList.clipboard` 1) in every settings case but `legacy`, whose group then has no
+///   clipboard rows. `-SillClipboardChip 1` offers the clipboard's chip over the mock's stream (as
+///   after a copy on this device; it stays), and `-SillClipboardNote sent|long` shows a Paste's note in
+///   its place and under the group's Paste (docs/clipboard-plan.md).
 /// * `-SillVoiceOver 1` — the Settings panel acts as if VoiceOver were on: the This iPad group's
 ///   footnote says VoiceOver keeps three fingers and its rows do the gestures instead (they are
 ///   accessibility actions whether or not it is on).

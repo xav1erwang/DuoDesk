@@ -1,0 +1,213 @@
+import Foundation
+import UIKit
+import UniformTypeIdentifiers
+import StreamProtocol
+
+/// A moment's line after a Paste: "Sent to ‹Mac›’s clipboard…" or "Too long to send…", under the
+/// chip's place and the Settings group's Paste.
+struct ClipboardNote: Equatable {
+    var text: String
+    var spoken: String
+    var warning: Bool
+    /// When it came (systemUptime): two of the same words in a row are two notes.
+    var at: TimeInterval
+}
+
+// The clipboard, this device's side (kind 32; docs/clipboard-plan.md). ClipboardPolicy has the rules;
+// this reads and writes UIPasteboard and keeps the session's state.
+//
+// - The Mac's text: written with `.localOnly` (Universal Clipboard does not carry it back to the Mac)
+//   and a 10-minute expiration, while the switch is on; its change count becomes the handled one, so
+//   the chip never offers the Mac's own text back.
+// - This device's text: Sill never reads the clipboard by itself (iOS would ask "Allow Paste?"). It
+//   reads only `changeCount` and `hasStrings`, which never ask, to offer the chip; the text is read
+//   by the system's Paste control (UIPasteControl, SwiftUI's PasteButton) when the person taps it.
+// - The subscription: an empty kind 32 once the Mac's list says it takes the clipboard and the switch
+//   is on, again on a move's new connection; `stop` when the switch goes off.
+//
+// Everything here is main thread.
+extension StreamClient {
+    /// This device's switch, Share Clipboard (the Settings panel's This iPad group): on unless turned
+    /// off. The device's own preference, never sent; read at each decision.
+    static let clipboardKey = "Sill.shareClipboard"
+    static var clipboardOn: Bool {
+        // `bool(forKey:)`, not `as? Bool`: a launch argument's "0" is a string, which it reads as
+        // @AppStorage does, so the switch and the panel always agree.
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: clipboardKey) == nil || defaults.bool(forKey: clipboardKey)
+    }
+
+    /// The clipboard's change count Sill last handled (sent, written from the Mac, the chip dismissed
+    /// or timed out), kept across launches so a relaunch does not offer old text again.
+    static let clipboardHandledKey = "Sill.clipboardHandled"
+    var clipboardHandled: Int? {
+        get { UserDefaults.standard.object(forKey: Self.clipboardHandledKey) as? Int }
+        set { UserDefaults.standard.set(newValue, forKey: Self.clipboardHandledKey) }
+    }
+
+    private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    /// Sill becoming active (and a scene of it) is when the chip looks. From init.
+    func observeClipboardActivation() {
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.clipboardBecameActive()
+            }
+        }
+    }
+
+    // MARK: The subscription
+
+    /// Each window list's `clipboard`: the subscription follows it, and a session that starts soon
+    /// after Sill became active gets the chip's look then.
+    func hostClipboardChanged(_ value: Int?) {
+        let took = ClipboardPolicy.hostTakes(hostClipboard)
+        if hostClipboard != value { hostClipboard = value }
+        updateClipboardSubscription()
+        let takes = ClipboardPolicy.hostTakes(value)
+        if !takes { hideClipboardChip() }
+        if !took, takes, ClipboardPolicy.looksAtSessionStart(activatedAt: clipboardActivatedAt, now: uptime) {
+            lookAtClipboard(why: "the session started")
+        }
+    }
+
+    /// Subscribes or stops as ClipboardPolicy says for the Mac's word, the switch and this connection.
+    func updateClipboardSubscription() {
+        let step = ClipboardPolicy.deviceSubscription(hostClipboard: hostClipboard, switchOn: Self.clipboardOn,
+                                                      subscribed: clipboardSubscribed)
+        clipboardSubscribed = step.subscribed
+        switch step.send {
+        case .subscribe:
+            send(.clipboard, payload: ClipboardPolicy.subscription)
+            #if DEBUG
+            print("clipboard: subscribed")
+            #endif
+        case .stop:
+            send(.clipboard, payload: ClipboardPolicy.stopping)
+            #if DEBUG
+            print("clipboard: stopped")
+            #endif
+        case .none:
+            break
+        }
+    }
+
+    /// The Settings group's switch moved.
+    func clipboardSwitchChanged() {
+        updateClipboardSubscription()
+        if !Self.clipboardOn { hideClipboardChip() }
+    }
+
+    /// A move handed the session to its new connection (`finishMove`): the Mac keeps subscriptions per
+    /// connection, so the new one subscribes.
+    func clipboardMoved() {
+        clipboardSubscribed = false
+        updateClipboardSubscription()
+    }
+
+    /// The session ended: nothing of it is kept but the handled count.
+    func resetClipboard() {
+        hostClipboard = nil
+        clipboardSubscribed = false
+        clipboardSent = nil
+        hideClipboardChip()
+        clipboardNoteExpiry?.cancel()
+        clipboardNoteExpiry = nil
+        clipboardNote = nil
+    }
+
+    // MARK: The Mac's text
+
+    /// A kind 32 from the Mac.
+    func receiveClipboard(_ payload: Data) {
+        let board = UIPasteboard.general
+        guard let text = ClipboardPolicy.deviceWrites(payload, switchOn: Self.clipboardOn, hostClipboard: hostClipboard,
+                                                      lastSent: clipboardSent, changeCount: board.changeCount) else { return }
+        board.setItems([[UTType.utf8PlainText.identifier: text]],
+                       options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(ClipboardPolicy.deviceExpiry)])
+        clipboardHandled = board.changeCount
+        hideClipboardChip()
+        #if DEBUG
+        print("clipboard: wrote \(text.utf8.count) bytes from the Mac (change \(board.changeCount))")
+        #endif
+    }
+
+    // MARK: The chip
+
+    /// Sill became active: the chip looks now, or at the session's start soon after (`hostClipboardChanged`).
+    func clipboardBecameActive() {
+        clipboardActivatedAt = uptime
+        guard ClipboardPolicy.hostTakes(hostClipboard) else { return }
+        lookAtClipboard(why: "Sill became active")
+    }
+
+    /// Offers the chip when ClipboardPolicy says; reads only the change count and whether there is text.
+    func lookAtClipboard(why: String) {
+        #if DEBUG
+        // The harness's mock Mac: the chip only by `-SillClipboardChip 1`, whatever the simulator's
+        // clipboard holds, so its photos never depend on it.
+        if mockDiscovery { return }
+        #endif
+        let board = UIPasteboard.general
+        let count = board.changeCount
+        let offer = ClipboardPolicy.offersChip(connected: connected, hostClipboard: hostClipboard, switchOn: Self.clipboardOn,
+                                               hasStrings: board.hasStrings, changeCount: count, handled: clipboardHandled)
+        #if DEBUG
+        print("clipboard: \(why): change \(count), handled \(clipboardHandled.map(String.init) ?? "none"): \(offer ? "the chip" : "no chip")")
+        #endif
+        guard offer, !clipboardChip else { return }
+        clipboardChip = true
+        clipboardChipExpiry?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.dismissClipboardChip() }
+        clipboardChipExpiry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + ClipboardPolicy.chipLifetime, execute: work)
+    }
+
+    /// Dismiss, or its time was up: handled for this change count.
+    func dismissClipboardChip() {
+        guard clipboardChip else { return }
+        clipboardHandled = UIPasteboard.general.changeCount
+        hideClipboardChip()
+    }
+
+    func hideClipboardChip() {
+        clipboardChipExpiry?.cancel()
+        clipboardChipExpiry = nil
+        if clipboardChip { clipboardChip = false }
+    }
+
+    // MARK: Paste on the Mac
+
+    /// What the system's Paste control read on the person's tap (the chip's, or the Settings group's):
+    /// sent to the Mac, or "too long".
+    func sendClipboard(_ strings: [String]) {
+        let mac = macName.isEmpty ? "the Mac" : macName
+        switch ClipboardPolicy.deviceSends(strings, connected: connected, hostClipboard: hostClipboard, switchOn: Self.clipboardOn) {
+        case .send(let payload):
+            send(.clipboard, payload: payload)
+            let count = UIPasteboard.general.changeCount
+            if let text = strings.first(where: { !$0.isEmpty }) { clipboardSent = ClipboardPolicy.Sent(text: text, changeCount: count) }
+            clipboardHandled = count
+            hideClipboardChip()
+            showClipboardNote(ClipboardPolicy.Copy.sent(mac: mac), spoken: ClipboardPolicy.Copy.sentSpoken(mac: mac), warning: false)
+            if UIDevice.current.userInterfaceIdiom == .phone { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+            #if DEBUG
+            print("clipboard: sent \(payload.count) bytes of JSON to the Mac (change \(count))")
+            #endif
+        case .tooLong:
+            showClipboardNote(ClipboardPolicy.Copy.tooLong(mac: mac), spoken: ClipboardPolicy.Copy.tooLong(mac: mac), warning: true)
+            if UIDevice.current.userInterfaceIdiom == .phone { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        case .nothing:
+            break
+        }
+    }
+
+    func showClipboardNote(_ text: String, spoken: String, warning: Bool) {
+        clipboardNote = ClipboardNote(text: text, spoken: spoken, warning: warning, at: uptime)
+        UIAccessibility.post(notification: .announcement, argument: spoken)
+        clipboardNoteExpiry?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.clipboardNote = nil }
+        clipboardNoteExpiry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + ClipboardPolicy.noteLifetime, execute: work)
+    }
+}

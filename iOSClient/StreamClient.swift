@@ -732,6 +732,24 @@ final class StreamClient: ObservableObject {
     /// six, nil from a Mac before 2026-09-27, which is sent none (`sendGesture`). Cleared with the
     /// session.
     @Published var hostGestures: Int?
+    /// The clipboard (kind 32, StreamClient+Clipboard, docs/clipboard-plan.md): what this session's
+    /// Mac takes and sends (`WindowList.clipboard`, 1 for text), nil from a Mac before it or with Share
+    /// clipboard with devices off. Cleared with the session.
+    @Published var hostClipboard: Int?
+    /// The chip "Paste on ‹Mac›" is offered (ClipboardPolicy.offersChip) until it is used, dismissed or
+    /// its time is up; the stream screen hides it while something is open over the stream.
+    @Published var clipboardChip = false
+    /// "Sent to ‹Mac›’s clipboard…" or "Too long to send…", for a moment after a Paste.
+    @Published var clipboardNote: ClipboardNote?
+    /// This connection sent its subscription and no stop since (ClipboardPolicy.deviceSubscription).
+    var clipboardSubscribed = false
+    /// When Sill last became active: a session that starts soon after gets the chip's look too.
+    var clipboardActivatedAt: TimeInterval?
+    /// What this device sent last, and its clipboard's change count right after: the Mac's echo of it
+    /// is not written again (ClipboardPolicy.deviceWrites).
+    var clipboardSent: ClipboardPolicy.Sent?
+    var clipboardChipExpiry: DispatchWorkItem?
+    var clipboardNoteExpiry: DispatchWorkItem?
     /// This device's path (status, interfaces, cost), for "did it leave home since the loss".
     var pathSignature = ""
     var pathMonitor: NWPathMonitor?
@@ -830,6 +848,8 @@ final class StreamClient: ObservableObject {
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             self?.resetLiveness()
         }
+        // The clipboard's chip looks when Sill becomes active (StreamClient+Clipboard).
+        observeClipboardActivation()
     }
 
     /// Starts the network browser (once). The nearby one follows the policy (`updateDiscovery`).
@@ -2129,6 +2149,8 @@ final class StreamClient: ObservableObject {
         // connection it came on, which the session no longer reads: the menus waiting settle, and
         // the new connection asks for the top level (the same Mac: its menus stay meanwhile).
         menusMoved()
+        // The Mac keeps the clipboard's subscription per connection: the new one subscribes too.
+        clipboardMoved()
         if fenced {
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.fenceTimeout) { [weak self] in
                 guard let self, let released = self.link.release(old) else { return }
@@ -2910,6 +2932,8 @@ final class StreamClient: ObservableObject {
         // Nor its menus: an open one says "Not connected.", the button goes, and the iPad's bar
         // loses the Mac's menus at its next rebuild.
         resetMenus()
+        // Nor the clipboard's subscription, its chip or its note.
+        resetClipboard()
     }
 
     // MARK: - Client → host
@@ -3367,6 +3391,8 @@ final class StreamClient: ObservableObject {
                 if self.hostVersion != list.hostVersion { self.hostVersion = list.hostVersion }
                 if self.hostProtocol != list.protocol { self.hostProtocol = list.protocol }
                 if self.hostGestures != list.gestures { self.hostGestures = list.gestures }
+                // The clipboard: subscribe (or stop) as the Mac's word and this device's switch say.
+                self.hostClipboardChanged(list.clipboard)
                 if !self.sessionListed {
                     self.sessionListed = true
                     #if DEBUG
@@ -3492,6 +3518,14 @@ final class StreamClient: ObservableObject {
             DispatchQueue.main.async {
                 guard self.connection === from else { return }
                 self.goodbye = goodbye
+            }
+        case .clipboard:
+            // Text copied on the Mac (StreamClient+Clipboard): written to this device's clipboard while
+            // its switch is on. Only from the current connection.
+            let from = connection
+            DispatchQueue.main.async {
+                guard self.connection === from else { return }
+                self.receiveClipboard(data)
             }
         case .macMenu:
             // The Mac's menus: a top level, or the answer to one of this connection's kind 27s or 25s
