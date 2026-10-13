@@ -123,7 +123,7 @@ the first runs: its top at the top of the visible frame). `show` lays the window
   toolbar and pane, as `cacheDisplay` draws them) to `<dir>/settings-<s>s-<tab>.png`.
 
 Sill.app itself ignores all three with one line each, as it does every `-Sill…After` hook
-(`DebugHooks.timedHooks`, `AppModel.bundled`).
+(`DebugHooks.timedHooks` and `windowHooks`, under `AppModel.bundled`).
 
 ## Open questions, with the default taken
 
