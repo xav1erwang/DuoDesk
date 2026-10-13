@@ -39,13 +39,26 @@ nothing on the iOS side, the CLI untouched.
   <tab>|close|report|end|height=<points>; …'` (opens Settings as the menu does and prints the window's
   frame, the pane's whole height and how much shows), `-SillTestScreenHeight <points>`,
   `-SillSettingsShot <dir>` (docs/DEVELOPMENT.md).
-- Verified: see the PR and the plan's Results (filled in below once every run is in).
-- **Untested, for Noah:** the plan's U1 to U6: on the 14-inch MacBook with Sill.app built from
-  this branch, at each scaling with larger text and the Dock showing, every tab fits and Remote
-  Access (Remote Access and "Allow connections from the internet" on) scrolls to its last row;
-  changing the scaling, the Dock or the display with Settings open; dragging Settings to a smaller
-  external display and back; a click held on a toolbar tab; VoiceOver in a capped pane; macOS 14
-  and 15.
+- Verified (the plan's Results; this Mac, a 14-inch at its default scaling, 949 pt under the menu
+  bar; the bare binary on `--synthetic` on loopback, only while no device was connected, Sill.app
+  untouched): `swift build -c release` clean from `git archive`, only the CaptureProbe warning;
+  `run-all.sh`, all 41; the previews (130 files) identical to 985a733's; every tab at its natural
+  height (limit 845) but Remote Access with the internet switch on (909: shows 845, scrolls, 12 pt
+  from both edges); `-SillTestScreenHeight 700`: General (727) and Remote Access (909) capped at 596
+  and scrolling; the screen changing under the tall pane (`height=`, the notification's path): 845,
+  596, 396, 845, the window shrinking and growing; a pane growing past the cap, and a tab switch to
+  it, with the window low: moved up to 12 pt over the bottom; rosstex's 951 pt saved frame restored
+  capped at 925; General and Streaming scrolled to their ends inside a 600 pt screen (231 and 72
+  pt); Sill.app's ignore lines, from the binary in a scratch bundle under `sandbox-exec` with binds
+  denied. Photos without personal details in `~/Downloads/sill-handoff/settings-window/`.
+- **Untested, for Noah** (the plan's U1 to U6, with Sill.app from this branch on the 14-inch): at
+  the scaling at the far left with the Dock showing, every tab fits between the menu bar and the
+  Dock, General scrolls to Quit Sill and Remote Access (Remote Access and "Allow connections from
+  the internet" on) to Sleep; with Settings open, change the scaling and the Dock's size and
+  hiding: it follows each time (note a Dock change that shows only at the next tab click); drag it
+  to a smaller external display and let go low: it moves up once the button is up, and grows back
+  on the larger one; a held click on a tab never moves it; VoiceOver reaches Quit Sill in a capped
+  General; macOS 14 or 15 if at hand.
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
