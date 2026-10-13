@@ -109,6 +109,11 @@ for m in P.markerTypes {
     let first = Reads()
     check(decide([m] + plain, reads: first) == .skip(.marked) && first.text == 0, "\(m) first among the types too")
 }
+check(P.remoteClipboardType == "com.apple.is-remote-clipboard", "Universal Clipboard's type")
+r = Reads()
+check(decide(plain + [P.remoteClipboardType], reads: r) == .skip(.remote) && r.text == 0 && r.marker == 0,
+      "from another device through Universal Clipboard: not sent, never read (it would be fetched from that device)")
+check(decide(plain + [P.remoteClipboardType, P.concealedType]) == .skip(.marked), "a password from another device: marked first")
 r = Reads()
 check(decide(plain + [P.ownType], marker: "L1", reads: r) == .skip(.own) && r.marker == 1 && r.text == 0, "its marker naming this launch: its own, the text never read")
 check(decide(plain + [P.ownType], marker: "L0") == .send(P.payload(text: "x")!), "another launch's marker (another host on this Mac): a copy like any other")
@@ -325,9 +330,9 @@ for run in 0..<2_000 {
             board = (plain, t, nil)
             for d in subscribed { expected[d].append(t) }
             look()
-        case 3:   // a password manager's copy
+        case 3:   // a password manager's copy, or one from another device through Universal Clipboard
             count += 1
-            board = (plain + [P.markerTypes.randomElement(using: &rng)!], "secret \(step)", nil)
+            board = (plain + [(P.markerTypes + [P.remoteClipboardType]).randomElement(using: &rng)!], "secret \(step)", nil)
             look()
         case 4:   // a device sends text: the Mac's clipboard is set (marked as the host's own), the others told
             let d = Int.random(in: 0..<devices, using: &rng)

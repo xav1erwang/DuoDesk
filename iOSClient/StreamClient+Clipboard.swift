@@ -136,6 +136,8 @@ extension StreamClient {
 
     /// Sill became active: the chip looks now, or at the session's start soon after (`hostClipboardChanged`).
     func clipboardBecameActive() {
+        // The app's and its scene's notifications come together: one look.
+        if let last = clipboardActivatedAt, uptime - last < 0.5 { return }
         clipboardActivatedAt = uptime
         guard ClipboardPolicy.hostTakes(hostClipboard) else { return }
         lookAtClipboard(why: "Sill became active")
