@@ -30,7 +30,7 @@ check(TourPolicy.targets(.bar, L) == [.strip, .textSize, .keyboard], "landscape 
 check(TourPolicy.targets(.bar, P) == [.strip, .textSize], "portrait bar: the strip and Aa (the keyboard is a cap)")
 check(TourPolicy.targets(.settings, L) == [.settings] && TourPolicy.targets(.settings, P) == [.settings], "settings lights its button")
 check(TourPolicy.targets(.laptop, P) == [.keys, .trackpad], "laptop: the keys, then the trackpad")
-check(TourTarget.allCases.count == 7, "seven targets")
+check(TourTarget.allCases.count == 8 && TourTarget.allCases.contains(.apps), "eight targets, Apps among them")
 // A phone held upright (PhonePortraitLayout): the halves' four steps; its Keyboard button is in
 // row 1, over the thumbnails, so `bar` lights it, as sideways.
 check(TourPolicy.steps(F, voiceOver: false) == [.touch, .bar, .settings, .laptop] && TourPolicy.steps(F, voiceOver: true) == [.bar, .settings, .laptop],
@@ -39,6 +39,14 @@ check(TourPolicy.only(F) == [.laptop] && F.upright && P.upright && !L.upright, "
 check(TourPolicy.targets(.bar, F) == [.strip, .textSize, .keyboard], "a phone's bar: the strip, Aa and row 1's Keyboard")
 check(TourPolicy.targets(.touch, F) == [.stream] && TourPolicy.targets(.settings, F) == [.settings] && TourPolicy.targets(.laptop, F) == [.keys, .trackpad],
       "a phone's other targets")
+// A phone with Larger Picture (docs/larger-picture-plan.md): no thumbnails, so the bar card lights
+// Apps, Aa and Keyboard in row 1; every other step, and every other layout, as before.
+check(TourPolicy.targets(.bar, F, thumbnails: false) == [.apps, .textSize, .keyboard], "Larger Picture: the bar card lights Apps, Aa and Keyboard")
+check(TourPolicy.targets(.bar, F, thumbnails: true) == TourPolicy.targets(.bar, F), "the thumbnails shown is the default")
+check([TourTopic.touch, .settings, .laptop].allSatisfy { TourPolicy.targets($0, F, thumbnails: false) == TourPolicy.targets($0, F) },
+      "Larger Picture: the other steps light what they did")
+check([L, P].allSatisfy { layout in all.allSatisfy { TourPolicy.targets($0, layout, thumbnails: false) == TourPolicy.targets($0, layout) } },
+      "no thumbnails changes nothing sideways or in the halves")
 
 // MARK: - Memory and what is owed
 
@@ -268,8 +276,11 @@ struct Screen {
     let layout: TourLayout
     let stream: CGRect
     let targets: [TourTarget: CGRect]
+    /// Larger Picture: the picture's room, and no thumbnails.
+    var room: CGRect? = nil
+    var thumbnails = true
     func union(_ topic: TourTopic) -> CGRect? {
-        let rects = TourPolicy.targets(topic, layout).compactMap { targets[$0] }
+        let rects = TourPolicy.targets(topic, layout, thumbnails: thumbnails).compactMap { targets[$0] }
         guard let first = rects.first else { return nil }
         return rects.dropFirst().reduce(first) { $0.union($1) }
     }
@@ -351,6 +362,31 @@ check(proMax.stream == CGRect(x: 8, y: 8, width: 424, height: 265) && proMax.tar
       && proMax.targets[.trackpad]! == CGRect(x: 14, y: 489, width: 412, height: 389), "the 18 Pro Max's rows: \(proMax.targets)")
 check(seTall.stream.height == 224 && seTall.targets[.settings]!.minY == 256 && seTall.targets[.keys]!.minY == 394, "the SE's rows")
 
+/// A phone held upright with Larger Picture: PhonePortraitLayout's rects above a keyboard this tall,
+/// the picture's frame for a picture of `video`'s shape (PortraitStreamScreen places the pane there,
+/// and it reports itself as the stream), the room it sits in, row 1's Apps, Aa and Keyboard (beside the
+/// Mac's Menus button, six to the row, or five), Settings, the caps and the trackpad; no strip.
+func largerModel(_ w: CGFloat, _ h: CGFloat, keyboard: CGFloat, video: CGSize = .zero, menus: Bool = true) -> Screen {
+    let l = PhonePortraitLayout(size: CGSize(width: w, height: h), keyboard: keyboard)
+    let row = menus ? l.buttonsBesideMenus : l.buttons
+    let pane = l.pane(video: video)
+    return Screen(size: l.size, layout: F, stream: pane, targets: [
+        .stream: pane,
+        .apps: row[PhonePortraitLayout.Button.apps.rawValue],
+        .textSize: row[PhonePortraitLayout.Button.textSize.rawValue],
+        .keyboard: row[PhonePortraitLayout.Button.keyboard.rawValue],
+        .settings: row[PhonePortraitLayout.Button.settings.rawValue],
+        .keys: l.keys, .trackpad: l.trackpad], room: l.picture, thumbnails: false)
+}
+let macBook = CGSize(width: 3024, height: 1964)
+let largerDesktop = largerModel(440, 894, keyboard: 320, video: macBook), largerFitted = largerModel(440, 894, keyboard: 320, video: CGSize(width: 848, height: 844))
+let largerSE = largerModel(375, 647, keyboard: 216, video: macBook), largerFive = largerModel(440, 894, keyboard: 320, video: macBook, menus: false)
+check(largerDesktop.stream == CGRect(x: 8, y: 8, width: 424, height: 275) && largerDesktop.room == CGRect(x: 8, y: 8, width: 424, height: 422)
+      && largerDesktop.union(.bar)! == CGRect(x: 14, y: 454, width: 272, height: 50) && largerDesktop.targets[.keys]!.minY == 520
+      && largerDesktop.targets[.trackpad]! == CGRect(x: 14, y: 574, width: 412, height: 304), "the 18 Pro Max with Larger Picture and the Desktop: \(largerDesktop.targets)")
+check(largerFitted.stream == largerFitted.room!, "a window fitted to the room: the picture is the room")
+check(largerFive.union(.bar)! == CGRect(x: 14, y: 454, width: 244, height: 50), "before the Mac's menus come: Apps, Aa and Keyboard of five")
+
 // MARK: - Where the card goes: an oracle from the plan's words
 
 /// §6.3 in its own words, to hold `place` to them.
@@ -358,7 +394,7 @@ func oracle(_ s: Screen, _ topic: TourTopic, height h: CGFloat, width w: CGFloat
     let top: CGFloat = 16, bottom = s.size.height - 16 - inset
     let crease: CGFloat? = topHalf(s.size) ? (s.size.height / 2).rounded() : nil
     func centred(_ mid: CGFloat) -> CGFloat { max(16, min(mid - w / 2, s.size.width - 16 - w)) }
-    let halfBottom = min(s.stream.maxY - 12, (crease ?? 10_000) - 16)
+    let halfBottom = min((s.room ?? s.stream).maxY - 12, (crease ?? 10_000) - 16)
     if topic == .touch {
         let lowest = s.layout == L ? bottom : halfBottom
         if h <= lowest - top { return TourPlacement(card: CGRect(x: centred(s.stream.midX), y: max(top, min(s.stream.midY - h / 2, lowest - h)), width: w, height: h), tail: nil) }
@@ -408,7 +444,7 @@ func oracle(_ s: Screen, _ topic: TourTopic, height h: CGFloat, width w: CGFloat
 }
 func place(_ s: Screen, _ topic: TourTopic, height h: CGFloat, width w: CGFloat, inset: CGFloat = 0) -> TourPlacement {
     TourPolicy.place(card: CGSize(width: w, height: h), targets: s.union(topic), isStream: topic == .touch, screen: s.size,
-                     layout: s.layout, stream: s.stream, bottomInset: inset)
+                     layout: s.layout, stream: s.stream, room: s.room, bottomInset: inset)
 }
 func pinned(_ s: Screen, _ topic: TourTopic, _ h: CGFloat, _ expected: CGRect, tail: TourTail?, covers: Bool = false, line: Int = #line) {
     let w = TourPolicy.width(screen: s.size, layout: s.layout, accessibilityText: false)
@@ -486,6 +522,24 @@ check(TourPolicy.place(card: CGSize(width: 360, height: 300), targets: CGRect(x:
                        screen: CGSize(width: 500, height: 900), layout: F, stream: CGRect(x: 8, y: 8, width: 484, height: 100), bottomInset: 0)
       == TourPlacement(card: CGRect(x: 70, y: 212, width: 360, height: 300), tail: TourTail(edge: .up, x: 250)), "a phone there: under its targets")
 pinned(duoPhone, .bar, 273, CGRect(x: 70, y: 25, width: 360, height: 273), tail: TourTail(edge: .down, x: 250))
+// Larger Picture on the 18 Pro Max (the room 424×422 from 8): the picture's card centred on the
+// picture itself, the Desktop's 424×275, and free to grow into the room under it; every other card
+// against the room, so the bar's and Settings' stand in the black under a short picture with their
+// tails at row 1 (from 418, 36 pt over it); the laptop card too (its keys 102 pt under it: no tail).
+pinned(largerDesktop, .touch, 230, CGRect(x: 40, y: 30.5, width: 360, height: 230), tail: nil)
+pinned(largerDesktop, .touch, 380, CGRect(x: 40, y: 16, width: 360, height: 380), tail: nil)
+pinned(largerDesktop, .bar, 230, CGRect(x: 16, y: 188, width: 360, height: 230), tail: TourTail(edge: .down, x: 150))
+pinned(largerDesktop, .settings, 200, CGRect(x: 64, y: 218, width: 360, height: 200), tail: TourTail(edge: .down, x: 395))
+pinned(largerDesktop, .laptop, 290, CGRect(x: 40, y: 128, width: 360, height: 290), tail: nil)
+pinned(largerFitted, .bar, 230, CGRect(x: 16, y: 188, width: 360, height: 230), tail: TourTail(edge: .down, x: 150))
+pinned(largerFitted, .touch, 230, CGRect(x: 40, y: 104, width: 360, height: 230), tail: nil)
+// Without the room, the same cards stay in the short picture with no tail at row 1, 183 pt below.
+check(TourPolicy.place(card: CGSize(width: 360, height: 230), targets: largerDesktop.union(.bar), isStream: false, screen: largerDesktop.size, layout: F,
+                       stream: largerDesktop.stream, bottomInset: 0) == TourPlacement(card: CGRect(x: 16, y: 41, width: 360, height: 230), tail: nil),
+      "without the room: in the short picture, no tail")
+// The SE with Larger Picture (the room 359×279): the bar card in the room, its tail at row 1 (311).
+pinned(largerSE, .bar, 230, CGRect(x: 16, y: 45, width: 343, height: 230), tail: TourTail(edge: .down, x: largerSE.union(.bar)!.midX))
+check(abs(largerSE.union(.bar)!.midX - 385.0 / 3) < 0.001, "the SE's bar targets: Apps to Keyboard of six, centred at 128.3")
 pinned(duoPhone, .bar, 320, CGRect(x: 70, y: 16, width: 360, height: 306), tail: TourTail(edge: .down, x: 250))
 // A window too small for a card beside its targets (under 200 pt of room): only then over them, with
 // no tail, and the dim then has no cutout or ring (coversTargets).
@@ -520,7 +574,16 @@ var gridScreens: [Screen] = []
 for w0 in widths {
     for h0 in heights {
         gridScreens.append(model(w0, h0))
-        if h0 > w0 && w0 < 600 { gridScreens.append(phoneModel(w0, h0)) }
+        if h0 > w0 && w0 < 600 {
+            gridScreens.append(phoneModel(w0, h0))
+            // Larger Picture, where the room over the keyboard is 120 pt or more (every phone's is 180
+            // or more: the SE with Display Zoom's).
+            for keyboard: CGFloat in [216, 301, 320] where h0 - keyboard - 152 >= 120 {
+                let fitted = PhonePortraitLayout(size: CGSize(width: w0, height: h0), keyboard: keyboard).picture.size
+                gridScreens.append(largerModel(w0, h0, keyboard: keyboard, video: macBook))
+                gridScreens.append(largerModel(w0, h0, keyboard: keyboard, video: CGSize(width: fitted.width * 2, height: fitted.height * 2), menus: false))
+            }
+        }
     }
 }
 for s in gridScreens {
@@ -575,7 +638,7 @@ for s in gridScreens {
                         if !holds && (c.maxY != bottom || p.tail != nil) { check(false, "\(label): grew wrongly to \(c)"); continue }
                     }
                     if topic != .touch && s.layout != L {
-                        let halfBottom = min(s.stream.maxY - 12, (crease ?? 10_000) - 16)
+                        let halfBottom = min((s.room ?? s.stream).maxY - 12, (crease ?? 10_000) - 16)
                         let roomAbove = min(bottom, max(16, t.minY - 12)) - 16
                         // A phone's card 12 pt under its targets, its tail up: only when it did not
                         // fit above them, and it fits under them or has the larger room there.
@@ -763,8 +826,8 @@ check(duoGrid == 2592, "the Duo's grid: \(duoGrid) placements")
 // MARK: - The words
 
 func words(_ t: TourTopic, _ layout: TourLayout, mac: String = "Mac mini", device: String = "iPad", voiceOver: Bool = false,
-           first: Bool = false, onItsSide: Bool = false) -> TourCopy {
-    TourPolicy.copy(t, layout, mac: mac, device: device, voiceOver: voiceOver, firstOfRun: first, keysOnItsSide: onItsSide)
+           first: Bool = false, onItsSide: Bool = false, thumbnails: Bool = true) -> TourCopy {
+    TourPolicy.copy(t, layout, mac: mac, device: device, voiceOver: voiceOver, firstOfRun: first, keysOnItsSide: onItsSide, thumbnails: thumbnails)
 }
 func texts(_ c: TourCopy) -> [String] { c.rows.map(\.text) }
 let touchPad = words(.touch, L, first: true)
@@ -834,6 +897,29 @@ check(laptopPhone.hint == "Under the windows: the row of keys, then the trackpad
       "a phone's laptop hint and subtitle")
 check(words(.laptop, F, device: "iPhone", voiceOver: true, first: true).rows.map(\.spoken)
       == ["Command, Option, Control and Shift stay on for the next key: Command, then C, copies."], "a phone's laptop card under VoiceOver")
+// A phone with Larger Picture: no thumbnails, so the bar card's first row is about Apps, its hint
+// names row 1's buttons, and the laptop card's hint says the keys are under the buttons; the rest
+// as with the thumbnails.
+let barLarger = words(.bar, F, device: "iPhone", thumbnails: false)
+check(texts(barLarger) == ["Apps lists the apps on Mac mini: tap an open one again for its next window.",
+                           "Aa: touch it and slide to make a window’s text larger or smaller.",
+                           "Keyboard types on Mac mini, on screen or with a hardware keyboard."], "Larger Picture's bar card: \(texts(barLarger))")
+check(barLarger.rows[0].symbol == "magnifyingglass" && barLarger.rows[0].spans.first == TourSpan(text: "Apps", strong: true)
+      && barLarger.title == "Windows and Text Size" && barLarger.subtitle == nil, "Apps' row: the button's symbol and name")
+check(barLarger.hint == "Under the picture, in the row of buttons: Apps, Aa and Keyboard.", "Larger Picture's bar hint")
+check(texts(words(.bar, F, device: "iPhone", voiceOver: true, thumbnails: false))
+      == ["Apps lists the apps on Mac mini. Choose an open one again for its next window.",
+          "Text size makes a window’s text on Mac mini larger or smaller. Swipe up or down on it.",
+          "Keyboard types on Mac mini, on screen or with a hardware keyboard."], "Larger Picture's bar card under VoiceOver")
+check(words(.laptop, F, device: "iPhone", first: true, thumbnails: false).hint == "Under the buttons: the row of keys, then the trackpad."
+      && texts(words(.laptop, F, device: "iPhone", first: true, thumbnails: false)) == texts(laptopPhone),
+      "Larger Picture's laptop card: the keys under the buttons, its rows as before")
+check([TourTopic.touch, .settings].allSatisfy { words($0, F, device: "iPhone", thumbnails: false) == words($0, F, device: "iPhone") },
+      "Larger Picture's other cards as before")
+check(texts(words(.bar, F, mac: "Studio", device: "iPhone", thumbnails: false)).first == "Apps lists the apps on Studio: tap an open one again for its next window.",
+      "the Mac's name in Apps' row")
+check([L, P].allSatisfy { layout in all.allSatisfy { words($0, layout, thumbnails: false) == words($0, layout) } },
+      "no thumbnails changes no words sideways or in the halves")
 // Under VoiceOver: no touch card, no trackpad rows, and no gesture VoiceOver cannot make.
 let barVO = words(.bar, L, voiceOver: true)
 check(texts(barVO) == ["Each window has actions: close, minimize, full screen, and move left or right. Swipe up or down to hear them.",
@@ -845,10 +931,12 @@ check(laptopVO.rows.count == 2 && laptopVO.rows[0].spoken == "Command, Option, C
 for layout in [L, P, F] {
     for step in TourPolicy.steps(layout, voiceOver: true) {
         for device in ["iPad", "iPhone"] {
-            for row in words(step, layout, device: device, voiceOver: true, first: true).rows {
-                let spoken = row.spoken.lowercased()
-                check(!spoken.contains("tap") && !spoken.contains("touch and hold") && !spoken.contains("slide") && !spoken.contains("drag"),
-                      "a gesture in a VoiceOver row (\(step), \(layout)): \(row.spoken)")
+            for thumbnails in [true, false] {
+                for row in words(step, layout, device: device, voiceOver: true, first: true, thumbnails: thumbnails).rows {
+                    let spoken = row.spoken.lowercased()
+                    check(!spoken.contains("tap") && !spoken.contains("touch and hold") && !spoken.contains("slide") && !spoken.contains("drag"),
+                          "a gesture in a VoiceOver row (\(step), \(layout), thumbnails \(thumbnails)): \(row.spoken)")
+                }
             }
         }
     }
@@ -856,7 +944,7 @@ for layout in [L, P, F] {
 // Every row is read whole, never its symbol's name.
 for layout in [L, P, F] {
     for step in TourPolicy.steps(layout, voiceOver: false) {
-        for row in words(step, layout, first: true).rows {
+        for row in words(step, layout, first: true).rows + words(step, layout, first: true, thumbnails: false).rows {
             // Read as its words (the key row's caps by name), never with the symbol's name before them.
             check(!row.spoken.isEmpty && !row.spoken.hasPrefix(row.symbol) && !(row.symbol.contains(".") && row.spoken.contains(row.symbol))
                   && (row.spoken == row.text || row.symbol == "command") && row.spoken.hasSuffix("."), "\(step): a row read whole: \(row.spoken)")
