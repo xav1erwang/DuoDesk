@@ -349,5 +349,250 @@ do {
 }
 check("the size is all it depends on", L(size: pro.container) == L(size: pro.container) && L(size: pro.container) != L(size: proMax.container))
 
+// MARK: - Larger Picture (docs/larger-picture-plan.md)
+//
+// With the switch on and the keyboard's height known, the thumbnails' row goes and the picture's
+// room is every point that keeps the key row 10 pt above the software keyboard: the container less
+// the keyboard less 152 pt; the trackpad is the keyboard's footprint; row 1 gets the Menus button
+// after Apps while the Mac sent menus; the frame takes the picture's own shape inside the room, from
+// its top; the trackpad's span follows that shape.
+
+// Today's arrangement is what it was: no keyboard is the default, and nothing of the switch shows in it.
+for p in [proMax, pro, fifteenPro, seventeenE, mini, se, duoOuter, duoCover] {
+    let l = L(size: p.container)
+    let videos = [CGSize.zero, CGSize(width: 3024, height: 1964), CGSize(width: 848, height: 844), CGSize(width: 1000, height: 2000)]
+    check("\(p.name): without the switch the layout is today's (no keyboard), its frame the picture whatever the video, its span the width ÷ 1.6, row 1 the same beside the Mac's menus",
+          l == L(size: p.container, keyboard: nil) && l.keyboard == nil && !l.largerPicture
+            && videos.allSatisfy { l.pane(video: $0) == l.picture && l.trackpadSpan(video: $0) == l.trackpadSpan }
+            && l.buttonsBesideMenus == l.buttons && l.rulerBesideMenus == l.ruler && l.rulerStepBesideMenus == l.rulerStep
+            && l.strip.height == 62)
+}
+
+// The keyboard's height: an estimate from the stream screen's shape and width (216 with a Home
+// button, under 1.9 times as tall as wide; 301 with Face ID; 320 from 428 pt wide).
+struct Estimate { let name: String; let container: CGSize; let keyboard: CGFloat }
+let estimates: [Estimate] = [
+    Estimate(name: "18 Pro Max", container: proMax.container, keyboard: 320),
+    Estimate(name: "15 Pro Max, 16 Plus (430×932, inset 59)", container: CGSize(width: 430, height: 873), keyboard: 320),
+    Estimate(name: "14 Plus (428×926, inset 47)", container: CGSize(width: 428, height: 879), keyboard: 320),
+    Estimate(name: "Air (420×912, inset 62)", container: CGSize(width: 420, height: 850), keyboard: 301),
+    Estimate(name: "18 Pro", container: pro.container, keyboard: 301),
+    Estimate(name: "15 Pro", container: fifteenPro.container, keyboard: 301),
+    Estimate(name: "17e", container: seventeenE.container, keyboard: 301),
+    Estimate(name: "13 mini", container: mini.container, keyboard: 301),
+    Estimate(name: "SE", container: se.container, keyboard: 216),
+    Estimate(name: "SE with Display Zoom (320×568, inset 20)", container: CGSize(width: 320, height: 548), keyboard: 216),
+    Estimate(name: "a Face ID phone with Display Zoom (320×693, inset 48)", container: CGSize(width: 320, height: 645), keyboard: 301),
+    Estimate(name: "a Pro Max with Display Zoom (375×812, inset 50)", container: CGSize(width: 375, height: 762), keyboard: 301),
+    Estimate(name: "the Duo's cover (382×678, no top inset)", container: duoCover.container, keyboard: 216),
+]
+for e in estimates {
+    check("the keyboard estimated on the \(e.name), \(Int(e.container.width))×\(Int(e.container.height)): \(Int(e.keyboard)) pt (\(L.keyboardHeight(for: e.container)))",
+          L.keyboardHeight(for: e.container) == e.keyboard)
+}
+check("the estimate's edges: 1.9 times as tall reads Face ID, a hair less a Home button; 428 pt wide is the wide keyboard, 427 not; no width a Home button",
+      L.keyboardHeight(for: CGSize(width: 400, height: 760)) == 301 && L.keyboardHeight(for: CGSize(width: 400, height: 759.9)) == 216
+        && L.keyboardHeight(for: CGSize(width: 428, height: 900)) == 320 && L.keyboardHeight(for: CGSize(width: 427, height: 900)) == 301
+        && L.keyboardHeight(for: .zero) == 216)
+check("the switch off: no keyboard (today's arrangement), on a phone or a Duo",
+      L.keyboard(for: proMax.container, largerPicture: false, foldable: false) == nil
+        && L.keyboard(for: proMax.container, largerPicture: false, foldable: true) == nil)
+check("the switch on, the iPhone Duo (a hinge): no keyboard, the cover left as it is",
+      L.keyboard(for: duoCover.container, largerPicture: true, foldable: true) == nil
+        && L.keyboard(for: proMax.container, largerPicture: true, foldable: true) == nil)
+check("the switch on, a phone without a hinge: its estimate",
+      estimates.allSatisfy { L.keyboard(for: $0.container, largerPicture: true, foldable: false) == $0.keyboard })
+
+// The plan's table, phone by phone: the room (and today's picture), row 1, the key row, the trackpad
+// (its top the keyboard's), the panels' room, the Desktop's frame (a 14-inch MacBook Pro, 3024×1964).
+struct Larger {
+    let phone: Phone
+    let room: CGSize, today: CGFloat
+    let row1: (CGFloat, CGFloat), keys: (CGFloat, CGFloat)
+    let trackpad: CGSize, padTop: CGFloat, panelRoom: CGFloat
+    let desktop: CGSize
+}
+let fifteenProMax = Phone(name: "iPhone 15 Pro Max (and 16 Plus)", screen: CGSize(width: 430, height: 932), inset: 59, keyboard: 320)
+let air = Phone(name: "iPhone Air", screen: CGSize(width: 420, height: 912), inset: 62, keyboard: 301)
+let seZoom = Phone(name: "iPhone SE with Display Zoom", screen: CGSize(width: 320, height: 568), inset: 20, keyboard: 216)
+let largerTable: [Larger] = [
+    Larger(phone: proMax, room: CGSize(width: 424, height: 422), today: 265, row1: (454, 504), keys: (520, 564),
+           trackpad: CGSize(width: 412, height: 304), padTop: 574, panelRoom: 366, desktop: CGSize(width: 424, height: 275)),
+    Larger(phone: fifteenProMax, room: CGSize(width: 414, height: 401), today: 258, row1: (433, 483), keys: (499, 543),
+           trackpad: CGSize(width: 402, height: 304), padTop: 553, panelRoom: 366, desktop: CGSize(width: 414, height: 268)),
+    Larger(phone: air, room: CGSize(width: 404, height: 397), today: 252, row1: (429, 479), keys: (495, 539),
+           trackpad: CGSize(width: 392, height: 285), padTop: 549, panelRoom: 347, desktop: CGSize(width: 404, height: 262)),
+    Larger(phone: pro, room: CGSize(width: 386, height: 359), today: 241, row1: (391, 441), keys: (457, 501),
+           trackpad: CGSize(width: 374, height: 285), padTop: 511, panelRoom: 347, desktop: CGSize(width: 386, height: 250)),
+    Larger(phone: fifteenPro, room: CGSize(width: 377, height: 340), today: 235, row1: (372, 422), keys: (438, 482),
+           trackpad: CGSize(width: 365, height: 285), padTop: 492, panelRoom: 347, desktop: CGSize(width: 377, height: 244)),
+    Larger(phone: seventeenE, room: CGSize(width: 374, height: 344), today: 233, row1: (376, 426), keys: (442, 486),
+           trackpad: CGSize(width: 362, height: 285), padTop: 496, panelRoom: 347, desktop: CGSize(width: 374, height: 242)),
+    Larger(phone: mini, room: CGSize(width: 359, height: 309), today: 224, row1: (341, 391), keys: (407, 451),
+           trackpad: CGSize(width: 347, height: 285), padTop: 461, panelRoom: 347, desktop: CGSize(width: 359, height: 233)),
+    Larger(phone: se, room: CGSize(width: 359, height: 279), today: 224, row1: (311, 361), keys: (377, 421),
+           trackpad: CGSize(width: 347, height: 200), padTop: 431, panelRoom: 262, desktop: CGSize(width: 359, height: 233)),
+    Larger(phone: seZoom, room: CGSize(width: 304, height: 180), today: 188, row1: (212, 262), keys: (278, 322),
+           trackpad: CGSize(width: 292, height: 200), padTop: 332, panelRoom: 262, desktop: CGSize(width: 277, height: 180)),
+]
+let macBookDesktop = CGSize(width: 3024, height: 1964)
+for row in largerTable {
+    let size = row.phone.container, k = row.phone.keyboard!
+    let l = L(size: size, keyboard: L.keyboard(for: size, largerPicture: true, foldable: false))
+    let n = "Larger Picture, \(row.phone.name) (\(Int(size.width))×\(Int(size.height)), keyboard \(Int(k)))"
+    check("\(n): the keyboard estimated as measured", l.keyboard == k && l.largerPicture)
+    check("\(n): the room \(Int(row.room.width))×\(Int(row.room.height)) at (8, 8), against today's \(Int(row.today)) pt",
+          l.picture == CGRect(x: 8, y: 8, width: row.room.width, height: row.room.height) && L(size: size).picture.height == row.today)
+    check("\(n): row 1 at \(Int(row.row1.0))–\(Int(row.row1.1)), 24 pt under the room",
+          l.row1 == CGRect(x: 14, y: row.row1.0, width: size.width - 28, height: 50) && l.row1.minY - l.picture.maxY == 24)
+    check("\(n): no thumbnails' row", l.strip.height == 0 && l.stripBesideMenus.height == 0)
+    check("\(n): the key row at \(Int(row.keys.0))–\(Int(row.keys.1)), 16 pt under row 1's buttons",
+          l.keys == CGRect(x: 14, y: row.keys.0, width: size.width - 28, height: 44) && l.keys.minY - l.row1.maxY == 16)
+    check("\(n): the key row 10 pt above the keyboard's top (\(Int(size.height - k)) in the stream screen, \(Int(row.phone.screen.height - k)) on the screen)",
+          size.height - k - l.keys.maxY == 10 && row.phone.screen.height - k - (row.phone.inset + l.keys.maxY) == 10)
+    check("\(n): the trackpad \(Int(row.trackpad.width))×\(Int(row.trackpad.height)) from \(Int(row.padTop)): the keyboard's footprint, 16 pt off the bottom",
+          l.trackpad == CGRect(x: 14, y: row.padTop, width: row.trackpad.width, height: row.trackpad.height)
+            && l.trackpad.minY == size.height - k && l.trackpad.maxY == size.height - 16)
+    check("\(n): the drawer and the panel get \(Int(row.panelRoom)) pt (the keyboard + 46), from 8 under row 1, across it",
+          l.drawer == CGRect(x: 14, y: row.row1.1 + 8, width: size.width - 28, height: row.panelRoom) && l.settings == l.drawer
+            && row.panelRoom == k + 46)
+    check("\(n): the Desktop's frame \(Int(row.desktop.width))×\(Int(row.desktop.height))",
+          l.pane(video: macBookDesktop).size == row.desktop)
+    check("\(n): the dim is above and below row 1's buttons",
+          l.dim == [CGRect(x: 0, y: 0, width: size.width, height: row.row1.0),
+                    CGRect(x: 0, y: row.row1.1, width: size.width, height: size.height - row.row1.1)])
+    check("\(n): the panel grows from its top-trailing corner",
+          near(l.settingsAnchor.x, (size.width - 14) / size.width) && near(l.settingsAnchor.y, (row.row1.1 + 8) / size.height))
+    check("\(n): with a candidate bar (44 pt more) row 1 is still clear of the keyboard (\(Int(size.height - k - 44 - l.row1.maxY)) pt)",
+          l.row1.maxY < size.height - k - 44)
+}
+check("Larger Picture is larger on every phone but the SE with Display Zoom, which keeps its key row above the keyboard instead (180 pt against 188)",
+      largerTable.allSatisfy { r in r.phone.name == seZoom.name ? r.room.height < r.today : r.room.height > r.today })
+check("the triage's numbers: the 15 Pro 377×235 → 377×340, the 18 Pro Max 424×265 → 424×422, the SE 359×224 → 359×279",
+      L(size: fifteenPro.container, keyboard: 301).picture.size == CGSize(width: 377, height: 340)
+        && L(size: proMax.container, keyboard: 320).picture.size == CGSize(width: 424, height: 422)
+        && L(size: se.container, keyboard: 216).picture.size == CGSize(width: 359, height: 279))
+check("the keyboard and the switch are inputs: another keyboard, another layout",
+      L(size: pro.container, keyboard: 301) != L(size: pro.container) && L(size: pro.container, keyboard: 301) != L(size: pro.container, keyboard: 320))
+
+// Row 1 beside the Mac's menus: six equal buttons, Menus after Apps (the landscape bar's order with
+// the strip gone); the ruler on that row's Aa, 36 a detent on every phone.
+do {
+    let l = L(size: proMax.container, keyboard: 320), six = (proMax.container.width - 68) / 6
+    let b = l.buttonsBesideMenus
+    check("Pro Max: six buttons of \(six) (62): Apps at 14, Menus at 84, Aa, Keyboard, Desktop, Settings to 426",
+          near(six, 62) && b.count == 5 && near(b[0], CGRect(x: 14, y: 454, width: 62, height: 50)) && near(l.menus, CGRect(x: 84, y: 454, width: 62, height: 50))
+            && near(b[1].minX, 154) && near(b[2].minX, 224) && near(b[3].minX, 294) && near(b[4].minX, 364) && near(b[4].maxX, 426))
+    check("Pro Max: the ruler on that Aa, 204 wide, 36 a detent", near(l.rulerStepBesideMenus, 36)
+          && near(l.rulerBesideMenus, CGRect(x: b[1].midX - 102, y: 454, width: 204, height: 50)))
+    let w320 = L(size: CGSize(width: 320, height: 548), keyboard: 216)
+    check("320 pt: six buttons of 42, the ruler still 36 a detent (Aa is third)",
+          w320.buttonsBesideMenus.allSatisfy { near($0.width, 42) } && near(w320.menus.width, 42) && near(w320.rulerStepBesideMenus, 36)
+            && near(w320.rulerStep, 28))
+}
+
+// The frame: the picture's own shape inside the room, from its top (the 18 Pro Max's room, 424×422).
+do {
+    let l = L(size: proMax.container, keyboard: 320)
+    check("before a frame: 16:10, 424×265 from the top", l.pane(video: .zero) == CGRect(x: 8, y: 8, width: 424, height: 265))
+    check("the test pattern (1512×949): 424×266", l.pane(video: CGSize(width: 1512, height: 949)) == CGRect(x: 8, y: 8, width: 424, height: 266))
+    check("a window the Mac fitted to the room (848×844 at 2x): the whole room",
+          l.pane(video: CGSize(width: 848, height: 844)) == l.picture && l.pane(video: CGSize(width: 1272, height: 1266)) == l.picture)
+    check("a picture within a hundredth of a point of the room fills it (424 × 84,399 ÷ 84,800 = 421.995)",
+          l.pane(video: CGSize(width: 84800, height: 84399)) == l.picture)
+    check("a wide window (21:9, 2560×1080): 424×178 from the top", l.pane(video: CGSize(width: 2560, height: 1080)) == CGRect(x: 8, y: 8, width: 424, height: 178))
+    check("a square window: as tall as the room, 422×422, centred across it", l.pane(video: CGSize(width: 1000, height: 1000)) == CGRect(x: 9, y: 8, width: 422, height: 422))
+    check("a window twice as tall as wide: 211×422, centred", l.pane(video: CGSize(width: 1000, height: 2000)) == CGRect(x: 114, y: 8, width: 211, height: 422))
+    check("the trackpad's span with a 16:10 picture is the width ÷ 1.6, as today", near(l.trackpadSpan(video: .zero), 412 / 1.6) && near(l.trackpadSpan, 412 / 1.6))
+    check("…with the window fitted to the room: 412 × 422 ÷ 424 (410.06), as far down as across",
+          near(l.trackpadSpan(video: CGSize(width: 848, height: 844)), 412.0 * 422 / 424))
+    check("…with a window twice as tall as wide: 824", near(l.trackpadSpan(video: CGSize(width: 1000, height: 2000)), 824))
+    check("…with the Desktop (424×275): 267.2", near(l.trackpadSpan(video: macBookDesktop), 412.0 * 275 / 424))
+}
+
+// Fractions and edges: the room in whole points, the trackpad from the keyboard's exact top; a keyboard
+// shorter than the least trackpad and its margin is taken as 136 pt; a screen too short leaves no room.
+do {
+    let half = L(size: pro.container, keyboard: 300.5)
+    check("a keyboard of 300.5: the room 359 (whole points), the trackpad from 511.5, the key row 10.5 above it",
+          half.picture.height == 359 && half.trackpad.minY == 511.5 && half.trackpad.minY - half.keys.maxY == 10.5)
+    let short = L(size: pro.container, keyboard: 100)
+    check("a keyboard of 100: the trackpad keeps 120 pt, the room 524", short.trackpad.height == 120 && short.picture.height == 812 - 136 - 152)
+    let tiny = L(size: CGSize(width: 400, height: 450), keyboard: 320)
+    check("a screen too short for the room (400×450 above a 320 pt keyboard): no picture, the rows from the top",
+          tiny.picture.height == 0 && tiny.row1.minY == 32 && tiny.keys.maxY == 142 && tiny.trackpad.minY == 152)
+}
+
+// Every width from 300 to 599, every height from the width + 1 to 1,400, each of the three keyboards,
+// where the room is not empty.
+let lInside = Rule("Larger Picture: everything inside the screen")
+let lOrdered = Rule("Larger Picture: the room, row 1, the key row, the trackpad top to bottom, no thumbnails' row")
+let lGaps = Rule("Larger Picture: 24 from the room to row 1's buttons, 16 from them to the key row, 10 to the keyboard, the trackpad from its top to 16 off the bottom")
+let lRoom = Rule("Larger Picture: the room at (8, 8), W − 16 wide, the height less the keyboard less 152")
+let lRow1 = Rule("Larger Picture: five equal buttons as today, and beside the Mac's menus six, Menus second, each (W − 68) ÷ 6, 8 apart, from 14 to W − 14")
+let lCaps = Rule("Larger Picture: six equal caps, 44 tall, 8 apart, from 14 to W − 14")
+let lRulers = Rule("Larger Picture: both rulers over row 1, centred on their Aa, inside the row, 36 a detent where they fit")
+let lPanels = Rule("Larger Picture: the drawer and the panel from 8 under row 1 to 16 off the bottom, across row 1; the anchor their corner; the dim all but row 1")
+let lFrames = Rule("Larger Picture: each frame inside the room, from its top, whole points, at the picture's shape (to a point), centred across when taller than the room; the span the pad's width × the frame's shape")
+let largerRules = [lInside, lOrdered, lGaps, lRoom, lRow1, lCaps, lRulers, lPanels, lFrames]
+let frameVideos = [CGSize.zero, CGSize(width: 3024, height: 1964), CGSize(width: 2560, height: 1080), CGSize(width: 1000, height: 1000),
+                   CGSize(width: 1000, height: 2000), CGSize(width: 1512, height: 949)]
+var largerSizes = 0
+for keyboard: CGFloat in [216, 301, 320] {
+    for w in 300...599 {
+        for h in (w + 1)...1400 {
+            let W = CGFloat(w), H = CGFloat(h)
+            guard H - keyboard - 152 > 0 else { continue }
+            let size = CGSize(width: w, height: h)
+            let l = L(size: size, keyboard: keyboard)
+            largerSizes += 1
+            let all = [l.picture, l.row1, l.keys, l.trackpad, l.ruler, l.rulerBesideMenus, l.menus, l.drawer, l.settings]
+                + l.buttons + l.buttonsBesideMenus + l.caps + l.dim
+            lInside.expect(all.allSatisfy { within($0, size) }, size, all.first { !within($0, size) }.map(str) ?? "")
+            lOrdered.expect(l.picture.maxY <= l.row1.minY && l.row1.maxY <= l.strip.minY && l.strip.height == 0 && l.strip.maxY <= l.keys.minY
+                            && l.keys.maxY <= l.trackpad.minY && l.largerPicture && l.keyboard == keyboard, size)
+            lGaps.expect(l.row1.minY - l.picture.maxY == 24 && l.keys.minY - l.row1.maxY == 16 && H - keyboard - l.keys.maxY == 10
+                         && l.trackpad.minY == H - keyboard && H - l.trackpad.maxY == 16, size,
+                         "\(l.row1.minY - l.picture.maxY), \(l.keys.minY - l.row1.maxY), \(H - keyboard - l.keys.maxY), \(l.trackpad.minY)")
+            lRoom.expect(l.picture == CGRect(x: 8, y: 8, width: W - 16, height: H - keyboard - 152), size, str(l.picture))
+            let b = l.buttons, s = l.buttonsBesideMenus, five = (W - 60) / 5, six = (W - 68) / 6
+            let row = [s[0], l.menus] + s.dropFirst()
+            lRow1.expect(b.count == 5 && b.allSatisfy { near($0.width, five) && $0.minY == l.row1.minY && $0.height == 50 }
+                         && s.count == 5 && row.allSatisfy { near($0.width, six) && $0.minY == l.row1.minY && $0.height == 50 }
+                         && row[0].minX == 14 && near(row[5].maxX, W - 14) && zip(row, row.dropFirst()).allSatisfy { near($1.minX - $0.maxX, 8) }, size)
+            let c = l.caps, cw = (W - 68) / 6
+            lCaps.expect(c.count == 6 && c.allSatisfy { near($0.width, cw) && $0.height == 44 && $0.minY == l.keys.minY }
+                         && c[0].minX == 14 && near(c[5].maxX, W - 14) && zip(c, c.dropFirst()).allSatisfy { near($1.minX - $0.maxX, 8) }, size)
+            var rulersOK = true
+            for (ruler, step, aa) in [(l.ruler, l.rulerStep, b[1]), (l.rulerBesideMenus, l.rulerStepBesideMenus, s[1])] {
+                let fitting = min(36, ((aa.midX - 14) * 2 - 60) / 4)
+                rulersOK = rulersOK && near(ruler.midX, aa.midX) && ruler.minY == l.row1.minY && ruler.height == 50
+                    && near(ruler.width, 4 * step + 60) && ruler.minX >= 14 - 0.001 && ruler.maxX <= W - 14 + 0.001 && near(step, fitting)
+            }
+            lRulers.expect(rulersOK, size)
+            lPanels.expect(l.drawer == CGRect(x: 14, y: l.row1.maxY + 8, width: W - 28, height: H - 16 - l.row1.maxY - 8) && l.settings == l.drawer
+                           && near(l.settingsAnchor.x, l.settings.maxX / W, 0.0001) && near(l.settingsAnchor.y, l.settings.minY / H, 0.0001)
+                           && l.dim == [CGRect(x: 0, y: 0, width: W, height: l.row1.minY), CGRect(x: 0, y: l.row1.maxY, width: W, height: H - l.row1.maxY)], size)
+            var framesOK = true, bad = ""
+            for v in frameVideos {
+                let f = l.pane(video: v)
+                let aspect = v == .zero ? 1.6 : v.width / v.height
+                let tall = l.picture.width / aspect > l.picture.height + 0.01
+                let shapeOK = tall ? (f.height == l.picture.height && f.width <= f.height * aspect + 0.01 && f.height * aspect - f.width < 1
+                                      && abs((f.minX - l.picture.minX) - (l.picture.maxX - f.maxX)) <= 1)
+                                   : (f.width == l.picture.width && f.minX == l.picture.minX && f.height <= f.width / aspect + 0.01 && f.width / aspect - f.height < 1)
+                let ok = f.minY == l.picture.minY && f.maxY <= l.picture.maxY && f.minX >= l.picture.minX && f.maxX <= l.picture.maxX
+                    && f.width == f.width.rounded() && f.height == f.height.rounded() && f.minX == f.minX.rounded() && shapeOK
+                    && near(l.trackpadSpan(video: v), f.width > 0 && f.height > 0 ? l.trackpad.width * f.height / f.width : l.trackpadSpan)
+                if !ok { framesOK = false; bad = "\(v): \(str(f))" }
+            }
+            lFrames.expect(framesOK, size, bad)
+        }
+    }
+}
+for rule in largerRules {
+    check("Larger Picture grid (\(largerSizes) layouts): \(rule.name)" + (rule.firstFailure.map { " — first failure at \($0)" } ?? ""), rule.firstFailure == nil)
+}
+
 print("\(passes) passed, \(fails) failed")
 exit(fails == 0 ? 0 : 1)
