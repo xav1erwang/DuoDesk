@@ -65,7 +65,10 @@ docs; no wire change, nothing on the Mac.
   stops a capture when the display sleeps or the Mac locks (Sill.app streaming the Desktop, then
   `pmset displaysleepnow` or ⌃⌘Q: whether Sill.log says "Capture stopped: …", and whether the
   picture comes back by itself once the Mac is woken and unlocked: this build asks for the Desktop
-  again when the Mac says the stream stopped, 0.5.1 never does).
+  again when the Mac says the stream stopped, 0.5.1 never does); the nearby browser made again
+  (Direct Wireless on, the iPad on the iPhone's hotspot, Sill sent to the background and back: the
+  console's "browser: rebuilt the nearby browser (back from the background)", the Direct row kept),
+  which no headless run here could do without turning on this Mac's AWDL.
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
