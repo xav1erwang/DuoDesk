@@ -598,6 +598,8 @@ enum InputScript {
     enum Step: Equatable, CustomStringConvertible {
         case down, pad(dx: Double, dy: Double), lift, click, tap(x: Double, y: Double), key(UInt16), row(UInt16)
         case gesture(TrackpadGestures.Gesture, fingers: Int)
+        case esc(modifiers: String), scroll(dx: Double, dy: Double), wheel(dx: Double, dy: Double)
+        case keyboard(attached: Bool), orient(String)
 
         var description: String {
             switch self {
@@ -609,7 +611,28 @@ enum InputScript {
             case .key(let usage): return "key \(usage)"
             case .row(let usage): return "row \(usage)"
             case .gesture(let g, let fingers): return "gesture \(g.rawValue)" + (fingers == 3 ? "" : ",\(fingers)")
+            case .esc(let modifiers): return "esc" + (modifiers.isEmpty ? "" : " \(modifiers)")
+            case .scroll(let dx, let dy): return "scroll \(dx),\(dy)"
+            case .wheel(let dx, let dy): return "wheel \(dx),\(dy)"
+            case .keyboard(let attached): return "keyboard \(attached ? "attach" : "detach")"
+            case .orient(let orientation): return "orient \(orientation)"
             }
+        }
+
+        /// `esc`'s modifiers, "shift+command" and the like, as the key command's flags; nil when a name
+        /// does not read.
+        static func flags(_ names: String) -> UIKeyModifierFlags? {
+            var flags = UIKeyModifierFlags()
+            for name in names.split(separator: "+") where !name.isEmpty {
+                switch name {
+                case "shift": flags.insert(.shift)
+                case "control", "ctrl": flags.insert(.control)
+                case "option", "opt": flags.insert(.alternate)
+                case "command", "cmd": flags.insert(.command)
+                default: return nil
+                }
+            }
+            return flags
         }
     }
 
@@ -640,6 +663,12 @@ enum InputScript {
                 let fingers = parts.count == 2 ? Int(parts[1]) : 3
                 guard let fingers, fingers == 3 || fingers == 4 else { return nil }
                 step = .gesture(g, fingers: fingers)
+            case ("esc", 2): step = .esc(modifiers: "")
+            case ("esc", 3): guard Step.flags(words[2]) != nil else { return nil }; step = .esc(modifiers: words[2])
+            case ("scroll", 3) where pair.count == 2: step = .scroll(dx: pair[0], dy: pair[1])
+            case ("wheel", 3) where pair.count == 2: step = .wheel(dx: pair[0], dy: pair[1])
+            case ("keyboard", 3) where words[2] == "attach" || words[2] == "detach": step = .keyboard(attached: words[2] == "attach")
+            case ("orient", 3) where words[2] == "landscape" || words[2] == "portrait": step = .orient(words[2])
             default: return nil
             }
             steps.append((at, step))
@@ -712,6 +741,21 @@ enum InputScript {
             let went = client.sendGesture(g, fingers: fingers)
             print(String(format: "input script: t=%.2f ", at) + "\(step): " + (went ? "sent" : "not sent (the switch is off, or the Mac takes none)"))
             return
+        case .esc(let names):
+            let taken = overlay?.scriptEscape(Step.flags(names) ?? []) ?? false
+            print(String(format: "input script: t=%.2f ", at) + "\(step): "
+                  + (taken ? "the stream's key command sent it" : "not the stream's (it does not hold the keyboard, or an EscapeKey is on screen)"))
+            return
+        case .scroll(let dx, let dy): if let overlay { overlay.scriptScroll(dx: dx, dy: dy, from: .trackpad) } else { done = false }
+        case .wheel(let dx, let dy): if let overlay { overlay.scriptScroll(dx: dx, dy: dy, from: .wheel) } else { done = false }
+        case .keyboard(let attached): HardwareKeyboardMonitor.shared.scriptSet(attached: attached)
+        case .orient(let orientation):
+            let mask: UIInterfaceOrientationMask = orientation == "portrait" ? .portrait : .landscapeRight
+            for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
+                    print("input script: orient \(orientation) refused: \(error.localizedDescription)")
+                }
+            }
         }
         print(String(format: "input script: t=%.2f ", at) + (done ? "\(step)" : "\(step): nothing to take it in this layout"))
     }

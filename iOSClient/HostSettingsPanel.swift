@@ -99,6 +99,10 @@ struct HostSettingsPanel: View {
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, close)
+        // Esc on a hardware keyboard closes it, with priority over the text and focus systems, as the
+        // tour's and the pairing overlay's do: SwiftUI's `.cancelAction` shortcut on Done (kept for
+        // ⌘.) does not ask for priority (docs/hardware-keyboard-plan.md §1).
+        .background(EscapeKey(action: close))
         .onAppear { headerFocused = true }
         // A refused change: the control has already gone back to the Mac's value, and the reason
         // is in the footer or the note. The haptic is a no-op on an iPad.
@@ -187,6 +191,7 @@ struct HostSettingsPanel: View {
             .padding(.vertical, -11)
             .padding(.horizontal, -4)
             .font(.body.weight(.semibold))
+            // ⌘. (and Esc where SwiftUI gets it first); Esc itself is the panel's EscapeKey.
             .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 4)

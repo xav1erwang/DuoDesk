@@ -20,3 +20,9 @@ enum HEVCDisplayView {
         return CGRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
     }
 }
+
+/// The app's EscapeKey (AddMacCard.swift) as InputOverlay.swift asks it since the hardware keyboard's
+/// change (docs/hardware-keyboard-plan.md): the rig shows no tour, pairing overlay or Settings panel.
+enum EscapeKey {
+    static var onScreen: Bool { false }
+}

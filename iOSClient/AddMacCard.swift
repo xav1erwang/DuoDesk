@@ -303,6 +303,11 @@ struct ProblemLine: View {
 struct EscapeKey: UIViewRepresentable {
     let action: () -> Void
 
+    /// An EscapeKey is on screen (the tour, the pairing overlay, the Settings panel, the Add a Mac
+    /// card): Esc is its, and the stream's input view leaves Esc alone (InputOverlayView.keyCommands;
+    /// docs/hardware-keyboard-plan.md §1).
+    static var onScreen: Bool { !Anchor.live.isEmpty }
+
     func makeUIView(context: Context) -> Anchor { Anchor() }
     func updateUIView(_ anchor: Anchor, context: Context) { anchor.action = action }
     static func dismantleUIView(_ anchor: Anchor, coordinator: ()) { anchor.detach() }
