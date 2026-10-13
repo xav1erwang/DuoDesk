@@ -168,6 +168,10 @@ package final class StreamCoordinator {
     /// The client's last stream panel size and text scale. One stream, so with several clients
     /// the last one to report wins.
     private var viewport: Viewport?
+    /// The windows Sill sized for a device in regular mode, each with its way back (WindowRestore,
+    /// issue #57): recorded at the first fit (`fitToViewport`), put back when the window stops
+    /// streaming (`restoreFits`), handed to the virtual display's stage when it takes the window.
+    private var fits = WindowRestore.Ledger<WindowSizer.Placement>()
     /// Each connection's kind 17 changes of the last second (applied or refused), and when its
     /// "ignored" line was last printed: `settingsPerSecond` a second, one line a second at most.
     private var settingsArrivals: [ObjectIdentifier: [CFAbsoluteTime]] = [:]
@@ -1084,14 +1088,17 @@ package final class StreamCoordinator {
     /// Resizes the streamed window to the client's panel at its text scale, if one is set and the
     /// window is not already there. Returns the size the window actually took, or nil if nothing
     /// changed. Mac points throughout: the panel in device points divided by the scale (device
-    /// points per Mac point). Scale nil means leave the window alone, and nothing ever restores
-    /// an earlier size on its own.
+    /// points per Mac point). Scale nil means leave the window alone. Every resize the app took is a
+    /// fit for `fits`: the window goes back to its own frame when it stops streaming (`restoreFits`,
+    /// issue #57). None once the host is shutting down: nothing would put it back.
     private func fitToViewport(_ window: SCWindow) -> CGSize? {
-        guard let v = viewport, let textScale = v.scale, textScale > 0, v.width > 0, v.height > 0 else { return nil }
+        guard !shuttingDown, let v = viewport, let textScale = v.scale, textScale > 0, v.width > 0, v.height > 0 else { return nil }
         let target = CGSize(width: (v.width / textScale).rounded(), height: (v.height / textScale).rounded())
         let current = Self.liveBounds(of: window.windowID)?.size ?? window.frame.size
         if abs(current.width - target.width) <= 2, abs(current.height - target.height) <= 2 { return nil }
-        guard let actual = sizer.resize(window: window, to: target) else { return nil }
+        guard let fit = sizer.resize(window: window, to: target) else { return nil }
+        fits.fitted(window.windowID, handle: fit.placement, before: fit.before, after: fit.after, asked: target)
+        let actual = fit.after.size
         // Asked again for a size the app already refused (its minimum): nothing moved.
         guard abs(actual.width - current.width) >= 1 || abs(actual.height - current.height) >= 1 else { return nil }
         Stats.shared.bump("win.resized")
@@ -1209,8 +1216,8 @@ package final class StreamCoordinator {
             // no-op when the pick's select commits them first.
             if pendingConfig != nil || (awayWanted != awayRunning && flipWait == nil) { Task { @MainActor in await self.applyPending() } }
             // A stream that did not start (its window gone, capture refused): nothing streams, so
-            // the links have nothing to be judged at.
-            if active == .none { judgeLinks(nil) }
+            // the links have nothing to be judged at, and a window sized for it goes back.
+            if active == .none { judgeLinks(nil); restoreFits(keeping: nil) }
         }
 
         await capture.stop()
@@ -1282,6 +1289,10 @@ package final class StreamCoordinator {
                 stage.release()
             }
         }
+        // In regular mode, every window Sill sized but the one about to stream goes back to its own
+        // frame (WindowRestore, issue #57): another window or the Desktop picked, `.none` when the
+        // last device leaves or the stream stops. A restart of the same window keeps it fitted.
+        if case .window(let next) = source { restoreFits(keeping: next) } else { restoreFits(keeping: nil) }
 
         var filter: SCContentFilter?     // nil only for the synthetic test pattern
         var sourceRect: CGRect? = nil    // set only when the window streams from the virtual display
@@ -1309,8 +1320,13 @@ package final class StreamCoordinator {
             var size = w.frame.size
             if virtualDisplay, stage.disabledReason == nil {
                 let want = wantedStage(for: w)
+                // A window Sill sized in regular mode (the virtual display turned on while it
+                // streamed): the stage keeps the frame it would have gone back to as its way home.
+                let home = stageHome(for: id)
                 do {
-                    let prepared = try await stage.prepare(window: w, wanted: want.size, envelope: want.envelope, captureScale: captureScale, refreshHz: fps)
+                    let prepared = try await stage.prepare(window: w, wanted: want.size, envelope: want.envelope, captureScale: captureScale,
+                                                           refreshHz: fps, home: home)
+                    _ = fits.take(id)     // the stage puts it back from now on; a staging that failed keeps the record
                     guard !shuttingDown else { stage.release(); active = .none; broadcastList(); return }
                     filter = prepared.filter
                     sourceRect = prepared.sourceRect
@@ -1841,22 +1857,58 @@ package final class StreamCoordinator {
     /// Called by HostShutdown on the main queue just before `exit` (or, for the app's Quit, just
     /// before AppKit exits): every key and button a device holds down on the Mac goes up (a modifier
     /// left down would outlive Sill: the Mac's next click a ⌘-click), every connected device hears why
-    /// (kind 22 "quit", at most 0.1 s), then window home, display gone. Capture and encoder need no
-    /// stop; the process is about to end. The CLI without --virtual-display lets go of the keys and
-    /// dies of the signal with no goodbye, as before (`releaseKeysForExit`): its devices notice by
-    /// liveness.
+    /// (kind 22 "quit", at most 0.1 s), then a window Sill sized goes back to its own frame
+    /// (`restoreFits`), the staged window home, display gone. Capture and encoder need no stop; the
+    /// process is about to end. The CLI without --virtual-display lets go of the keys, puts a sized
+    /// window back and dies of the signal with no goodbye (`releaseKeysForExit`): its devices notice
+    /// by liveness.
     package func shutdownForExit() {
         injector.releaseAll()
         server.goodbyeAll(Goodbye(reason: Goodbye.quit), within: 0.1)
         shuttingDown = true
+        restoreFits(keeping: nil)
         stage.release()
     }
 
     /// The CLI's default path at a signal (HostShutdown.installKeyRelease), just before it dies of it:
-    /// every key and button a device holds down on the Mac goes up, and nothing else happens (no
-    /// goodbye, nothing printed), as before.
+    /// every key and button a device holds down on the Mac goes up, and a window Sill sized for a
+    /// device goes back to its own frame (a line each, only when a window was sized); nothing else
+    /// happens (no goodbye), as before.
     package func releaseKeysForExit() {
         injector.releaseAll()
+        restoreFits(keeping: nil)
+    }
+
+    // MARK: A window Sill sized goes back (WindowRestore, issue #57)
+
+    /// Puts back every window Sill sized but `keep` (nil: every one) as it stops streaming:
+    /// WindowRestore decides from its frame now (gone, already home, left as it is because it is full
+    /// screen or was resized on the Mac, or restored: its whole original frame, or its own size where
+    /// it was moved), WindowSizer moves it through the element its first fit matched, as the virtual
+    /// display's restore does. One line for each window acted on; none for one gone or already home.
+    private func restoreFits(keeping keep: CGWindowID?) {
+        for (id, entry) in fits.stopping(keeping: keep) {
+            // A window the virtual display holds goes home with the stage, to the frame `stageHome`
+            // gave it: only when Quit or a signal lands while `select` waits in `prepare`.
+            if stage.placement?.windowID == id { continue }
+            let p = entry.handle
+            let name = WindowRestore.name(app: p.appName, title: p.title)
+            guard let (decision, current) = sizer.stopDecision(p, entry.record) else {
+                print(WindowRestore.notAnsweringLine(name: name))   // a beach ball: no writes that would each wait out a second
+                continue
+            }
+            let done = sizer.putBack(p, decision)
+            if case .restore = decision { Stats.shared.bump(done ? "win.restored" : "win.restoreFailed") }
+            if let line = WindowRestore.line(decision, name: name, current: current, done: done) { print(line) }
+        }
+    }
+
+    /// Where a window Sill sized would go back to now, for the virtual display's stage to keep as its
+    /// way home when it takes the window (`VirtualStage.prepare(…, home:)`); nil when it has no
+    /// record, or would stay as it is.
+    private func stageHome(for id: CGWindowID) -> CGRect? {
+        guard let entry = fits.entries[id], let (decision, _) = sizer.stopDecision(entry.handle, entry.record) else { return nil }
+        return WindowRestore.homeForStage(decision)
     }
 
     /// An encoder's watchdog fired. A hardware hang is remembered whichever encoder reports it, as
