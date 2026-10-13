@@ -11,13 +11,15 @@ import StreamProtocol
 /// iPad window, which a system presentation would escape; and a tall sheet or a flipped popover
 /// could cross the half-folded crease. Its height follows its content; only the middle scrolls,
 /// where the room under the bar is short (259 pt in the compact halves at 500×710, an iPad window
-/// that narrow; 275 on an iPhone SE on its side), so the header and Disconnect are always in reach.
+/// that narrow; 262 on an iPhone SE upright with Larger Picture; 275 on an SE on its side), so the
+/// header and Disconnect are always in reach.
 ///
 /// Every control shows `client.settings.displayed` (the Mac's value with this device's unanswered
 /// pick over it) and sends through `client.changeSettings`, one field per control, from its action
 /// only. Errors show inline, never in alerts. After the Mac's settings come the device's own groups:
-/// This iPad (or iPhone), whose switch is a preference here (`StreamClient.gesturesKey`) and sends
-/// nothing to the Mac, and whose rows, as accessibility actions, do their gestures
+/// This iPad (or iPhone), whose switches are preferences here and send nothing to the Mac (on an
+/// iPhone without a hinge Larger Picture, `StreamClient.largerPictureKey`; Three-Finger Gestures,
+/// `StreamClient.gesturesKey`), and whose gesture rows, as accessibility actions, do their gestures
 /// (`client.sendGesture`), since VoiceOver keeps three fingers for itself; then Take the Tour.
 struct HostSettingsPanel: View {
     @ObservedObject var client: StreamClient
@@ -37,6 +39,11 @@ struct HostSettingsPanel: View {
     /// This device's switch for three-finger gestures (docs/trackpad-gestures-plan.md §8): on unless
     /// turned off, read by `StreamClient.sendGesture` at each gesture, never sent.
     @AppStorage(StreamClient.gesturesKey) private var gesturesOn = true
+    /// This device's switch for Larger Picture (docs/larger-picture-plan.md): off unless turned on,
+    /// read by the stream screen, never sent.
+    @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
+    /// The Duo's hinge: none (`unknown`) on every iPhone but the iPhone Duo.
+    @Environment(\.duoEnvironment) private var duoEnvironment
     /// VoiceOver is on: it keeps three-finger swipes and taps for itself, so the This iPad group says
     /// its rows do the gestures instead.
     @State private var voiceOver = HostSettingsPanel.voiceOverRunning
@@ -441,12 +448,13 @@ struct HostSettingsPanel: View {
 
     // MARK: This device
 
-    /// This device's own group, after the Mac's: its switch for three-finger gestures, and what each
-    /// does when the Mac takes them (Take the Tour follows it). After the Mac's rows because it is
-    /// the least changed, and the compact halves' 259 pt show the Mac's rows first. The switch
-    /// reaches nothing; a row, activated by VoiceOver, Voice Control or Switch Control, does its
-    /// gesture on the Mac as three fingers would (`sendGesture`: the switch, the Mac's `gestures`,
-    /// the Desktop first while a window streams).
+    /// This device's own group, after the Mac's: on an iPhone its switch for Larger Picture, then its
+    /// switch for three-finger gestures, and what each does when the Mac takes them (Take the Tour
+    /// follows it). After the Mac's rows because it is the least changed, and the compact halves'
+    /// 259 pt show the Mac's rows first. The switches reach nothing on the Mac; a gesture row,
+    /// activated by VoiceOver, Voice Control or Switch Control, does its gesture on the Mac as three
+    /// fingers would (`sendGesture`: the switch, the Mac's `gestures`, the Desktop first while a
+    /// window streams).
     @ViewBuilder private var thisDevice: some View {
         Text("This \(device)")
             .font(.footnote.weight(.medium))
@@ -456,6 +464,15 @@ struct HostSettingsPanel: View {
             .padding(.bottom, 6)
             .accessibilityAddTraits(.isHeader)
             .id(Self.gesturesGroupID)
+        if offersLargerPicture {
+            Rows {
+                Toggle(isOn: $largerPicture) {
+                    Text("Larger Picture").foregroundStyle(Palette.text)
+                }
+                .rowFrame()
+            }
+            Footnote(text: Self.largerPictureFooter)
+        }
         Rows {
             Toggle(isOn: $gesturesOn) {
                 Text("Three-Finger Gestures").foregroundStyle(Palette.text)
@@ -475,6 +492,15 @@ struct HostSettingsPanel: View {
 
     /// The Mac's window list said it takes the gestures (`WindowList.gestures`).
     private var macTakesGestures: Bool { (client.hostGestures ?? 0) >= TrackpadGesture.generation }
+
+    /// Larger Picture acts on a phone held upright (the phone's arrangement, `DuoLayout.phoneArrangement`),
+    /// on an iPhone without a hinge: the iPhone Duo's cover keeps its layout, since its keyboard was
+    /// never measured (PhonePortraitLayout.keyboard(for:largerPicture:foldable:)), so the Duo has no row.
+    private var offersLargerPicture: Bool { DuoLayout.phoneArrangement && duoEnvironment.hinge == .unknown }
+
+    /// Under Larger Picture's switch: what it gives up, where windows come from instead, and that the
+    /// Mac fits a window to the taller picture once Aa sets its text size (or on the virtual display).
+    static let largerPictureFooter = "Held upright, the picture takes the place of the window thumbnails and reaches down to where the keyboard comes up. Switch windows with Apps: tap an open app again for its next window. To fill the taller picture with a window, set its text size with Aa."
 
     /// What each gesture does on the Mac, and what the row does as an accessibility action: its one
     /// gesture, or, for the Spaces, one action each way (natural direction: a swipe left brings the

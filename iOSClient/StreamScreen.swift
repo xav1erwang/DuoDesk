@@ -167,6 +167,8 @@ struct StreamScreen: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     /// The Duo's hinge (iOS 27.1, DuoPostureReader): with the fold, the book and laptop poses.
     @Environment(\.duoEnvironment) private var duoEnvironment
+    /// This device's Larger Picture switch (the Settings panel's This iPhone; docs/larger-picture-plan.md).
+    @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
     #if DEBUG
     /// The console says once when a decision starts to wait.
     @State private var tourWaitLogged: Double? = nil
@@ -203,6 +205,10 @@ struct StreamScreen: View {
                 : (DuoLayout.drawsPhone(geo.size) ? .phone : .portrait)
             // The fold across this screen, in its own space (iOS 27.1 on the Duo; else as before).
             let posture = DuoPosture.read(geo, duoEnvironment)
+            // Larger Picture on a phone held upright: the software keyboard its rows are kept above;
+            // none with the switch off, sideways, on an iPad, and on the iPhone Duo (a hinge).
+            let largerKeyboard = layout == .phone
+                ? PhonePortraitLayout.keyboard(for: geo.size, largerPicture: largerPicture, foldable: posture.hinge != .unknown) : nil
             ZStack {
                 Group {
                     switch duo {
@@ -213,7 +219,7 @@ struct StreamScreen: View {
                     case .innerPortrait:
                         portrait(metrics: .regular)
                     case .outerPortrait:
-                        portrait(metrics: DuoLayout.phoneArrangement ? .phone : .compact)
+                        portrait(metrics: DuoLayout.phoneArrangement ? .phone : .compact, largerKeyboard: largerKeyboard)
                     }
                 }
                 // Under the pairing overlay and the tour nothing takes a touch: not the bar, and
@@ -227,8 +233,13 @@ struct StreamScreen: View {
                 // The tour: a sibling above the layouts, as the pairing overlay is, and under it: an
                 // outside link puts the tour aside until the overlay has closed.
                 if let run = tour, !overlayShown {
-                    TourOverlay(run: run, copy: tourCopy(run, layout, keysOnItsSide: posture.onInnerDisplay),
+                    // With Larger Picture no thumbnails: the bar card is about Apps, and the cards
+                    // upright stand in the picture's whole room, the black under a short picture.
+                    TourOverlay(run: run, copy: tourCopy(run, layout, keysOnItsSide: posture.onInnerDisplay,
+                                                         thumbnails: largerKeyboard == nil),
                                 layout: layout, targets: tourTargets,
+                                thumbnails: largerKeyboard == nil,
+                                room: largerKeyboard.map { PhonePortraitLayout(size: geo.size, keyboard: $0).picture },
                                 screen: geo.size, bottomInset: geo.safeAreaInsets.bottom,
                                 next: tourNext, skip: tourSkip)
                         .transition(.opacity)
@@ -428,6 +439,20 @@ struct StreamScreen: View {
                 overlay.toggleKeyboard()
             }
         }
+        // `-SillAXDump <s>`: s seconds in, the screen's accessibility elements in the order the
+        // accessibility tree hands them out (VoiceOver's order, without VoiceOver), labels and frames.
+        let dump = defaults.double(forKey: "SillAXDump")
+        if dump > 0 { after(dump) { Self.accessibilityDump() } }
+        // `-SillLargerPictureToggle <s>[,<s>…]`: Larger Picture switched at those seconds, as the
+        // Settings panel's switch does (saved; without `-Sill.largerPicture`, which would hold it).
+        let toggles = (defaults.string(forKey: "SillLargerPictureToggle") ?? "")
+            .split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Double($0) }.filter { $0 >= 0 }
+        for time in toggles {
+            after(time) {
+                largerPicture.toggle()
+                print("harness: Larger Picture switched " + (largerPicture ? "on" : "off") + " at " + Self.points(CGFloat(time)) + " s")
+            }
+        }
         guard live else { return }
         if defaults.bool(forKey: "SillDrawer") {
             after(1.5) { print("harness: the drawer opened"); withAnimation(.easeOut(duration: 0.18)) { drawerOpen = true } }
@@ -445,6 +470,41 @@ struct StreamScreen: View {
         }
     }
     private static var launchArgumentsRan = false
+
+    /// `-SillAXDump`: walks the key window as an assistive technology does (an element, else its
+    /// `accessibilityElements`, else its element count, else its subviews) and prints one line per
+    /// element: "ax: 1 Apps (14,454 76×50)".
+    private static func accessibilityDump() {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else {
+            print("ax: no key window"); return
+        }
+        var lines: [String] = []
+        var seen = Set<ObjectIdentifier>()
+        func visit(_ object: Any, _ depth: Int) {
+            guard depth < 60, seen.count < 5000, let element = object as? NSObject, !element.accessibilityElementsHidden,
+                  seen.insert(ObjectIdentifier(element)).inserted else { return }
+            if element.isAccessibilityElement {
+                let f = element.accessibilityFrame
+                let label = element.accessibilityLabel ?? element.accessibilityValue ?? "(no label)"
+                lines.append("\(label) (\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))×\(Int(f.height)))")
+                return
+            }
+            if let children = element.accessibilityElements, !children.isEmpty {
+                children.forEach { visit($0, depth + 1) }
+                return
+            }
+            let count = element.accessibilityElementCount()
+            if count != NSNotFound, count > 0 {
+                (0..<count).forEach { if let child = element.accessibilityElement(at: $0) { visit(child, depth + 1) } }
+                return
+            }
+            if let view = element as? UIView {
+                view.subviews.filter { !$0.isHidden && $0.alpha > 0 }.forEach { visit($0, depth + 1) }
+            }
+        }
+        visit(window, 0)
+        for (i, line) in lines.enumerated() { print("ax: \(i + 1) \(line)") }
+    }
     #endif
 
     private func closeWindowMenu() { windowMenu = nil }
@@ -571,9 +631,11 @@ struct StreamScreen: View {
     }
 
     /// `keysOnItsSide`: the iPhone Duo open, whose keys and trackpad come with the device on its side.
-    private func tourCopy(_ run: TourRun, _ layout: TourLayout, keysOnItsSide: Bool = false) -> TourCopy {
+    /// `thumbnails`: false for a phone with Larger Picture.
+    private func tourCopy(_ run: TourRun, _ layout: TourLayout, keysOnItsSide: Bool = false, thumbnails: Bool = true) -> TourCopy {
         TourPolicy.copy(run.at, layout, mac: client.macName, device: StreamClient.deviceWord,
-                        voiceOver: tourVoiceOver, firstOfRun: run.firstOfRun, keysOnItsSide: keysOnItsSide)
+                        voiceOver: tourVoiceOver, firstOfRun: run.firstOfRun, keysOnItsSide: keysOnItsSide,
+                        thumbnails: thumbnails)
     }
 
     private func tourLog(_ line: @autoclosure () -> String) {
@@ -834,7 +896,8 @@ struct StreamScreen: View {
         }
     }
 
-    private func portrait(metrics: PortraitMetrics) -> some View {
+    /// `largerKeyboard`: Larger Picture's keyboard on a phone (see `body`), nil otherwise.
+    private func portrait(metrics: PortraitMetrics, largerKeyboard: CGFloat? = nil) -> some View {
         PortraitStreamScreen(client: client, metrics: metrics, drawerOpen: $drawerOpen,
                              keyboardShown: $keyboardShown,
                              textScale: $textScale, scaleOpen: $scaleOpen, windowMenu: $windowMenu,
@@ -846,7 +909,8 @@ struct StreamScreen: View {
                              onPanelSize: { panelSize = $0 },
                              pairThisDevice: openPairingOverlay,
                              linkLine: shownLinkLine,
-                             takeTour: takeTour)
+                             takeTour: takeTour,
+                             largerKeyboard: largerKeyboard)
     }
 
     private var streamShape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }

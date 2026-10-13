@@ -198,6 +198,20 @@ struct ContentView: View {
 ///   three-finger gestures (the Settings panel's last group, This iPad) off for one run, in the
 ///   normal app too. The mock Mac takes gestures (`WindowList.gestures` 1) in every settings case
 ///   but `legacy`, whose group then says to update Sill on the Mac.
+/// * `-Sill.largerPicture 1` — not a harness argument either: this device's Larger Picture switch
+///   (the Settings panel's This iPhone group; docs/larger-picture-plan.md) on for one run, in the
+///   normal app too. A phone held upright then has no thumbnails, the picture's room down to the
+///   keyboard's estimated top less the rows (PhonePortraitLayout), and the Menus button in row 1.
+///   `-SillVideoSize 848x844` gives the mock's frame another shape (2800x1800 otherwise), so the
+///   pane at the top of that room can be drawn as a window the Mac fitted to it, or a taller one.
+///   `-SillLargerPictureToggle <s>[,<s>…]` switches it at those seconds after the stream screen
+///   shows, as the Settings panel's switch does (saved; leave out `-Sill.largerPicture`, which would
+///   hold it), so a live run shows the one new viewport each switch sends.
+/// * `-SillAXDump <s>` — `s` seconds after the stream screen shows, the console lists its
+///   accessibility elements in the order the accessibility tree hands them to VoiceOver ("ax: 1
+///   Open the app list (33,463 55×50)"). SwiftUI builds that tree only for an assistive technology:
+///   on a private simulator, `xcrun simctl spawn UDID defaults write com.apple.Accessibility
+///   ApplicationAccessibilityEnabled -bool true` first. In the mock and the normal app.
 /// * `-SillVoiceOver 1` — the Settings panel acts as if VoiceOver were on: the This iPad group's
 ///   footnote says VoiceOver keeps three fingers and its rows do the gestures instead (they are
 ///   accessibility actions whether or not it is on).
@@ -350,7 +364,10 @@ struct ContentView: View {
 /// larger simulator, or in the normal app.
 ///
 /// Console lines for the gates, in the harness and the normal app alike: `viewport: 386×241 pt,
-/// scale none, 60 fps` for each viewport the stream screen sends the Mac (StreamScreen).
+/// scale none, 60 fps` for each viewport the stream screen sends the Mac (StreamScreen); on a phone
+/// held upright `trackpad: 412×389 pt, vertical span 257.5 pt` whenever the pad or its span changes,
+/// and `keyboard: up, 320 pt tall, its top at 574 pt in the stream screen; the key row ends 10 pt
+/// above it, …` each time the software keyboard moves (PortraitStreamScreen).
 ///
 /// Launch arguments land in `NSArgumentDomain`, which is not persisted, so a normal launch is
 /// exactly the app it was before. None of this is built in Release.
