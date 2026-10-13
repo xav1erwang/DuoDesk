@@ -278,4 +278,5 @@ device connected (`Scripts/encoder-check/no-device.sh` before each host).
   CI's mutants matrix (eda1c27).
 - 2026-10-14: H2, `run-all.sh`, the probe script (refuses while the screen is locked), docs (this
   plan's Results, CLAUDE.md, docs/DEVELOPMENT.md, README's How it works, site/support.html,
-  Tests/checks/README.md).
+  Tests/checks/README.md) (d804132, abb5b94); a clean `swift build -c release` of abb5b94 from
+  `git archive`, only the CaptureProbe warning. Pull request #75, left open for Noah.

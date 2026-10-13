@@ -9,7 +9,7 @@ Formerly winstream; the folder still carries the old name.
 ## Current step
 
 **A window Sill sized goes back (2026-10-14, branch `restore-window-frames` from main at 985a733,
-PR #PRNUM; docs/restore-window-frames-plan.md has the rule, the open questions with the defaults taken,
+PR #75; docs/restore-window-frames-plan.md has the rule, the open questions with the defaults taken,
 the results and Noah's steps).** Issue #57 (rosstex): "disconnecting on the iOS app doesn't revert
 apps back to their original shape/size on Mac". In regular mode (Virtual Display off) Aa resized the
 real window (`StreamCoordinator.fitToViewport`) and nothing put it back, on purpose until now. Host
