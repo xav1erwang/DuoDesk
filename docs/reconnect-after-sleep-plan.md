@@ -1,0 +1,177 @@
+# Finding the Mac again after hours idle: the plan
+
+2026-10-14. Branch `reconnect-after-sleep` (worktree `/Users/noah/Downloads/winstream-reconnect`)
+from origin/main at 985a733; line numbers are at 985a733. Issue #69. Written from the triage
+(`~/Downloads/sill-handoff/triage/2026-10-13-open-items.md`, "#69") and a read of
+`StreamClient.swift`, `StreamClient+Remote.swift`, `StreamClient+Home.swift`, `DiscoveryPolicy.swift`,
+`ContentView.swift` and the host's `StreamCoordinator.swift`. Device code, the support page and the
+docs; no wire change, nothing on the Mac.
+
+**The report (#69, 2026-10-13, Sill 0.5.1 on both, iPadOS, Wi-Fi):** "User couldn't get the app
+to work after sitting dormant for a few hours. He had to login to my Mac and close and restart the
+app on my iPad before it would reconnect."
+
+## What happens today (each checked in the code)
+
+1. **The Bonjour browser is made once and never again.** `ContentView`'s `onAppear`
+   (ContentView.swift:46) calls `startBrowsing()`, which refuses a second browser while one exists
+   (StreamClient.swift:837). A failed browser only changes the status line ("Browse failed: …",
+   StreamClient.swift:869-870) and is never made again; the nearby browser has no state handler at
+   all (StreamClient.swift:887-900). iOS takes away the mDNSResponder connection of an app it
+   suspends (`kDNSServiceErr_DefunctConnection`, -65569, Apple DTS), so after hours in the
+   background the rows are what the browser last saw: a row of a Mac that went is dialled, and a
+   Mac that came back (its Sill relaunched after the Mac restarted, say) is never listed again; a
+   saved one shows as Remote, and a tap says it "didn't answer. It may be asleep." Only a relaunch
+   of the app makes a new browser. That is the report's "close and restart the app".
+2. **The automatic reconnect gives up after about 11 s while the Mac's row stays listed.** A listed
+   row is dialled at once and nothing else is scheduled (DiscoveryPolicy.swift:320). A dial that is
+   not ready in 5 s is let go (StreamClient.swift:1412-1420), and its comment says "tearDown's
+   discoveryChanged looks again", which is not so: `tearDown` (StreamClient.swift:2849-2913) never
+   calls `discoveryChanged` or `reconnectIfListed`. The retry timer's chain ends at its first look
+   that dials (StreamClient.swift:2842). So: a dial at the loss, one more at the chain's 6 s, each
+   let go 5 s later, then silence under "Reconnecting to ‹Mac›…". A Bonjour Sleep Proxy (an Apple TV
+   or a HomePod) keeps a sleeping Mac's record, so the row never leaves and no browse event comes
+   when the Mac wakes.
+   Found while reading it: a reconnect dial that ends otherwise (`.waiting`, then cancelled after
+   5 s; `.failed`; no window list within 10 s of a TLS `.ready`) goes through `sessionEnded` as if a
+   session had ended. That makes a new `Reconnect` (its loss, its remote dials' timing and its
+   `afterQuit` start again), flips the status line ("Waiting for…", "‹Mac› disconnected. Sill will
+   reconnect…", "Reconnecting to…") and dials again at once: a row whose dial waits (a stale row,
+   a Mac whose port is closed) is dialled every 5 s for good.
+3. **A Desktop stream the Mac stops is not asked for again.** When ScreenCaptureKit stops a
+   capture, the host selects nothing and says so (StreamCoordinator.swift:442-445). The device asks
+   for the Desktop by itself only when it was watching nothing, or a window that closed
+   (StreamClient.swift:3416-3437, `default: break`): a stopped Desktop stays stopped until the host
+   happens to send another window list, or the person picks something. Whether macOS stops a
+   capture when the display sleeps or the Mac locks (R6) is not known: it needs Noah's display to
+   sleep.
+4. **Nothing tells the person why.** The support page's "Your Mac isn't listed"
+   (site/support.html:50-56) never mentions a sleeping or restarted Mac; sleep appears only under
+   Remote Access. Sill never keeps a Mac awake at home (only a remote device holds idle sleep off),
+   and after a restart it runs only once someone logs in, with Launch at Login on.
+
+## The change
+
+### 1. The browsers, made again (`DiscoveryPolicy`: `rebuildBrowser`, `browserFailures`, `browserResults`)
+
+- **On the return from the background** (`UIApplication.willEnterForegroundNotification` after a
+  `didEnterBackgroundNotification`), the network browser is made again, and the nearby one if it
+  runs: a browser made before the suspension may hold a connection iOS made defunct without saying
+  so yet.
+- **On `.failed`** (any error; the defunct connection is -65569), the browser is cancelled and made
+  again after 1, 2, 4, 8, 16, then 30 s (`browserRetry`), counted by failures in a row; a browser
+  that ran 30 s (`browserStable`) before it failed starts the count again, and so does the return
+  from the background. Never in the background: a browser made there is suspended with the app, and
+  the return makes it anyway. The nearby browser gets the same state handler.
+- **What is kept:** the old browser's results stay beside the new one's for `rebuildSettle` (3 s,
+  the network's first word, `networkFirst`) from the new browser's start, a name in both taken
+  from the new one; then the new one's alone. A Mac that stays listed never leaves the rows, so its
+  sightings keep their times (`NetworkSightings.since` and `leftAt`, which hold back a Direct row
+  and a remote dial for `networkGrace`; `quitWait`'s `networkSince`; `PathSightings.wiredSince`,
+  the cable's settle and its refused listing; `directSince`), and the reconnect's count of dials of
+  a listing (below) is not reset by a rebuild. A Mac that went leaves 3 s after the rebuild.
+- The failed browse's status line goes: the browser is made again, and the console says so
+  ("browser: the network browser failed (…); making it again in 1 s", "browser: rebuilt the network
+  browser (back from the background)", "browser: the new network browser has settled: …").
+- DEBUG `-SillBrowserFail N`: each of the first N network browsers is reported failed with
+  -65569 half a second after it starts, as iOS reports a suspended app's, so the `.failed` path
+  and its back-off run in the simulator (whose browsers use the Mac's own mDNSResponder, which never
+  defuncts an app it does not know is suspended).
+
+### 2. The reconnect keeps trying while the row stays listed (`DiscoveryPolicy`: `redialRow`, `reconnectLine`)
+
+- The automatic reconnect dials a listed row of its Mac at once, then, while that listing lasts
+  and the dials do not connect, again 5, 10, 20, then every 30 s after the last dial started
+  (`reconnectRetry`), only in the foreground. The count is the listing's (the row's
+  `sightings.since`, or `directSince` for a Direct row): the row going and coming back (the Mac's
+  Sill relaunched, its record renewed) is dialled at once; so is the first look after the return
+  from the background, which starts the count again.
+- After 3 dials that did not connect (`reconnectQuietAfter`, about 20 s) the status line says
+  "‹Mac› isn’t answering. It may be asleep. Sill keeps trying, or tap it to try now." and keeps
+  saying it through the later dials (VoiceOver hears it once). After 12 (`reconnectDials`, about
+  4.6 minutes) the dials stop: "Stopped trying to reach ‹Mac›. Tap it to try again.", the remote
+  path's words; a new listing or the return to the foreground starts again. Each dial through a
+  sleep proxy can wake the Mac, so the dials are spaced and bounded.
+- A tap dials at once, as before (`connect(to:)` clears the reconnect).
+- A reconnect dial let go after 5 s now looks again (the comment's intent), and one that ends any
+  other way before it connects (waiting, failed, no window list) counts as one dial of the listing
+  and keeps the reconnect: no new `Reconnect`, no flip of the status line ("Waiting for ‹Mac›…" is
+  a tap's line, not the reconnect's), no dial at once.
+- The retry timer's chain lives while a reconnect is wanted, one chain at a time (a token), each
+  look the rule's.
+- What does not change: the order (the network row, the Direct row after its waits, then a saved
+  Mac's remote dial while no row lists it), the remote dial's 2, 4, 8, 10 s and its 120 s window,
+  `quitWait`, a row that waits for a tap.
+
+### 3. A stopped Desktop asked for again (`DiscoveryPolicy.autoDesktop`)
+
+The device's rule for a window list that says nothing streams, moved into the policy and checked:
+nothing watched before (the connection's first list, or a stream that never started), the Desktop
+at once; **the Desktop it was watching (new)**, the Desktop at once; a window that has gone, the
+Desktop after 2 s plus the worst round trip unless the person chose something meanwhile (as
+before); a window still listed (a pick that failed), nothing: the person's to retry. Never within
+10 s of the last automatic request (as before), so a Mac that cannot start the Desktop is asked at
+most every 10 s, as it already was at its next window list. No host change.
+
+### 4. The words
+
+- site/support.html, "Your Mac isn’t listed" (outside the Remote Access markers, which stay as they
+  are): a bullet for a sleeping Mac (Sill can’t wake it; keep it awake in System Settings › Energy,
+  Energy Saver on macOS 14, or Battery on a laptop, while you use Sill from another room) and one for
+  a Mac that restarted (Sill opens only once someone logs in, with Launch at Login on: in the Sill
+  menu, or Sill’s Settings › General).
+- README.md's Good to know: one sentence on the same two.
+- docs/app-store-metadata.md: a line for the next version's What's New.
+- docs/DEVELOPMENT.md: the reconnect's behaviour, `-SillBrowserFail`, Known limitations.
+
+## Open questions, with the default taken
+
+1. Make the browser again on every return from the background, or only after a failure or a long
+   time away? **Every return** (cheap: one browse, its cached answers in milliseconds; the defunct
+   connection is not always reported).
+2. Which notification? **`willEnterForeground`, after `didEnterBackground`**: `didBecomeActive`
+   also fires after Control Center or an alert, when nothing was suspended.
+3. How long the old results stay beside the new browser's: **3 s** (`networkFirst`). Shorter risks a
+   Mac answering late leaving the rows for a moment; longer keeps a Mac that went.
+4. The back-off and the bound: **5, 10, 20, then 30 s; 12 dials** (about 4.6 minutes), then "Stopped
+   trying…". A dial through a sleep proxy can wake the Mac (Wake on Demand), so it is never a fast
+   loop, and never in the background.
+5. The quiet line after **3** dials. Its words are the plan's; Noah may prefer others.
+6. The return from the background starts the count again (the person is there): **yes**.
+7. The failed browse's "Browse failed: …" line: **gone**; the browser is made again.
+8. The Desktop re-ask: **done**, under the 10 s spacing that already bounds the automatic Desktop.
+9. "Keep this Mac awake while Sill is open": **not here** (a product call; the triage's half day).
+   The support page says how to keep the Mac awake.
+
+## Test plan
+
+- `Tests/checks/policy`: cases and mutants for every new rule (`browserRetryDelay`,
+  `browserFailures`, `rebuildBrowser`, `browserResults`, `redialRow`, `reconnectLine`,
+  `autoDesktop`), and models over time: a host stopped for 20 s (dials at 0, 5, 15; back at 20, the
+  next dial connects at 35), a sleep proxy that never answers (12 dials, the quiet line, then
+  "Stopped trying"), a new listing mid-way, the background, a rebuild that keeps a Mac's sightings.
+  The other checks that compile DiscoveryPolicy.swift (`home-device`, `home-model`,
+  `remote-rules`) and their mutants again.
+- Builds: the iOS app Debug and Release for the generic simulator and Debug for a generic device
+  (`CODE_SIGNING_ALLOWED=NO`); `swift build -c release`; `Tests/checks/run-all.sh`.
+- On a private simulator ("Sill reconnect", deleted after), the Debug app with `-SillServiceType
+  _silltest._tcp` against `SillHost --synthetic --pairing` registered with
+  `SILL_TEST_SERVICE_TYPE=_silltest._tcp`, on loopback, the software encoder, no router: pair, stream,
+  `kill -STOP` the host for 20 s, `kill -CONT`. main's build: two "letting it go" lines, then
+  silence under "Reconnecting…". This build: the dials at 0, 5, 15 and 35 s, the session back
+  without a tap. A longer stop for the quiet line.
+- The browser: the app sent to the background and back (another app launched, then Sill), the
+  console's "browser: rebuilt" line, the rows unchanged; `-SillBrowserFail 3` for the `.failed`
+  path (1, 2, 4 s).
+- The Desktop re-ask: a stand-in Mac (Python, loopback, a plain door) that sends a list with the
+  Desktop streaming, then one with nothing: this build asks for the Desktop, main's does not.
+- Photos: the connect screen with the quiet line (a new harness case, `-SillConnectCase asleep`) at
+  the Duo's sizes and a phone's, at the default and the largest text.
+
+## Results
+
+(Filled in as the steps run.)
+
+## Progress
+
+- 2026-10-14: the plan.
