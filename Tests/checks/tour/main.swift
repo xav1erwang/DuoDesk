@@ -577,8 +577,9 @@ for w0 in widths {
         gridScreens.append(model(w0, h0))
         if h0 > w0 && w0 < 600 {
             gridScreens.append(phoneModel(w0, h0))
-            // Larger Picture, where the room over the keyboard is 120 pt or more (every phone's is 163
-            // or more: the SE with Display Zoom's), above each keyboard measured.
+            // Larger Picture, where the room over the keyboard is 120 pt or more (on every phone it
+            // applies to it is 262 or more, the SE's; Display Zoom at 320 pt wide does not take it),
+            // above each keyboard measured.
             for keyboard: CGFloat in [233, 301, 310, 320] where h0 - keyboard - 152 >= 120 {
                 let fitted = PhonePortraitLayout(size: CGSize(width: w0, height: h0), keyboard: keyboard).picture.size
                 gridScreens.append(largerModel(w0, h0, keyboard: keyboard, video: macBook))

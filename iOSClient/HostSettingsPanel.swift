@@ -17,10 +17,11 @@ import StreamProtocol
 /// Every control shows `client.settings.displayed` (the Mac's value with this device's unanswered
 /// pick over it) and sends through `client.changeSettings`, one field per control, from its action
 /// only. Errors show inline, never in alerts. After the Mac's settings come the device's own groups:
-/// This iPad (or iPhone), whose switches are preferences here and send nothing to the Mac (on an
-/// iPhone without a hinge Larger Picture, `StreamClient.largerPictureKey`; Three-Finger Gestures,
-/// `StreamClient.gesturesKey`), and whose gesture rows, as accessibility actions, do their gestures
-/// (`client.sendGesture`), since VoiceOver keeps three fingers for itself; then Take the Tour.
+/// This iPad (or iPhone), whose switches are preferences here and send nothing to the Mac (Larger
+/// Picture, `StreamClient.largerPictureKey`, on an iPhone without a hinge whose picture it makes
+/// larger, `largerPictureOffered`; Three-Finger Gestures, `StreamClient.gesturesKey`), and whose
+/// gesture rows, as accessibility actions, do their gestures (`client.sendGesture`), since VoiceOver
+/// keeps three fingers for itself; then Take the Tour.
 struct HostSettingsPanel: View {
     @ObservedObject var client: StreamClient
     /// Done, Esc or ⌘., and the VoiceOver escape gesture.
@@ -42,8 +43,9 @@ struct HostSettingsPanel: View {
     /// This device's switch for Larger Picture (docs/larger-picture-plan.md): off unless turned on,
     /// read by the stream screen, never sent.
     @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
-    /// The Duo's hinge: none (`unknown`) on every iPhone but the iPhone Duo.
-    @Environment(\.duoEnvironment) private var duoEnvironment
+    /// Whether the switch is offered here, the stream screen's say (`largerPictureOffered`): only on an
+    /// iPhone without a hinge whose picture it makes larger.
+    @Environment(\.largerPictureOffered) private var offersLargerPicture
     /// VoiceOver is on: it keeps three-finger swipes and taps for itself, so the This iPad group says
     /// its rows do the gestures instead.
     @State private var voiceOver = HostSettingsPanel.voiceOverRunning
@@ -493,11 +495,6 @@ struct HostSettingsPanel: View {
     /// The Mac's window list said it takes the gestures (`WindowList.gestures`).
     private var macTakesGestures: Bool { (client.hostGestures ?? 0) >= TrackpadGesture.generation }
 
-    /// Larger Picture acts on a phone held upright (the phone's arrangement, `DuoLayout.phoneArrangement`),
-    /// on an iPhone without a hinge: the iPhone Duo's cover keeps its layout, since its keyboard was
-    /// never measured (PhonePortraitLayout.keyboard(for:largerPicture:foldable:)), so the Duo has no row.
-    private var offersLargerPicture: Bool { DuoLayout.phoneArrangement && duoEnvironment.hinge == .unknown }
-
     /// Under Larger Picture's switch: what it gives up, where windows come from instead, and that the
     /// Mac fits a window to the taller picture once Aa sets its text size (or on the virtual display).
     static let largerPictureFooter = "Held upright, the picture takes the place of the window thumbnails and reaches down to where the keyboard comes up. Switch windows with Apps: tap an open app again for its next window. To fill the taller picture with a window, set its text size with Aa."
@@ -819,5 +816,20 @@ private extension View {
     /// A row inside a group: at least 44 pt tall, inset 14 pt.
     func rowFrame() -> some View {
         frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.horizontal, 14)
+    }
+}
+
+/// Whether the Settings panel offers Larger Picture (This iPhone's first switch): the stream screen's
+/// say, true on an iPhone without a hinge whose picture Larger Picture makes larger
+/// (`PhonePortraitLayout.offersLargerPicture`); false everywhere else, the iPhone Duo and an iPad
+/// included, and on an iPhone that Display Zoom makes 320 pt wide.
+private struct LargerPictureOfferedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var largerPictureOffered: Bool {
+        get { self[LargerPictureOfferedKey.self] }
+        set { self[LargerPictureOfferedKey.self] = newValue }
     }
 }

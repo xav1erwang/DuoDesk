@@ -244,7 +244,8 @@ let panelsRule = Rule("the drawer and the panel from 8 under row 1 to the trackp
 let anchorRule = Rule("the panel's anchor is its top-trailing corner")
 let dimRule = Rule("the dim covers everything but row 1's buttons, in two pieces")
 let menusRule = Rule("row 2 with the Mac's menus: the Menus button under Settings and as wide, 50 tall, centred in the strip's 62; the strip from 6 to 8 before it, a whole 80 pt thumbnail and its 8 pt ends in it")
-let rules = [inside, ordered, gaps, pictureRule, buttonsRule, capsRule, alignRule, spanRule, rulerRule, panelsRule, anchorRule, dimRule, menusRule]
+let gainsRule = Rule("Larger Picture applies (its keyboard the estimate, the switch offered) exactly where its room above the estimated keyboard is taller than today's picture and row 1's six buttons are 44 pt or more; never with the switch off or a hinge")
+let rules = [inside, ordered, gaps, pictureRule, buttonsRule, capsRule, alignRule, spanRule, rulerRule, panelsRule, anchorRule, dimRule, menusRule, gainsRule]
 
 func within(_ r: CGRect, _ size: CGSize) -> Bool {
     r.minX >= -0.001 && r.minY >= -0.001 && r.maxX <= size.width + 0.001 && r.maxY <= size.height + 0.001 && r.width >= 0 && r.height >= 0
@@ -318,6 +319,14 @@ for w in 300...599 {
                          && l.stripBesideMenus.minY == l.strip.minY && l.stripBesideMenus.height == l.strip.height
                          && near(l.menus.minX - l.stripBesideMenus.maxX, 8) && l.stripBesideMenus.width - 16 >= 80, size,
                          "menus \(str(l.menus)), strip \(str(l.stripBesideMenus))")
+
+        let estimate = L.keyboardHeight(for: size)
+        let applies = L(size: size, keyboard: estimate).picture.height > l.picture.height && (W - 68) / 6 >= 44
+        let given = L.keyboard(for: size, largerPicture: true, foldable: false)
+        gainsRule.expect(given == (applies ? estimate : nil) && L.offersLargerPicture(screen: size) == applies
+                         && L.keyboard(for: size, largerPicture: false, foldable: false) == nil
+                         && L.keyboard(for: size, largerPicture: true, foldable: true) == nil, size,
+                         "estimate \(estimate), given \(String(describing: given)), applies \(applies)")
     }
 }
 for rule in rules {
@@ -357,7 +366,8 @@ check("the size is all it depends on", L(size: pro.container) == L(size: pro.con
 // room is every point that keeps the key row 10 pt above the software keyboard: the container less
 // the keyboard less 152 pt; the trackpad is the keyboard's footprint; row 1 gets the Menus button
 // after Apps while the Mac sent menus; the frame takes the picture's own shape inside the room, from
-// its top; the trackpad's span follows that shape.
+// its top; the trackpad's span follows that shape. It applies only where the room is taller than
+// today's picture and row 1's six buttons are 44 pt or more (not at Display Zoom's 320 pt).
 
 // Today's arrangement is what it was: no keyboard is the default, and nothing of the switch shows in it.
 for p in [proMax, pro, fifteenPro, seventeenE, mini, se, duoOuter, duoCover] {
@@ -408,8 +418,13 @@ check("the switch off: no keyboard (today's arrangement), on a phone or a Duo",
 check("the switch on, the iPhone Duo (a hinge): no keyboard, the cover left as it is",
       L.keyboard(for: duoCover.container, largerPicture: true, foldable: true) == nil
         && L.keyboard(for: proMax.container, largerPicture: true, foldable: true) == nil)
-check("the switch on, a phone without a hinge: its estimate",
-      estimates.allSatisfy { L.keyboard(for: $0.container, largerPicture: true, foldable: false) == $0.keyboard })
+// Larger Picture only where it is larger (the review of 2026-10-14): the room taller than today's
+// picture and row 1's six buttons 44 pt or more. Display Zoom at 320 pt wide (the SE, the minis and
+// the 6.1-inch iPhones) has neither: no keyboard there, today's arrangement and no switch.
+let zoomed320 = ["SE with Display Zoom (320×568, inset 20)", "a Face ID phone with Display Zoom (320×693, inset 48)"]
+check("the switch on, a phone without a hinge: its estimate, but where Display Zoom makes it 320 pt wide",
+      estimates.allSatisfy { e in
+          L.keyboard(for: e.container, largerPicture: true, foldable: false) == (zoomed320.contains(e.name) ? nil : e.keyboard) })
 
 // The plan's table, phone by phone: the room (and today's picture), row 1, the key row, the trackpad
 // (its top the keyboard's), the panels' room, the Desktop's frame (a 14-inch MacBook Pro, 3024×1964).
@@ -423,7 +438,13 @@ struct Larger {
 let fifteenProMax = Phone(name: "iPhone 15 Pro Max (and 16 Plus)", screen: CGSize(width: 430, height: 932), inset: 59, keyboard: 320)
 let air = Phone(name: "iPhone Air", screen: CGSize(width: 420, height: 912), inset: 68, keyboard: 320)
 let elevenProMax = Phone(name: "iPhone 11 Pro Max", screen: CGSize(width: 414, height: 896), inset: 44, keyboard: 320)
+/// Display Zoom's phones, their keyboards the estimate's (none of them measured): the 6.7-inch ones
+/// zoom to 375×812, a 6.9-inch Pro Max (the 16's on) to 402×874, both larger with the switch; the SE,
+/// the minis and the 6.1-inch ones to 320 pt wide, where Larger Picture does not apply.
 let seZoom = Phone(name: "iPhone SE with Display Zoom", screen: CGSize(width: 320, height: 568), inset: 20, keyboard: 233)
+let sixOneZoom = Phone(name: "a 6.1-inch iPhone with Display Zoom", screen: CGSize(width: 320, height: 693), inset: 48, keyboard: 320)
+let sixSevenZoom = Phone(name: "a 6.7-inch iPhone with Display Zoom", screen: CGSize(width: 375, height: 812), inset: 50, keyboard: 310)
+let proMaxZoom = Phone(name: "a 6.9-inch Pro Max with Display Zoom", screen: CGSize(width: 402, height: 874), inset: 62, keyboard: 301)
 let largerTable: [Larger] = [
     Larger(phone: proMax, room: CGSize(width: 424, height: 422), today: 265, row1: (454, 504), keys: (520, 564),
            trackpad: CGSize(width: 412, height: 304), padTop: 574, panelRoom: 366, desktop: CGSize(width: 424, height: 275)),
@@ -443,8 +464,10 @@ let largerTable: [Larger] = [
            trackpad: CGSize(width: 347, height: 294), padTop: 452, panelRoom: 356, desktop: CGSize(width: 359, height: 233)),
     Larger(phone: se, room: CGSize(width: 359, height: 262), today: 224, row1: (294, 344), keys: (360, 404),
            trackpad: CGSize(width: 347, height: 217), padTop: 414, panelRoom: 279, desktop: CGSize(width: 359, height: 233)),
-    Larger(phone: seZoom, room: CGSize(width: 304, height: 163), today: 188, row1: (195, 245), keys: (261, 305),
-           trackpad: CGSize(width: 292, height: 217), padTop: 315, panelRoom: 279, desktop: CGSize(width: 250, height: 163)),
+    Larger(phone: sixSevenZoom, room: CGSize(width: 359, height: 300), today: 224, row1: (332, 382), keys: (398, 442),
+           trackpad: CGSize(width: 347, height: 294), padTop: 452, panelRoom: 356, desktop: CGSize(width: 359, height: 233)),
+    Larger(phone: proMaxZoom, room: CGSize(width: 386, height: 359), today: 241, row1: (391, 441), keys: (457, 501),
+           trackpad: CGSize(width: 374, height: 285), padTop: 511, panelRoom: 347, desktop: CGSize(width: 386, height: 250)),
 ]
 let macBookDesktop = CGSize(width: 3024, height: 1964)
 for row in largerTable {
@@ -477,8 +500,47 @@ for row in largerTable {
     check("\(n): with a candidate bar (44 pt more) row 1 is still clear of the keyboard (\(Int(size.height - k - 44 - l.row1.maxY)) pt)",
           l.row1.maxY < size.height - k - 44)
 }
-check("Larger Picture is larger on every phone but the SE with Display Zoom, which keeps its key row above the keyboard instead (163 pt against 188)",
-      largerTable.allSatisfy { r in r.phone.name == seZoom.name ? r.room.height < r.today : r.room.height > r.today })
+check("Larger Picture is larger on every phone it applies to (all but those Display Zoom makes 320 pt wide)",
+      largerTable.allSatisfy { r in r.room.height > r.today && L.largerPictureGains(r.phone.container, keyboard: r.phone.keyboard!) })
+// Display Zoom at 320 pt wide (the review of 2026-10-14): the keyboard rule would make the picture
+// smaller, a 6.1-inch iPhone's 304×173 against today's 304×190 (the Desktop 266×173 against 304×190)
+// and the zoomed SE's 304×163 against 304×188, with six buttons of 42 pt; so no keyboard, today's
+// arrangement, and the switch not offered, upright or on its side.
+for (p, room, today) in [(sixOneZoom, CGFloat(173), CGFloat(190)), (seZoom, 163, 188)] {
+    let c = p.container
+    let would = L(size: c, keyboard: p.keyboard!)
+    check("\(p.name) (\(Int(c.width))×\(Int(c.height))): above its \(Int(p.keyboard!)) pt keyboard the room would be \(Int(room)) against today's \(Int(today)), six buttons 42 wide",
+          would.picture.height == room && L(size: c).picture.height == today && near(would.menus.width, 42) && L.keyboardHeight(for: c) == p.keyboard!)
+    check("\(p.name): so Larger Picture does not apply: no keyboard, the layout today's, no switch offered",
+          !L.largerPictureGains(c, keyboard: p.keyboard!) && L.keyboard(for: c, largerPicture: true, foldable: false) == nil
+            && L(size: c, keyboard: L.keyboard(for: c, largerPicture: true, foldable: false)) == L(size: c)
+            && !L.offersLargerPicture(screen: c) && !L.offersLargerPicture(screen: CGSize(width: p.screen.height, height: p.screen.width)))
+}
+check("a 6.1-inch iPhone with Display Zoom and a 44 pt inset (320×649): 177 against 190, not offered either",
+      L(size: CGSize(width: 320, height: 649), keyboard: 320).picture.height == 177 && L.keyboard(for: CGSize(width: 320, height: 649), largerPicture: true, foldable: false) == nil)
+check("each condition alone keeps it off: a 320 pt screen tall enough for a larger room still has 42 pt buttons (320×700: 228 against 190); a 400 pt one whose room is no taller than today's picture (400×710 above 320: 238 against 240)",
+      L(size: CGSize(width: 320, height: 700), keyboard: 320).picture.height == 228 && !L.largerPictureGains(CGSize(width: 320, height: 700), keyboard: 320)
+        && L(size: CGSize(width: 400, height: 710), keyboard: 320).picture.height == 238 && L(size: CGSize(width: 400, height: 710)).picture.height == 240
+        && !L.largerPictureGains(CGSize(width: 400, height: 710), keyboard: 320)
+        && L.largerPictureGains(CGSize(width: 400, height: 713), keyboard: 320) && L.largerPictureGains(CGSize(width: 332, height: 900), keyboard: 320)
+        && !L.largerPictureGains(CGSize(width: 331, height: 900), keyboard: 320))
+// The Settings panel's switch, on every iPhone held either way: sideways the stream screen is the
+// screen less a notch's inset at each side (none on an SE), so the upright height it is judged on is
+// short by one inset (or long by the SE's status bar); the answer is the upright one on every phone,
+// for every side inset a notch has (0 to 70 pt).
+let everyPhone: [(Phone, [CGFloat])] = [(proMax, Array(stride(from: 0, through: 70, by: 1))), (pro, Array(stride(from: 0, through: 70, by: 1))),
+    (fifteenPro, Array(stride(from: 0, through: 70, by: 1))), (seventeenE, Array(stride(from: 0, through: 70, by: 1))),
+    (mini, Array(stride(from: 0, through: 70, by: 1))), (se, [0]), (fifteenProMax, Array(stride(from: 0, through: 70, by: 1))),
+    (air, Array(stride(from: 0, through: 70, by: 1))), (elevenProMax, Array(stride(from: 0, through: 70, by: 1))),
+    (seZoom, [0]), (sixOneZoom, Array(stride(from: 0, through: 70, by: 1))), (sixSevenZoom, Array(stride(from: 0, through: 70, by: 1))),
+    (proMaxZoom, Array(stride(from: 0, through: 70, by: 1)))]
+for (p, insets) in everyPhone {
+    let upright = L.offersLargerPicture(screen: p.container)
+    let expected = p.name != seZoom.name && p.name != sixOneZoom.name
+    check("\(p.name): the switch " + (expected ? "offered" : "not offered") + " upright, and on its side with any of \(insets.count) side insets",
+          upright == expected && insets.allSatisfy { side in
+              L.offersLargerPicture(screen: CGSize(width: p.screen.height - 2 * side, height: p.screen.width)) == expected })
+}
 check("the triage's numbers: the 15 Pro 377×235 → 377×340, the 18 Pro Max 424×265 → 424×422, the SE 359×224 → 359×279 above the 216 pt keyboard it assumed (359×262 above the 233 measured)",
       L(size: fifteenPro.container, keyboard: 301).picture.size == CGSize(width: 377, height: 340)
         && L(size: proMax.container, keyboard: 320).picture.size == CGSize(width: 424, height: 422)
@@ -498,9 +560,11 @@ do {
     check("Pro Max: the ruler on that Aa, 204 wide, 36 a detent", near(l.rulerStepBesideMenus, 36)
           && near(l.rulerBesideMenus, CGRect(x: b[1].midX - 102, y: 454, width: 204, height: 50)))
     let w320 = L(size: CGSize(width: 320, height: 548), keyboard: 233)
-    check("320 pt: six buttons of 42, the ruler still 36 a detent (Aa is third)",
+    check("320 pt: six buttons of 42, the ruler still 36 a detent (Aa is third); under 44, so Larger Picture never draws it",
           w320.buttonsBesideMenus.allSatisfy { near($0.width, 42) } && near(w320.menus.width, 42) && near(w320.rulerStepBesideMenus, 36)
-            && near(w320.rulerStep, 28))
+            && near(w320.rulerStep, 28) && !L.largerPictureGains(CGSize(width: 320, height: 548), keyboard: 233))
+    check("the narrowest phone Larger Picture applies to (375 pt: the SE, the minis, the 6.7-inch ones zoomed) has six of 51.2",
+          near(L(size: se.container, keyboard: 233).menus.width, 307.0 / 6) && near(L(size: mini.container, keyboard: 310).menus.width, 307.0 / 6))
 }
 
 // The frame: the picture's own shape inside the room, from its top (the 18 Pro Max's room, 424×422).

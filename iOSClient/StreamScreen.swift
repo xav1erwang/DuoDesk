@@ -206,9 +206,14 @@ struct StreamScreen: View {
             // The fold across this screen, in its own space (iOS 27.1 on the Duo; else as before).
             let posture = DuoPosture.read(geo, duoEnvironment)
             // Larger Picture on a phone held upright: the software keyboard its rows are kept above;
-            // none with the switch off, sideways, on an iPad, and on the iPhone Duo (a hinge).
+            // none with the switch off, sideways, on an iPad, on the iPhone Duo (a hinge), and where
+            // the picture would be no larger (Display Zoom at 320 pt wide).
             let largerKeyboard = layout == .phone
                 ? PhonePortraitLayout.keyboard(for: geo.size, largerPicture: largerPicture, foldable: posture.hinge != .unknown) : nil
+            // The Settings panel's switch: on an iPhone without a hinge whose picture Larger Picture
+            // makes larger, judged on this screen held upright, whichever way it is held now.
+            let offersLarger = DuoLayout.phoneArrangement && posture.hinge == .unknown
+                && PhonePortraitLayout.offersLargerPicture(screen: geo.size)
             ZStack {
                 Group {
                     switch duo {
@@ -260,6 +265,7 @@ struct StreamScreen: View {
             // display gives the picture the status bar's strip in every pose.
             .duoFold(posture, size: geo.size, screen: "stream screen")
             .duoStatusBar(posture, size: geo.size)
+            .environment(\.largerPictureOffered, offersLarger)
         }
         .background(Color.black)
         .overlayPreferenceValue(WindowMenuAnchorKey.self) { anchor in

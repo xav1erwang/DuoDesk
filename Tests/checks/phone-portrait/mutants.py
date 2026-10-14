@@ -82,6 +82,16 @@ MUTANTS = {
     "L27 Display Zoom's keyboard 301": ("if container.width >= miniKeyboardFrom { return miniKeyboard }\n        return wideKeyboard",
                                         "if container.width >= miniKeyboardFrom { return miniKeyboard }\n        return faceIDKeyboard"),
     "L28 the minis' keyboard from 360": ("static let miniKeyboardFrom: CGFloat = 375", "static let miniKeyboardFrom: CGFloat = 360"),
+    # Larger Picture only where it is larger (the review of 2026-10-14).
+    "N1 a room no taller than today's picture allowed": ("return larger.picture.height > PhonePortraitLayout(size: container).picture.height",
+                                                         "return larger.picture.height >= PhonePortraitLayout(size: container).picture.height"),
+    "N2 the room left unchecked (Display Zoom's smaller picture)": ("return larger.picture.height > PhonePortraitLayout(size: container).picture.height",
+                                                                    "return true"),
+    "N3 row 1's six buttons down to 40 pt": ("static let minButtonWidth: CGFloat = 44", "static let minButtonWidth: CGFloat = 40"),
+    "N4 the six buttons left unchecked": ("&& larger.menus.width >= minButtonWidth", "&& larger.menus.width >= 0"),
+    "N5 the keyboard whatever the gain": ("return largerPictureGains(container, keyboard: keyboard) ? keyboard : nil", "return keyboard"),
+    "N6 the switch judged on the screen as it is held": ("let upright = CGSize(width: min(screen.width, screen.height), height: max(screen.width, screen.height))",
+                                                         "let upright = screen"),
 }
 caught = 0
 for name, (old, new) in MUTANTS.items():

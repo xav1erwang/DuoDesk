@@ -15,9 +15,10 @@ import CoreGraphics
 /// 424×422 against 424×265); the trackpad is the keyboard's footprint, so nothing moves when it comes
 /// up. The picture's frame then takes the picture's own shape inside that room (`pane(video:)`, so a
 /// 16:10 window keeps its shape and a taller one gains), and the viewport is the whole room, which
-/// the Mac fits a window to once Aa sets its text size (or on the virtual display). Every rectangle
-/// is still a function of the screen's size, the keyboard's height and the switch alone; the frame
-/// and the trackpad's span also of the picture's shape.
+/// the Mac fits a window to once Aa sets its text size (or on the virtual display). It applies only
+/// where it makes the picture larger (`largerPictureGains`: not where Display Zoom makes the screen
+/// 320 pt wide). Every rectangle is still a function of the screen's size, the keyboard's height and
+/// the switch alone; the frame and the trackpad's span also of the picture's shape.
 ///
 /// `DuoLayout.outerPortrait` on an iPhone draws this (`DuoLayout.phoneArrangement`): every iPhone
 /// upright, and the Duo's outer display upright; an iPad window that narrow keeps the compact halves.
@@ -90,6 +91,9 @@ struct PhonePortraitLayout: Equatable {
     /// tells them apart however the screen is zoomed. (The Duo's cover, 382×678, would read as one
     /// with a Home button; its keyboard is not known, so Larger Picture leaves it alone: `keyboard`.)
     static let faceIDShape: CGFloat = 1.9
+    /// Larger Picture's row 1 holds six buttons (Menus with the five), each at least this wide: a
+    /// touch target's least, so the arrangement needs a stream screen 332 pt wide or more.
+    static let minButtonWidth: CGFloat = 44
 
     /// Row 1, in the landscape bar's order.
     enum Button: Int, CaseIterable { case apps, textSize, keyboard, desktop, settings }
@@ -278,11 +282,35 @@ struct PhonePortraitLayout: Equatable {
     }
 
     /// Larger Picture's keyboard for a stream screen of `container`: its estimate while the switch is
-    /// on, on a phone without a hinge; nil (the standard arrangement) with the switch off, and on the
-    /// iPhone Duo (`foldable`), whose cover's keyboard nobody has measured.
+    /// on, on a phone without a hinge, where Larger Picture earns its name (`largerPictureGains`); nil
+    /// (the standard arrangement) with the switch off, on the iPhone Duo (`foldable`), whose cover's
+    /// keyboard nobody has measured, and where the picture would not be larger.
     static func keyboard(for container: CGSize, largerPicture: Bool, foldable: Bool) -> CGFloat? {
         guard largerPicture, !foldable else { return nil }
-        return keyboardHeight(for: container)
+        let keyboard = keyboardHeight(for: container)
+        return largerPictureGains(container, keyboard: keyboard) ? keyboard : nil
+    }
+
+    /// Whether Larger Picture above a keyboard `keyboard` tall earns its name on a stream screen of
+    /// `container`: its room taller than today's picture, and row 1's six buttons a touch target wide
+    /// (`minButtonWidth`). Not so where Display Zoom makes the screen 320 pt wide (the SE, the minis
+    /// and the 6.1-inch iPhones): a 6.1-inch one's room would be 304×173 against today's 304×190, the
+    /// zoomed SE's 304×163 against 304×188, and six buttons 42 pt. There the layout stays today's and
+    /// the Settings panel has no switch (`offersLargerPicture`).
+    static func largerPictureGains(_ container: CGSize, keyboard: CGFloat) -> Bool {
+        let larger = PhonePortraitLayout(size: container, keyboard: keyboard)
+        return larger.picture.height > PhonePortraitLayout(size: container).picture.height
+            && larger.menus.width >= minButtonWidth
+    }
+
+    /// Whether the Settings panel offers Larger Picture on a phone (without a hinge) whose stream
+    /// screen is `screen` now, in either orientation: judged on it held upright, the shorter side
+    /// across. On its side the stream screen's longer side is short of the upright one by the side
+    /// insets (a notch's 44 to 68 pt each, none on an SE), which leaves the answer the same on every
+    /// iPhone, zoomed or not (Tests/checks/phone-portrait).
+    static func offersLargerPicture(screen: CGSize) -> Bool {
+        let upright = CGSize(width: min(screen.width, screen.height), height: max(screen.width, screen.height))
+        return keyboard(for: upright, largerPicture: true, foldable: false) != nil
     }
 
     /// The ruler centred on `aa`, over `row`: as wide as the room between Aa's centre and the row's
