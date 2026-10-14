@@ -230,7 +230,10 @@ stamped as it came) and the host's log; the loss is the device's "connection sil
 - **The Desktop asked for again** (a stand-in Mac in Python on 127.0.0.1, a plain door, dialled by
   `-SillConnect`, sending a list with the Desktop streaming and 3 s later one with nothing): this
   branch asked for the Desktop 10 ms after the second list ("session: the Mac stopped the Desktop;
-  asking for it again"); main's build asked for nothing in the 12 s after it.
+  asking for it again"); main's build asked for nothing in the 12 s after it, as the stand-in sent
+  no further list. Main asks again only with the Mac's next window list, which a Mac sends when a
+  window opens, closes or changes (the review saw main's build ask 3 ms after a later list): so 0.5.1
+  brings a stopped Desktop back at the Mac's next change of windows, and this build at once.
 - **Not provoked here**: the defunct connection itself. The simulator's apps use this Mac's
   mDNSResponder, which does not know an iOS app is suspended; `-SillBrowserFail` and the return
   from the background stand in for it. R6 (whether macOS stops a capture when the display sleeps or

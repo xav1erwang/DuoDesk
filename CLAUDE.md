@@ -52,7 +52,8 @@ docs; no wire change, nothing on the Mac.
   background, a dial at once and the session in 40 ms. `-SillBrowserFail 3`: made again 1.05, 2.12 and
   4.21 s after each failure, the row listed throughout. The return from the background while
   streaming: the browser made again with the row kept, the session back 0.1 s after the return. The
-  Desktop: asked for again 10 ms after a stand-in Mac said nothing streams (main: never). Photos of
+  Desktop: asked for again 10 ms after a stand-in Mac said nothing streams (main asks only with the
+  Mac's next window list, which the stand-in did not send). Photos of
   `asleep` at the Duo's four sizes and 744×1133, default and accessibility-extra-large; `homerows`
   pixel for pixel main's. `Tests/checks/policy` 441 cases (`sleep.swift`, models of a host stopped,
   a sleep proxy, a new listing and the background) and 158 of 158 mutants (28 new); `home-device`
@@ -68,7 +69,8 @@ docs; no wire change, nothing on the Mac.
   stops a capture when the display sleeps or the Mac locks (Sill.app streaming the Desktop, then
   `pmset displaysleepnow` or ⌃⌘Q: whether Sill.log says "Capture stopped: …", and whether the
   picture comes back by itself once the Mac is woken and unlocked: this build asks for the Desktop
-  again when the Mac says the stream stopped, 0.5.1 never does); the nearby browser made again
+  again as soon as the Mac says the stream stopped, while 0.5.1 asks only with the Mac's next window
+  list, sent when a window opens, closes or changes); the nearby browser made again
   (Direct Wireless on, the iPad on the iPhone's hotspot, Sill sent to the background and back: the
   console's "browser: rebuilt the nearby browser (back from the background)", the Direct row kept),
   which no headless run here could do without turning on this Mac's AWDL; a session over the USB
