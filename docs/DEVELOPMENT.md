@@ -244,7 +244,14 @@ Menus, which joins row 1 after Apps. The keyboard's height is measured, not
 read: `PhonePortraitLayout.keyboardHeight(for:)` gives it from the stream
 screen's shape and width (233 pt with a Home button; with Face ID 320 from 414
 pt wide, 301 from 390, 310 from 375). The iPhone Duo has no switch: its cover's
-keyboard was never measured, so the cover stays as it is.
+keyboard was never measured, so the cover stays as it is. Nor does an iPhone
+where it would not make the picture larger: Display Zoom makes an SE, a mini or
+a 6.1-inch iPhone 320 pt wide, where the room above the keyboard is shorter
+than today's picture and row 1's six buttons would be under 44 pt
+(`PhonePortraitLayout.largerPictureGains`). The Apps drawer opens above row 1,
+over the picture's room, so neither keyboard covers it, the Mac's or the one
+its search field brings. A change of the switch shows when the Settings panel
+closes, so the panel never moves under the finger.
 
 The first time a Mac's picture shows on a device, and nothing is touched, sent,
 used (by any means, VoiceOver's double tap included) or opened in the second

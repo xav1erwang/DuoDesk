@@ -10,20 +10,29 @@ Formerly winstream; the folder still carries the old name.
 
 **Larger Picture on an iPhone held upright (2026-10-14, branch `larger-picture` from main at 985a733,
 PR #79; issue #58, promised to rosstex; docs/larger-picture-plan.md has the rule, the numbers, the
-open questions with their defaults and the results).** "The menu and touchpad take up more than half
-of the vertical space." Device only: no wire change, nothing on the host.
+open questions with their defaults, the results and the review's fixes).** "The menu and touchpad
+take up more than half of the vertical space." Device only: no wire change, nothing on the host.
 - Settings › This iPhone: **Larger Picture** (off by default; `Sill.largerPicture`,
-  `StreamClient.largerPictureKey`, never sent; only on an iPhone without a hinge,
-  `HostSettingsPanel.offersLargerPicture`). With it on, a phone held upright
-  (`PhonePortraitLayout(size:keyboard:)`) has no thumbnails' row; the picture's room is every point
-  that keeps the key row 10 pt above the software keyboard (H − K − 152: 18 Pro Max 424×265 →
-  424×422, 15 Pro 377×235 → 377×340, SE 359×224 → 359×262); the trackpad is the keyboard's
-  footprint, so nothing moves when it comes up; row 1 takes the Menus button after Apps while the
-  Mac sent menus (`buttonsBesideMenus`); the pane is the picture's own shape at the top of the room
-  (`pane(video:)`), the viewport the whole room (one new viewport per switch: the Mac fits a window
-  to it once Aa is set, or on the virtual display), the trackpad's span the picture's shape
-  (`trackpadSpan(video:)`). Windows come from Apps (an open app again shows its next window) and
-  Menus › Window. Sideways, on an iPad and switched off, everything is main's.
+  `StreamClient.largerPictureKey`, never sent; offered only on an iPhone without a hinge whose
+  picture it makes larger: the environment's `largerPictureOffered`, from
+  `PhonePortraitLayout.offersLargerPicture(screen:)`, judged upright whichever way the phone is
+  held). With it on, a phone held upright (`PhonePortraitLayout(size:keyboard:)`) has no
+  thumbnails' row; the picture's room is every point that keeps the key row 10 pt above the
+  software keyboard (H − K − 152: 18 Pro Max 424×265 → 424×422, 15 Pro 377×235 → 377×340, SE
+  359×224 → 359×262); the trackpad is the keyboard's footprint, so nothing moves when it comes up;
+  row 1 takes the Menus button after Apps while the Mac sent menus (`buttonsBesideMenus`); the pane
+  is the picture's own shape at the top of the room (`pane(video:)`), the viewport the whole room
+  (one new viewport per switch: the Mac fits a window to it once Aa is set, or on the virtual
+  display), the trackpad's span the picture's shape (`trackpadSpan(video:)`). Windows come from Apps
+  (an open app again shows its next window) and Menus › Window. The Apps drawer opens above row 1,
+  over the room (`drawer`), so no keyboard covers it, the Mac's or its search field's, and VoiceOver
+  reads it after row 1 (PortraitStreamScreen's `AfterRow1`). A change of the switch shows when the
+  Settings panel closes (`StreamScreen.largerPictureHeld`), so the panel never moves under the
+  finger. Sideways, on an iPad and switched off, everything is main's.
+- Only where it is larger (`largerPictureGains`: the room taller than today's picture and row 1's
+  six buttons 44 pt or more, `minButtonWidth`): Display Zoom's 320 pt (an SE, a mini, a 6.1-inch
+  iPhone; a 6.1-inch one's room would be 304×173 against today's 304×190) keeps today's layout and
+  has no switch; the zoomed 6.7-inch and 6.9-inch phones take it with the estimate (unmeasured).
 - The keyboard K, measured on every iPhone size the iOS 27 simulators have and estimated from the
   stream screen's shape and width (`keyboardHeight(for:)`): 233 with a Home button; with Face ID 320
   from 414 pt wide, 301 from 390, 310 from 375 (the minis; the 11 Pro's is 301), 320 narrower. The
@@ -35,26 +44,39 @@ of the vertical space." Device only: no wire change, nothing on the host.
   are placed against the picture's room (`TourPolicy.place`'s `room`, TourOverlay's), so a card
   stands under a short picture with its tail at row 1. TourLayout stays `.phone` (switching is no
   turn). DEBUG: `-Sill.largerPicture 1`, `-SillVideoSize WxH`, `-SillLargerPictureToggle`,
-  `-SillAXDump` (the accessibility tree's order; a private simulator's
+  `-SillDrawerSearch <text>`, `-SillAXDump` (the accessibility tree's order; a private simulator's
   `ApplicationAccessibilityEnabled` first), the console's `trackpad:` and `keyboard:` lines.
+- The review (2026-10-14; five findings, all holding, one commit per theme): the drawer, under row
+  1, kept only its search field above a keyboard (62 pt on every phone): now above row 1 (77abae3,
+  d6322a9); Display Zoom made the picture smaller: now rule 10 (0e9aa0e); six 42 pt buttons at
+  320 pt: gone with it; the switch moved 118 to 157 pt from under the finger: now it applies as
+  Settings closes (0cbe883); docs. Not done: a Large Content Viewer on row 1's Menus button, a
+  UIKit pull-down in every bar on main too (needs a device).
 - Verified (the plan's Results): the three iOS builds, only the known `StreamClient` warning;
-  `swift build -c release`; `run-all.sh`, all 40; `phone-portrait` 342 checks and 59 of 59 mutants,
-  `tour` 111,079 and 80 of 80; harness photos, switch off, against main's build (25 of 33
-  identical, the rest the lights' wiggle and the panel's new row; the Duo, an iPad's narrow window
-  and a phone sideways identical with the switch on); 59 harness photos with it on, the 24 that
-  show the bare layout measured against the rule within 1 px at 3x; live on 14 iPhone simulators
-  against a synthetic host, the key row 10 pt above the real keyboard on every phone re-run after
-  the measurements (the 11 Pro 19), one viewport per switch; VoiceOver's order from the tree (Apps,
-  Menus, Text size, Keyboard, Desktop, Settings, the caps, the trackpad); the row at accessibility
-  sizes. Photos in `~/Downloads/sill-handoff/larger-picture/`.
+  `swift build -c release`; `run-all.sh`, all 40; `phone-portrait` 401 checks and 68 of 68
+  mutants, `tour` 111,079 and 80 of 80; before the review, harness photos with the switch off
+  against main's build (25 of 33 identical, the rest the lights' wiggle and the panel's new row),
+  59 with it on (the bare layout within 1 px at 3x), live on 14 iPhone simulators against a
+  synthetic host (the key row 10 pt above the real keyboard, one viewport per switch); after it,
+  13 harness photos against main's (10 identical, 2 the simulator's home indicator, 1 the panel's
+  scroll indicator: Display Zoom's 320 pt, the Duo's cover, sideways and the switch off as main's),
+  live on the 18 Pro Max, the 15 Pro and the SE the whole drawer above the Mac's keyboard and its
+  search field's, to the pixel, the switch flipped with Settings open moving nothing until it
+  closed (then one viewport), and VoiceOver's order with the drawer open: row 1, then the drawer.
+  Photos in `~/Downloads/sill-handoff/larger-picture/` (`review-fixes/` for the review's).
 - **Untested, for Noah (the plan's P list), on the iPhone 15 Pro with this build:** Settings ›
-  This iPhone › Larger Picture on and off with Notes and Chrome streaming (a 16:10 window keeps its
-  shape, black under it; Aa, then any size, fits it to the taller picture; a window taller than
-  16:10 gains at once); the keyboard up and down (esc to shift 10 pt above it, nothing moves, row 1's
-  Keyboard takes it down; with a Debug build Xcode's console prints `keyboard: up, 301 pt tall …`);
-  windows from Apps (an open app twice) and from Menus › Window; rotation both ways; the tour on a
-  fresh install with the switch on; VoiceOver's order; an input method's keyboard (a candidate bar
-  can cover the key row, never row 1). On a Duo from October 23: no switch, the cover as before.
+  This iPhone › Larger Picture on and off with Notes and Chrome streaming (the change as Settings
+  closes; a 16:10 window keeps its shape, black under it; Aa, then any size, fits it to the taller
+  picture; a window taller than 16:10 gains at once); the keyboard up and down (esc to shift 10 pt
+  above it, nothing moves, row 1's Keyboard takes it down; with a Debug build Xcode's console
+  prints `keyboard: up, 301 pt tall …`); windows from Apps (an open app twice) and from Menus ›
+  Window; Apps with the keyboard up, and a search in it (the whole list above the keyboard);
+  rotation both ways; the tour on a fresh install with the switch on; VoiceOver's order, the drawer
+  open too; an input method's keyboard (a candidate bar can cover the key row, never row 1); Display
+  Zoom on (Settings › Display & Brightness › Display Zoom): no switch on a 6.1-inch iPhone; the
+  Menus button in row 1 at an accessibility text size (a long press: no Large Content Viewer yet).
+  On iOS 17 or 18, if an iPhone with one is at hand, the keyboard's height (every height here is
+  iOS 27's). On a Duo from October 23: no switch, the cover as before.
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
@@ -4850,9 +4872,11 @@ good.
   and its vertical span, the Aa ruler, the drawer and the Settings panel across
   row 1, and the dim, and the Menus button ending the strip's row (`menus`,
   `stripBesideMenus`); with Larger Picture's keyboard (`keyboard`, from
-  `keyboardHeight(for:)`) no strip, the room over the keyboard, Menus in row 1
-  (`buttonsBesideMenus`), the pane at the picture's shape (`pane(video:)`) and
-  its span (`trackpadSpan(video:)`); pure, `Tests/checks/phone-portrait`), `DuoPosture`
+  `keyboardHeight(for:)`, only where it is larger: `largerPictureGains`,
+  `offersLargerPicture(screen:)`) no strip, the room over the keyboard, Menus in
+  row 1 (`buttonsBesideMenus`), the drawer above row 1, the pane at the
+  picture's shape (`pane(video:)`) and its span (`trackpadSpan(video:)`); pure,
+  `Tests/checks/phone-portrait`), `DuoPosture`
   (the iPhone Duo's posture and the rules that follow from it, docs/iphone-duo-plan.md:
   `FoldInfo`, inferred before iOS 27.1 or the fold's band; the laptop pose's
   split at the real fold and open flat's at the picture's shape, the book

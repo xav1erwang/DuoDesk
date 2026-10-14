@@ -11,7 +11,7 @@ import StreamProtocol
 /// iPad window, which a system presentation would escape; and a tall sheet or a flipped popover
 /// could cross the half-folded crease. Its height follows its content; only the middle scrolls,
 /// where the room under the bar is short (259 pt in the compact halves at 500×710, an iPad window
-/// that narrow; 262 on an iPhone SE upright with Larger Picture; 275 on an SE on its side), so the
+/// that narrow; 279 on an iPhone SE upright with Larger Picture; 275 on an SE on its side), so the
 /// header and Disconnect are always in reach.
 ///
 /// Every control shows `client.settings.displayed` (the Mac's value with this device's unanswered

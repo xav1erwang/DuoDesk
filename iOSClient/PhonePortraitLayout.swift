@@ -14,9 +14,9 @@ import CoreGraphics
 /// gets every point that keeps the key row `keyboardClearance` above the keyboard (on an 18 Pro Max
 /// 424×422 against 424×265); the trackpad is the keyboard's footprint, so nothing moves when it comes
 /// up, and the Apps drawer opens above row 1, where no keyboard reaches (`drawer`). The picture's
-/// frame then takes the picture's own shape inside that room (`pane(video:)`, so a
-/// 16:10 window keeps its shape and a taller one gains), and the viewport is the whole room, which
-/// the Mac fits a window to once Aa sets its text size (or on the virtual display). It applies only
+/// frame then takes the picture's own shape inside that room (`pane(video:)`, so a 16:10 window
+/// keeps its shape and a taller one gains), and the viewport is the whole room, which the Mac fits
+/// a window to once Aa sets its text size (or on the virtual display). It applies only
 /// where it makes the picture larger (`largerPictureGains`: not where Display Zoom makes the screen
 /// 320 pt wide). Every rectangle is still a function of the screen's size, the keyboard's height and
 /// the switch alone; the frame and the trackpad's span also of the picture's shape.

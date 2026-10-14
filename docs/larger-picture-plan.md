@@ -6,7 +6,9 @@ vertical space on the iOS app. When using Mac apps that rely heavily on scrollin
 Chrome, etc. they feel tiny on the phone screen."), which Noah answered on 2026-10-12 with a
 settings option. The triage of 2026-10-13 (sill-handoff `triage/2026-10-13-open-items.md`, #58)
 recommended the design below, and the run that started this branch took it as the default. Device
-only: no wire change, nothing on the host, the switch is the device's own and never sent.
+only: no wire change, nothing on the host, the switch is the device's own and never sent. An
+adversarial review the same day found five things, each fixed on this branch (Results, "The review
+and its fixes"): rules 8, 10 and 11 and open questions 9 to 11 come from it.
 
 ## The problem
 
@@ -24,7 +26,8 @@ Below the key row there is only the trackpad, which the keyboard covers anyway.
 ### In one paragraph
 
 Settings › This iPhone gains **Larger Picture** (off by default; `Sill.largerPicture` in the app's
-defaults; shown only on an iPhone without a hinge, where it acts). With it on, a phone held upright
+defaults; shown only on an iPhone without a hinge whose picture it makes larger, where it acts: not
+where Display Zoom makes the screen 320 pt wide). With it on, a phone held upright
 draws the Larger Picture arrangement: the thumbnails' row goes, and the picture gets every point
 that keeps the key row 10 pt above the software keyboard: room = container − keyboard − 152 pt
 (18 Pro Max 424×265 → 424×422, 15 Pro 377×235 → 377×340, SE 359×224 → 359×262: the triage's 279
@@ -36,9 +39,11 @@ room (Aa set, or the virtual display) fills it. The viewport is the whole room, 
 one new viewport (one restart while the Mac fits the window). The trackpad's vertical span follows
 the picture's real shape, so a stroke moves the pointer as far down as across. Windows stay
 reachable from Apps (tapping an open app again shows its next window) and from the Mac's Window
-menu: the Menus button moves into row 1, after Apps, while the Mac sent menus. Every rect is a pure
-function of the screen's size, the keyboard's height and the switch (and the frame and the span
-also of the picture's shape), in `PhonePortraitLayout`, checked in `Tests/checks/phone-portrait`.
+menu: the Menus button moves into row 1, after Apps, while the Mac sent menus. The Apps drawer opens
+above row 1, over the room, so no keyboard covers it, and a change of the switch shows when the
+Settings panel closes, so the panel never moves under the finger. Every rect is a pure function of
+the screen's size, the keyboard's height and the switch (and the frame and the span also of the
+picture's shape), in `PhonePortraitLayout`, checked in `Tests/checks/phone-portrait`.
 
 ### The rule
 
@@ -62,8 +67,14 @@ W × H is the stream screen (the screen less its top inset, as before); K the ke
    point, so a window fitted to the room fills it exactly.
 7. **The trackpad's span:** its width × the frame's height ÷ its width, so the pad's width moves the
    pointer the frame's width and the span its height. (Today's arrangement keeps its width ÷ 1.6.)
-8. **The ruler** on Aa (of five, or of six while the Mac sent menus), the **drawer** and the
-   **Settings panel** under row 1 across its span, the **dim**: today's rules, on the new row 1.
+8. **The ruler** on Aa (of five, or of six while the Mac sent menus), the **Settings panel** under
+   row 1 across its span, the **dim**: today's rules, on the new row 1. The **drawer** opens upward
+   instead: from 8 pt under the stream screen's top to 8 pt above row 1, across row 1's span (the
+   room + 16: 438 pt on the Pro Max, 278 on the SE), 128 pt clear of the planned keyboard's top.
+   Under row 1 is the keyboard's footprint, where a keyboard up, the Mac's or the one the drawer's
+   own search field brings, left only its padding and search field in view (62 pt on every phone;
+   the review). The panel stays under row 1: opening it takes the keyboard down, and the picture
+   stays in view while a setting changes.
 9. **The keyboard's height** K: the software keyboard as Sill's input view shows it (autocorrection
    off: no suggestions bar), from the stream screen's shape and width, since it is only known once
    it shows. A stream screen under 1.9 times as tall as wide is a Home-button iPhone (the SE's
@@ -76,13 +87,28 @@ W × H is the stream screen (the screen less its top inset, as before); K the ke
    minis (taken as 301) the measurements corrected. On a device with a hinge (the iPhone Duo) there
    is none: its cover's keyboard was never measured, so the switch is hidden there and the cover
    stays as it is (`PhonePortraitLayout.keyboard(for:largerPicture:foldable:)`).
+10. **Only where it is larger:** the arrangement applies only where its room is taller than today's
+   picture and row 1's six buttons are 44 pt or more, a touch target (`largerPictureGains`,
+   `minButtonWidth`), so on a stream screen 332 pt wide or more; elsewhere `keyboard(for:…)` gives
+   none and the layout stays today's. Display Zoom makes an SE, a 12 or 13 mini or a 6.1-inch iPhone
+   320 pt wide: above a 6.1-inch one's keyboard the room would be 304×173 against today's 304×190 (the
+   Desktop 266×173 against 304×190), above the zoomed SE's 304×163 against 304×188, and six buttons
+   42 pt (the review). The Settings panel offers the switch only where it acts
+   (`offersLargerPicture(screen:)`, passed down as the environment's `largerPictureOffered`, with
+   the hinge's rule and the idiom), judging the stream screen held upright whichever way it is held:
+   sideways its longer side is short of the upright one by the side insets, which leaves the answer
+   the same on every iPhone, zoomed or not (the check tries every side inset from 0 to 70 pt).
+11. **When it applies:** a change of the switch shows when the Settings panel closes, in the panel's
+   own motion (StreamScreen's `largerPictureHeld`, held by `setSettings`): the panel hangs under row
+   1, which the switch moves by the picture's growth (118 pt on an 18 Pro, 157 on a Pro Max), so the
+   switch would jump from under the finger that flipped it (the review). Its footnote says so.
 
 ```swift
 struct PhonePortraitLayout {        // additions
     static let keyboardClearance: CGFloat = 10
     static let homeButtonKeyboard: CGFloat = 233, faceIDKeyboard: CGFloat = 301, miniKeyboard: CGFloat = 310
     static let wideKeyboard: CGFloat = 320, wideKeyboardFrom: CGFloat = 414, faceIDKeyboardFrom: CGFloat = 390
-    static let miniKeyboardFrom: CGFloat = 375, faceIDShape: CGFloat = 1.9
+    static let miniKeyboardFrom: CGFloat = 375, faceIDShape: CGFloat = 1.9, minButtonWidth: CGFloat = 44
     let keyboard: CGFloat?                    // Larger Picture's keyboard; nil: today's arrangement
     var largerPicture: Bool
     let buttonsBesideMenus: [CGRect]          // row 1 while the Mac sent menus
@@ -92,6 +118,8 @@ struct PhonePortraitLayout {        // additions
     func trackpadSpan(video: CGSize) -> CGFloat
     static func keyboardHeight(for container: CGSize) -> CGFloat
     static func keyboard(for container: CGSize, largerPicture: Bool, foldable: Bool) -> CGFloat?
+    static func largerPictureGains(_ container: CGSize, keyboard: CGFloat) -> Bool   // rule 10
+    static func offersLargerPicture(screen: CGSize) -> Bool                             // the panel's switch
 }
 ```
 
@@ -99,27 +127,34 @@ struct PhonePortraitLayout {        // additions
 
 From the rule (the prototype is the code: `Tests/checks/phone-portrait` pins these). The container
 is the screen less its top inset (as the simulators gave it: the Air's is 68 pt); "today" is the
-switch off; K is the keyboard as measured (Results, S2), which the rule's estimate gives on each.
+switch off; K is the keyboard as measured (Results, S2), which the rule's estimate gives on each
+(marked * where nobody measured it: Display Zoom's). The drawer is the room + 16 pt, above row 1.
 
-| Phone (container) | K | Room (today's picture) | Row 1 | Key row | Trackpad (today) | Panel room (today) | The Desktop's frame |
-|---|---|---|---|---|---|---|---|
-| 18 Pro Max (440×894) | 320 | 424×422 (424×265), +59 % | 454–504 | 520–564 | 412×304 at 574 (389) | 366 (523) | 424×275 |
-| 15 Pro Max, 16 Plus (430×873) | 320 | 414×401 (414×258), +55 % | 433–483 | 499–543 | 402×304 at 553 (375) | 366 (509) | 414×268 |
-| Air (420×844) | 320 | 404×372 (404×252), +48 % | 404–454 | 470–514 | 392×304 at 524 (352) | 366 (486) | 404×262 |
-| 11 Pro Max (414×852) | 320 | 398×380 (398×248), +53 % | 412–462 | 478–522 | 386×304 at 532 (364) | 366 (498) | 398×258 |
-| 18 Pro (402×812) | 301 | 386×359 (386×241), +49 % | 391–441 | 457–501 | 374×285 at 511 (331) | 347 (465) | 386×250 |
-| 15 Pro, Noah's (393×793) | 301 | 377×340 (377×235), +45 % | 372–422 | 438–482 | 365×285 at 492 (318) | 347 (452) | 377×244 |
-| 17e, 16e (390×797) | 301 | 374×344 (374×233), +48 % | 376–426 | 442–486 | 362×285 at 496 (324) | 347 (458) | 374×242 |
-| 12 and 13 mini (375×762) | 310 | 359×300 (359×224), +34 % | 332–382 | 398–442 | 347×294 at 452 (298) | 356 (432) | 359×233 |
-| SE (375×647) | 233 | 359×262 (359×224), +17 % | 294–344 | 360–404 | 347×217 at 414 (183) | 279 (317) | 359×233 |
-| SE with Display Zoom (320×548) | 233 | 304×163 (304×188), −13 % | 195–245 | 261–305 | 292×217 at 315 (120) | 279 (254) | 250×163 |
+| Phone (container) | K | Room (today's picture) | Row 1 | Key row | Trackpad (today) | Panel room (today) | Drawer | The Desktop's frame |
+|---|---|---|---|---|---|---|---|---|
+| 18 Pro Max (440×894) | 320 | 424×422 (424×265), +59 % | 454–504 | 520–564 | 412×304 at 574 (389) | 366 (523) | 438 | 424×275 |
+| 15 Pro Max, 16 Plus (430×873) | 320 | 414×401 (414×258), +55 % | 433–483 | 499–543 | 402×304 at 553 (375) | 366 (509) | 417 | 414×268 |
+| Air (420×844) | 320 | 404×372 (404×252), +48 % | 404–454 | 470–514 | 392×304 at 524 (352) | 366 (486) | 388 | 404×262 |
+| 11 Pro Max (414×852) | 320 | 398×380 (398×248), +53 % | 412–462 | 478–522 | 386×304 at 532 (364) | 366 (498) | 396 | 398×258 |
+| 18 Pro (402×812) | 301 | 386×359 (386×241), +49 % | 391–441 | 457–501 | 374×285 at 511 (331) | 347 (465) | 375 | 386×250 |
+| 15 Pro, Noah's (393×793) | 301 | 377×340 (377×235), +45 % | 372–422 | 438–482 | 365×285 at 492 (318) | 347 (452) | 356 | 377×244 |
+| 17e, 16e (390×797) | 301 | 374×344 (374×233), +48 % | 376–426 | 442–486 | 362×285 at 496 (324) | 347 (458) | 360 | 374×242 |
+| 12 and 13 mini (375×762) | 310 | 359×300 (359×224), +34 % | 332–382 | 398–442 | 347×294 at 452 (298) | 356 (432) | 316 | 359×233 |
+| SE (375×647) | 233 | 359×262 (359×224), +17 % | 294–344 | 360–404 | 347×217 at 414 (183) | 279 (317) | 278 | 359×233 |
+| 6.7-inch with Display Zoom (375×762) | 310* | 359×300 (359×224), +34 % | 332–382 | 398–442 | 347×294 at 452 (298) | 356 (432) | 316 | 359×233 |
+| 6.9-inch Pro Max with Display Zoom (402×812) | 301* | 386×359 (386×241), +49 % | 391–441 | 457–501 | 374×285 at 511 (331) | 347 (465) | 375 | 386×250 |
+| 6.1-inch or mini with Display Zoom (320×645) | 320* | not offered: 304×173 against today's 304×190, six buttons of 42 | | | | | | |
+| SE with Display Zoom (320×548) | 233* | not offered: 304×163 against today's 304×188, six buttons of 42 | | | | | | |
 
 The Desktop of a 14-inch MacBook Pro (1512×982 pt, 1.54:1) is a little taller than 16:10, so its
 frame gains 10 pt on the Pro Max; a 16:10 window gains nothing until the Mac fits it to the room.
-Row 1's six buttons with Menus are 62 pt wide on the Pro Max, 51.2 on the SE, 42 at 320 pt; the
+Row 1's six buttons with Menus are 62 pt wide on the Pro Max and 51.2 on the 375 pt phones, the
+narrowest Larger Picture applies to; at 320 pt they would be 42, under a touch target's 44. The
 ruler's step is 36 with six on every phone. The panel room with Larger Picture is K + 46 pt (279 on
 the SE, the shortest: the compact halves' 259 at 500×710 stays the least, and the panel scrolls
-there as it does).
+there as it does); the drawer's is the room + 16 (278 on the SE). With the keyboard up, a drawer
+under Larger Picture's row 1 kept 62 pt in view on every phone, today's keeps 219 on the Pro Max,
+167 on the 15 Pro, 138 on a mini and 100 on the SE, and the drawer above row 1 all of it.
 
 ### The views
 
@@ -130,18 +165,24 @@ there as it does).
   background, corners and stroke follow it; the black around it is the screen's). The pane reports
   no size of its own then: the viewport is the room (`onPanelSize(layout.picture.size)`), so the
   Mac fits a window to all of it. Nothing else changes in the pane (the same `StreamView` and
-  `InputOverlay`, so the keyboard's first responder survives the toggle).
+  `InputOverlay`, so the keyboard's first responder survives the toggle). The drawer is placed at
+  `layout.drawer`, above row 1, and read after it: the accessibility tree orders one level top to
+  bottom, so the drawer is one container sorted after the rest (`AfterRow1`), and VoiceOver reads
+  row 1, then the list.
 - **Row 1** gets the Menus button after Apps while the Mac sent menus (`buttonsBesideMenus`,
   `rulerStepBesideMenus`), fading with the others under the Aa ruler.
 - **The trackpad** gets `trackpadSpan(video:)`.
 - **`StreamScreen`** reads the switch (`@AppStorage`) and the hinge (`posture.hinge`), asks
   `PhonePortraitLayout.keyboard(for:largerPicture:foldable:)` for the phone's layout, and passes it
-  down; the tour learns whether the thumbnails show.
+  down; the tour learns whether the thumbnails show. While the Settings panel is open it keeps the
+  switch as it was when the panel opened (`largerPictureHeld`, rule 11), and it tells the panel
+  whether to offer the switch (`largerPictureOffered`, rule 10).
 - **`HostSettingsPanel`**, This iPhone: "Larger Picture" before Three-Finger Gestures, with its
   footnote: "Held upright, the picture takes the place of the window thumbnails and reaches down to
   where the keyboard comes up. Switch windows with Apps: tap an open app again for its next window.
-  To fill the taller picture with a window, set its text size with Aa." Only on an iPhone without
-  a hinge (`DuoLayout.phoneArrangement` and no hinge in `\.duoEnvironment`).
+  To fill the taller picture with a window, set its text size with Aa. The picture changes when you
+  close Settings." Only where the stream screen offers it (`largerPictureOffered`): an iPhone
+  without a hinge whose picture it makes larger.
 - **The tour** (`TourPolicy`): a target for Apps (`TourTarget.apps`, row 1's Apps on a phone);
   without the thumbnails the bar card lights Apps, Aa and Keyboard (Menus between them) and its
   first row is about Apps ("Apps lists the apps on ‹Mac›: tap an open one again for its next
@@ -153,7 +194,9 @@ there as it does).
   picture itself. The layout stays `.phone` for the tour's rule (toggling is no turn).
 - **DEBUG:** `-Sill.largerPicture 1` (the switch for one run, as `-Sill.trackpadGestures 0`);
   `-SillVideoSize 848x844` (the mock's frame, so the harness can draw a window fitted to the room);
-  `-SillLargerPictureToggle 4,8` (the switch flipped at those seconds, as the panel's does);
+  `-SillLargerPictureToggle 4,8` (the switch flipped at those seconds, as the panel's does; with the
+  panel open it says it waits for the panel to close); `-SillDrawerSearch <text>` (the open drawer
+  searches with its field's keyboard up);
   `-SillAXDump <s>` (the screen's accessibility elements in the tree's order, VoiceOver's order
   without VoiceOver, once a private simulator's `ApplicationAccessibilityEnabled` is on); console
   lines `keyboard: up, 320 pt tall, its top at 574 pt in the stream screen; the key row ends 10 pt
@@ -181,9 +224,25 @@ there as it does).
    virtual display), as everywhere today; #70 decides whether the Mac fits windows by default.
 8. **The trackpad's span.** Default: **the picture's own shape** with the switch on. The alternative
    keeps the width ÷ 1.6.
-9. **The SE with Display Zoom** (320×548). Default: **the keyboard rule** (the picture 163 pt tall
-   against 188 without the switch, the key row 10 pt above the keyboard, which today covers it). The
-   alternative never makes the picture shorter (the keys then under the keyboard).
+9. **Display Zoom.** Default: **only where it makes the picture larger** (rule 10). Display Zoom
+   makes an SE, a 12 or 13 mini and a 6.1-inch iPhone 320 pt wide, where the keyboard rule would
+   make the picture smaller (a 6.1-inch one's 304×173 against today's 304×190, the zoomed SE's
+   304×163 against 304×188) and six buttons 42 pt: there the layout stays today's and the switch is
+   hidden. The 6.7-inch iPhones zoom to 375×812 and the 6.9-inch Pro Max to 402×874, and take it
+   with the estimate (310 and 301 pt), which nobody has measured zoomed. The alternatives: measure
+   the zoomed keyboards (Display Zoom in a private simulator's Settings) and keep the keyboard rule
+   on purpose there (the picture shorter, the key row clear of the keyboard, which today covers
+   it), or offer the switch on every iPhone. (This question first covered the zoomed SE alone, with
+   the keyboard rule as its default; the review found the 6.1-inch phones and the minis.)
+10. **The Apps drawer with Larger Picture.** Default: **above row 1, over the picture's room**
+   (rule 8), always, so no keyboard covers it and Apps leaves the keyboard as it is, as everywhere
+   else. The review's suggestion was the alternative: under row 1 as today, Apps taking the keyboard
+   down while it is open and putting it back after, and the drawer moving above row 1 while a
+   keyboard is up or its search field has focus (so it would jump as the field is tapped).
+11. **When the switch applies.** Default: **when the Settings panel closes** (rule 11). The
+   alternative applies it at once, animated, and scrolls the panel's rows by the room's growth to
+   keep the switch under the finger (the panel's height changes by as much, and it can change
+   between its scrolling and its fitting forms meanwhile, which resets the scroll).
 
 ## Test plan
 
@@ -204,25 +263,37 @@ scratchpad.
 | S1 | Harness photos, switch on: 440x894, 402x812, 393x793, 390x797, 375x647 plain, `-SillDrawer 1`, `-SillSettings 1`, `-SillScaleOpen 1`, `-SillVideoSize` a fitted window and a tall one, `-SillTour bar` | Against the table |
 | S2 | Live, the normal app with `-Sill.largerPicture 1 -SillKeyboard 1 -SillKeyboardToggle 9` against a synthetic host, on every iPhone size the iOS 27 runtime has a simulator of; `-SillLargerPictureToggle` once | The keyboard's top where the estimate puts it, the key row ≥ 10 pt above it, the photos on the rule, the `viewport:` line the room, the `trackpad:` line's span, one viewport per switch |
 | S3 | VoiceOver's order with the strip hidden; the Settings row at accessibility sizes | Apps … Settings, the keys, the trackpad; the row whole |
+| R1 | The review: harness photos with the switch on at Display Zoom's 320x645 and 320x548, plain and Settings at its end, against main's build | Pixel for pixel main's (no arrangement, no row) |
+| R2 | The review: live, the drawer with the Mac's keyboard up and with its search field's, on the 18 Pro Max, the 15 Pro and the SE; the switch off for comparison | The whole drawer above the keyboard, at the rule's rect |
+| R3 | The review: the switch flipped with the Settings panel open (harness and live) | Nothing moves until the panel closes; then one viewport |
+| R4 | The review: VoiceOver's order with the drawer open above row 1 | Row 1, then the drawer |
 
 **Untested, for Noah (P), on the iPhone 15 Pro:** the switch on and off with Notes and Chrome
 streaming (a 16:10 window keeps its shape; Aa then fits it to the taller picture; a taller window
-gains); the keyboard up and down (the key row stays above it, nothing moves); windows from Apps and
-from Menus › Window; the tour on a fresh install with the switch on; VoiceOver's order.
+gains; the change shows as Settings closes); the keyboard up and down (the key row stays above it,
+nothing moves); windows from Apps and from Menus › Window; Apps with the keyboard up and a search in
+it (the whole list above the keyboard); the tour on a fresh install with the switch on; VoiceOver's
+order, with the drawer open too; Display Zoom on (Settings › Display & Brightness): no Larger Picture
+on a 6.1-inch iPhone; and, on any iPhone with iOS 17 or 18, the keyboard's height (every height here
+was measured on iOS 27 simulators).
 
 ## Results
 
-2026-10-14, on the branch's last code (every simulator private and deleted after; every host
-`SillHost --synthetic` of this worktree on 127.0.0.1 alone, on the software encoder, each about
-14 s and killed by PID; no device touched).
+2026-10-14 (every simulator private and deleted after; every host `SillHost --synthetic` of this
+worktree on 127.0.0.1 alone, on the software encoder, each under a minute and killed by PID; no
+device touched). H1 to H4 are the final code's, after the review's fixes; H5 and S1 to S3 were run
+on the build the review read, and "The review and its fixes" below has what changed since and its
+own runs (R1 to R4).
 
 - **H1, builds:** iOS Debug and Release for the generic simulator (arm64) and Debug for a generic
   device, `CODE_SIGNING_ALLOWED=NO`: `** BUILD SUCCEEDED **`, only the known `StreamClient` capture
-  warning (StreamClient.swift:3435, 3430 at main). `swift build -c release` (nothing of the host
-  changed): built in 57 s, only the CaptureProbe warning.
-- **H2, `phone-portrait`:** 342 checks (165 at main, unchanged but for the standard arrangement's
-  keyboard table, which now has the SE's and the minis' measured keyboards) and 59 of 59 mutants
-  (31 at main; M12 and M13 follow the ruler into a function; 28 new).
+  warning (StreamClient.swift:3435, 3430 at main); the Release binary holds none of the DEBUG
+  arguments or console lines. `swift build -c release` (nothing of the host changed): built, only
+  the CaptureProbe warning.
+- **H2, `phone-portrait`:** 401 checks (165 at main, unchanged but for the standard arrangement's
+  keyboard table, which now has the SE's and the minis' measured keyboards) and 68 of 68 mutants
+  (31 at main; M12 and M13 follow the ruler into a function; 28 new with the build, 9 with the
+  review's fixes).
 - **H3, `tour`:** 111,079 checks (51,840 at main) and 80 of 80 mutants (72 at main, 8 new).
 - **H4:** `Tests/checks/run-all.sh`, all 40 passed.
 - **H5, nothing else moved:** 33 harness photos on an 18 Pro Max simulator, the switch off, against
@@ -284,10 +355,73 @@ from Menus › Window; the tour on a fresh install with the switch on; VoiceOver
   row is 24 pt under the keyboard (the portrait plan's open question 5 said 7); Larger Picture puts
   it 10 pt above. The phone-portrait check and docs/iphone-portrait-plan.md say so.
 
+### The review and its fixes
+
+An adversarial review of the branch the same day (its head then 0b9db22) re-ran the builds, the
+checks and their mutants, the harness against main and live runs, and found five things. Each was
+checked against the code first; all five hold, and each theme is a commit of its own.
+
+1. **Should fix, the Apps drawer with the keyboard up** (0b9db22: the drawer under row 1, which
+   ends 70 pt above the planned keyboard, so 62 pt of it, its padding and search field, stayed in
+   view on every phone; today's arrangement keeps 219 on the Pro Max, 167 on the 15 Pro, 138 on a
+   mini, 100 on the SE; Apps never takes the keyboard down, and the drawer's own search field brings
+   it up, so a search could not show its results). Fixed in 77abae3 and d6322a9: the drawer opens
+   above row 1 (rule 8, open question 10), and VoiceOver reads it after row 1.
+2. **Should fix, Display Zoom made the picture smaller** (a 6.1-inch iPhone zoomed, 320×645 under
+   its status bar: the room 304×173 against today's 304×190, the Desktop 266×173 against 304×190;
+   the check's "larger on every phone but the SE with Display Zoom" passed only because its table
+   had no such phone). Fixed in 0e9aa0e: rule 10, open question 9 rewritten for every zoomed phone.
+3. **Nit, row 1's six buttons at 320 pt** (42 pt, "Keybo…"): gone with rule 10, which needs six
+   buttons of 44 pt; the narrowest phone it applies to has six of 51.2, "Keyboard" whole (the 375x647
+   photos). Not done: a Large Content Viewer on the Menus button in row 1. That button is a UIKit
+   button whose pull-down is its primary action, in every bar on main as well (the strip's row, the
+   landscape bar); how the viewer's long press and the pull-down's press-and-drag would share it
+   needs a device, so it is left for Noah.
+4. **Nit, the switch moved from under the finger** (118 pt on an 18 Pro, 157 on a Pro Max, with no
+   animation; a quick second tap landed on the footnote, or in the gap under row 1, which closes
+   the panel). Fixed in 0cbe883: rule 11, open question 11.
+5. **Nit, the docs:** the panel's comment (279 pt on the SE with Larger Picture, not 262, which is
+   the picture's room), README (a window keeps its shape until Aa sets its text size, or the
+   virtual display is on), Untested (Display Zoom, the drawer and its search with the keyboard up,
+   keyboards on iOS 17 and 18, the deployment target being 17.0), and the support page (closing,
+   minimizing and full screen go with the thumbnails: the app's own menus instead). Fixed in the
+   docs commit, with the support page's Display Zoom and "close Settings".
+
+Run after the fixes, on an 18 Pro Max simulator of its own (and an SE's and a 15 Pro's, each
+created for its runs and deleted after), against main's build (985a733, from `git archive`):
+
+- **R1, Display Zoom and nothing else moved:** 13 harness photos against main's: 10 pixel for
+  pixel identical (the switch on at 320x645 and 320x548, plain, Settings at its end and with the
+  Mac's menus; the iPhone Duo's cover and its Settings panel; a phone on its side; the switch off
+  at 402x812 and 375x647 with the drawer); 2 differ only in the simulator's own home indicator,
+  outside the drawn screen (the switch off at 402x812, and Settings sideways); 1 only in the
+  Settings panel's scroll indicator, shorter by the new row (the switch off, Settings at its end).
+- **R2, the drawer with the keyboard up:** live, the switch on, `-SillKeyboard 1 -SillDrawer 1`
+  and `-SillDrawer 1 -SillDrawerSearch Go` (its field's keyboard): on the 18 Pro Max, the 15 Pro and
+  the SE the whole drawer above the keyboard, its edges where the rule puts them to the pixel (the
+  SE: 28 to 306 pt on the screen, row 1 from 314; the 15 Pro: 67 to 423, row 1 from 431), the search
+  results in view ("Google Chrome", "Gotham Sports"). The search field's keyboard is taller than the
+  Mac's by its suggestions bar (347 pt on the Pro Max, 328 on the 15 Pro, 260 on the SE), so it
+  covers the key row by 17 pt then, dimmed under the drawer, and leaves row 1 43 pt clear. The
+  switch off: today's drawer under row 1, the second result under the keyboard, as on main. Harness
+  photos of the drawer at 402x812, 375x647 and 375x762, measured: 0 px off the rule.
+- **R3, the switch with Settings open:** the harness at 402x812 (`-SillSettings 1
+  -SillSettingsScroll gestures -SillLargerPictureToggle 5`, the review's own case): the photos at 4
+  and 8 s differ only in the switch (12,428 px within 63×28 pt), no new viewport. Live on the Pro Max
+  (`-SillSettings 1 -SillLargerPictureToggle 4 -SillKeyboardToggle 9`): "Larger Picture switched on
+  at 4 s; the Settings panel is open, so it applies when the panel closes", row 1 and the panel at
+  the same pixels at 3 and 6 s, then the panel closing at 9 s with one viewport, 424×422, and the
+  key row 10 pt above the keyboard.
+- **R4, VoiceOver's order with the drawer open:** `-SillAXDump`, the switch on: Close the app list,
+  Text size, Show the keyboard, Show the full Mac desktop, Settings, then the drawer's search field,
+  its two headers and its 119 rows. (Before `AfterRow1` the tree put the drawer's 123 elements first, row 1 after.)
+  The switch off: main's order, row 1 then the drawer; the switch on with nothing open: as in S3.
+
 **Not verified here:** a real window fitted to the room (a synthetic host's Desktop is never
 resized; the harness drew it with `-SillVideoSize`); a device's own keyboard (only simulators were
-measured), input methods with a candidate bar, third-party keyboards and Display Zoom; VoiceOver
-itself (the dump is the tree's order); the tour on a fresh install on a device; a real iPhone Duo.
+measured, and only iOS 27's), input methods with a candidate bar, third-party keyboards and Display
+Zoom's keyboards; VoiceOver itself (the dump is the tree's order); the tour on a fresh install on a
+device; a real iPhone Duo; the Menus button's Large Content Viewer (the review's third finding).
 
 ## Progress
 
@@ -295,3 +429,8 @@ itself (the dump is the tree's order); the tour on a fresh install on a device; 
   (812d7df); the keyboards measured and the estimate corrected (0444d80); the views, Settings and
   the DEBUG arguments (127f5ec); the docs and these results (a251edf). Simulators deleted; photos
   in `~/Downloads/sill-handoff/larger-picture/` (harness and live). PR #79 opened, left for Noah.
+- 2026-10-14, the review's fixes: Larger Picture only where it is larger, and the panel's switch
+  only there (0e9aa0e); the drawer above row 1 (77abae3) and read after it by VoiceOver (d6322a9);
+  the switch applying as Settings closes (0cbe883); the docs, these results and the review's section
+  (the docs commit). Simulators deleted; the review's photos in
+  `~/Downloads/sill-handoff/larger-picture/review-fixes/`. PR #79's body updated; left for Noah.
