@@ -250,6 +250,53 @@ stamped as it came) and the host's log; the loss is the device's "connection sil
   trip away, under the Mac's 4 s eviction) is called "silent for 10 s" and ended; the reconnect then
   brings it back at once (0.1 s here), with a flash of the connect screen. A ping tick that comes
   long after the last one (the app was suspended) could reset liveness itself.
+- **The review** (2026-10-14, after 1c4b921: an adversarial pass that ran the builds, every check and
+  mutant and the live runs again on a simulator of its own) found four things, each checked against
+  the code here and fixed in a commit of its own:
+  - *The words on waking a sleeping Mac* (should-fix, 1798232). The home-side words "Sill can’t wake
+    a sleeping Mac" (support.html, README, DEVELOPMENT.md, §4) were at odds with the reason this
+    branch gives for the 12-dial bound, that a dial through a Bonjour Sleep Proxy may wake the Mac,
+    and neither is verified; Sill.app's own comment on App Nap (AppModel.swift) already says a device
+    at home can wake its Mac that way. The words now say Sill may not be able to wake it, so keep it
+    awake (§4 has the wording for after Noah's sleep-proxy test). The Remote Access lines stay: no
+    sleep proxy sits on a VPN path.
+  - *A rebuild keeps a Mac by name, not by interface* (f39b875). §1 claimed the cable's settle
+    survived a rebuild; it does only when the new browser's first report lists the cable. When that
+    report lists the Mac on Wi-Fi alone, a working cable session back from a short trip would move
+    to Wi-Fi, and back once the cable had settled again, because its pong dated from before the
+    trip (`pathGone`; the review's pure demo, no cable here). The return now stamps the pong as it resets liveness
+    (`resetLiveness`), `sleep.swift` has the model, and §1 says what a rebuild keeps.
+  - *0.5.1 and a stopped Desktop* (37ed3de). CLAUDE.md said 0.5.1 never asks for it again; it asks
+    with the Mac's next window list (the Desktop's run above).
+  - *"Both browsers"* (0e8a098). DEVELOPMENT.md and ContentView's harness contract said the return
+    from the background makes both browsers again; it makes the network browser again, and the
+    nearby one only while it runs, as `cameForward`'s comment now says too.
+- **The review's own runs** on 1c4b921 agreed with the ones above (the 20 s stop back at the third
+  dial without a tap; the 300 s stop's 12 dials, quiet line and "Stopped trying…"; `-SillBrowserFail
+  3`; the Desktop; `policy` 158 of 158 mutants and the other three checks' 124, 21 and 72), and ran
+  two paths these runs had not: a reconnect dial that ends before it connects (`sessionEnded`'s new
+  branch), against a TLS stand-in holding the test host's key that completes the handshake and never
+  sends a window list, advertised under the session's Bonjour name: "the dial of … did not connect
+  (closed)", dials at +0, 7.2, 17.2, 37.3 and 67.4 s, the quiet line after the third, a steady status
+  line (main's build: "disconnected", then a new dial about every 6 s, 13 connections in 75 s); and a
+  row whose port resets each handshake (main: two dials, then stuck; this branch: 0, 5, 15, 35 s and
+  the quiet line).
+- **After the review's fixes** (2026-10-14, on 0e8a098 and the record after it): the iOS app Debug for
+  the generic simulator as CI builds it, Release for the generic simulator and Debug for a generic
+  device, unsigned, each only the known `StreamClient` capture warning (StreamClient.swift:3662);
+  `swift build -c release` from a clean build folder, 41.1 s, only the CaptureProbe warning;
+  `Tests/checks/run-all.sh`, all 40 passed (1,004 s on a Mac loaded by other work); `Tests/checks/policy`
+  446 cases (441, and the cable model's 5) and 158 of 158 mutants (53 min on that loaded Mac); `home-device` 182, `home-model` 62 and
+  `remote-rules` 123 cases, their files unchanged, and their mutant patterns in DiscoveryPolicy.swift
+  (124, 10 and 17) each found as often as at 1c4b921 and on main: the fixes change only a comment
+  there. Live, on a private simulator ("Sill reconnect-fix 69", iPad mini (A17 Pro), iOS 27.0, deleted
+  after), the Debug app built ad hoc against `SillHost --synthetic` (a plain door on 127.0.0.1 alone,
+  the software encoder, no router, registered as a `_silltest._tcp` row), found as a row and
+  streaming: four trips to the background (the Settings app for 2.3, 2.3, 2.3 and 15 s); each return
+  made the network browser again with the row kept beside it, settled 3.05 to 3.13 s later, and the
+  session went on over the one connection the host saw throughout (no "connection silent", no "Client
+  left" until the host was stopped at the end, when the reconnect dialled at once). That session has
+  no route word (loopback), so the pong stamp itself changes nothing there; the cable case is Noah's.
 
 ## Progress
 
@@ -257,13 +304,16 @@ stamped as it came) and the host's log; the loss is the device's "connection sil
   asked for again, with `Tests/checks/policy`'s `sleep.swift` and 28 mutants (83f96ba); a failure
   keeps the rows as they are (03ca390); the runs above; the support page, README, the App Store
   text for the next version, DEVELOPMENT.md and CLAUDE.md; PR #77.
-- Checks on the final files: `Tests/checks/policy` 441 cases (392 and 49 new) and 158 of 158
-  mutants (130 and 28 new); the other checks that compile DiscoveryPolicy.swift, whose mutants'
-  patterns occur as often as on main: `home-device` 182 cases and 124 of 124 mutants, `home-model`
-  62 and 21 of 21, `remote-rules` 123 and 72 of 72; `Tests/checks/run-all.sh`, all 40 passed
-  (493 s).
+- Checks on the files before the review: `Tests/checks/policy` 441 cases (392 and 49 new) and 158 of
+  158 mutants (130 and 28 new); the other checks that compile DiscoveryPolicy.swift, whose mutants'
+  patterns occur as often as on main: `home-device` 182 cases and 124 of 124 mutants, `home-model` 62
+  and 21 of 21, `remote-rules` 123 and 72 of 72; `Tests/checks/run-all.sh`, all 40 passed (493 s).
 - Builds: the iOS app Debug for the generic simulator as CI builds it (`CODE_SIGNING_ALLOWED=NO
   ARCHS=arm64`), Release for the generic simulator and Debug for a generic device, unsigned: only
   the known `StreamClient` capture warning (StreamClient.swift:3662, the closure main has at 3430);
   `swift build -c release`: only the CaptureProbe warning. CI's "Build and check" passed on the PR
   (run 38486135118, 8 min 39 s).
+- 2026-10-14, the review's fixes: 1798232 (the words on waking a sleeping Mac), f39b875 (the pong
+  stamped on the return, the cable model, what a rebuild keeps), 37ed3de (0.5.1 and a stopped
+  Desktop), 0e8a098 (the nearby browser made again only while it runs), then this record with the
+  CLAUDE.md entry and the pull request's text; the numbers are in Results, "After the review's fixes".
