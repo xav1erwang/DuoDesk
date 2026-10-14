@@ -1,5 +1,6 @@
 // Issue #69 in the policy check (docs/reconnect-after-sleep-plan.md): the browsers made again after
-// the background and after a failure, what a browser made again shows while it settles, the automatic
+// the background and after a failure, what a browser made again shows while it settles, a working
+// cable session across a rebuild (the review's: its pong stamped at the return), the automatic
 // reconnect's dials of a row that stays listed (a Mac a Bonjour Sleep Proxy answers for, one stopped)
 // and the words that go with them, and the Desktop asked for again once the Mac stopped it. A function
 // main.swift calls before pairing at home's.
@@ -82,6 +83,38 @@ func afterSleepPolicy() {
           listedThrough && sightings.leftAt["A"] == nil)
     check("rebuild model: a Mac that went leaves once the new browser has settled", sightings.since["B"] == nil && sightings.leftAt["B"] == ends)
     check("rebuild model: a Mac that came is listed as the new browser lists it", cameAt == 100.5 && sightings.since["C"] == 100.5)
+
+    // A working session over the cable across a short trip to the background (the review of 2026-10-14):
+    // the rows keep a Mac by name, so when the new browser's first report lists it on Wi-Fi alone, the
+    // cable leaves the sightings until a later report lists it again. No ping went out while the app was
+    // suspended, so the return stamps the pong (StreamClient.resetLiveness) as it resets liveness: the
+    // session stays on the cable, looking again at the silence mark, by which time its pongs are back.
+    // With the pong from before the trip it would move to Wi-Fi, and back once the cable had settled
+    // again: two moves with what is sent held. The cable's settle counts from the later report
+    // (`wiredSince`), which only a session on Wi-Fi waiting to move up would feel.
+    typealias Listed = (name: String, ifs: [(String, I.Kind)])
+    let keptOnCable: [Listed] = [("Mac", [en0, anpi0])]
+    let returnedAt = 102.0, firstReport = 102.01, laterReport = 102.3, lastPongBefore = 100.0
+    func shown(_ fresh: [Listed], _ now: Double) -> [(String, [(String, I.Kind)])] {
+        P.browserResults(kept: keptOnCable, fresh: fresh, name: { $0.name }, settleEnds: returnedAt + P.rebuildSettle, now: now)
+            .map { ($0.name, $0.ifs) }
+    }
+    var cablePaths = sight(S(), [("Mac", [en0, anpi0])], 5)
+    cablePaths = sight(cablePaths, shown([("Mac", [en0])], firstReport), firstReport)
+    check("cable model: the new browser's first report lists the Mac on Wi-Fi alone: so do the rows, the cable unlisted",
+          cablePaths.wired.isEmpty && cablePaths.wiredSince.isEmpty && cablePaths.wifi == ["Mac": "en0"])
+    check("cable model: with the pong from before the trip, a working cable session would move to Wi-Fi",
+          plan(pin(.wired, now: firstReport, pong: lastPongBefore, wifi: "en0")) == .moveTo(.wifi, interface: "en0"))
+    check("cable model: with the pong stamped at the return, it stays on the cable and looks again at the silence mark",
+          plan(pin(.wired, now: firstReport, pong: returnedAt, wifi: "en0")) == .stay(.cableUnlisted, recheckAt: returnedAt + P.pongSilence))
+    check("cable model: a pong 0.25 s after the return keeps it there at that mark",
+          plan(pin(.wired, now: returnedAt + P.pongSilence, pong: returnedAt + 0.25, wifi: "en0"))
+              == .stay(.cableUnlisted, recheckAt: returnedAt + 0.25 + P.pongSilence))
+    cablePaths = sight(cablePaths, shown([("Mac", [en0, anpi0])], laterReport), laterReport)
+    check("cable model: a later report lists the cable again: on the cable, its settle counted from that report",
+          cablePaths.wired == ["Mac": "anpi0"] && cablePaths.wiredSince == ["Mac": laterReport]
+              && plan(pin(.wired, now: laterReport, pong: returnedAt + 0.25, wired: "anpi0", since: laterReport, wifi: "en0"))
+                  == .stay(.cable, recheckAt: nil))
 
     // MARK: The reconnect's dials of a row that stays listed
 

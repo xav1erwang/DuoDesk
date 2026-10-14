@@ -63,15 +63,26 @@ app on my iPad before it would reconnect."
   that ran 30 s (`browserStable`) before it failed starts the count again, and so does the return
   from the background. Never in the background: a browser made there is suspended with the app, and
   the return makes it anyway. The nearby browser gets the same state handler.
-- **What is kept:** the old browser's results stay beside the new one's for `rebuildSettle` (3 s,
-  the network's first word, `networkFirst`) from the new browser's start, a name in both taken
-  from the new one; then the new one's alone. A Mac that stays listed never leaves the rows, so its
-  sightings keep their times (`NetworkSightings.since` and `leftAt`, which hold back a Direct row
-  and a remote dial for `networkGrace`; `quitWait`'s `networkSince`; `PathSightings.wiredSince`,
-  the cable's settle and its refused listing; `directSince`), and the reconnect's count of dials of
-  a listing (below) is not reset by a rebuild. A Mac that went leaves 3 s after the rebuild.
-  While a failed browser waits to be made again, the rows stay as they are (a settle still running
-  does not end then, and a result the failed browser still delivers only joins them).
+- **What is kept:** the old browser's results stay beside the new one's for `rebuildSettle` (3 s, the
+  network's first word, `networkFirst`) from the new browser's start, a name in both taken from the
+  new one; then the new one's alone. A Mac that stays listed never leaves the rows, so its sightings
+  by name keep their times (`NetworkSightings.since` and `leftAt`, which hold back a Direct row and a
+  remote dial for `networkGrace`; `quitWait`'s `networkSince`; `directSince`), and the reconnect's
+  count of dials of a listing (below) is not reset by a rebuild. A Mac that went leaves 3 s after the
+  rebuild. While a failed browser waits to be made again, the rows stay as they are (a settle still
+  running does not end then, and a result the failed browser still delivers only joins them).
+- **Its interfaces are the new browser's** as soon as it lists the name (the review, 2026-10-14). A
+  first report that lists the Mac on Wi-Fi alone takes the cable out of `PathSightings` until a
+  later report lists it again, and the cable's settle (`wiredSince`, with the refused listing and
+  the moves up's back-off keyed to it) then counts from that report: a session on Wi-Fi waiting to
+  move up waits up to `cableSettle` more. A working session over the cable stays on it: no ping went
+  out while the app was suspended, so the return stamps its pong as it resets liveness
+  (`StreamClient.resetLiveness`), and `pathGone` waits for the silence mark (1 s), by which time its
+  pongs are back. Without the stamp the pong from before the trip would move it to Wi-Fi at the
+  first report, and back once the cable had settled again. Keeping the old interfaces beside a
+  name's new ones until the settle ends was the other way; it is not taken, as it would keep a
+  cable pulled during the suspension listed for 3 s, and a session that died with it would be
+  dialled on the cable first.
 - The failed browse's status line goes: the browser is made again, and the console says so
   ("browser: the network browser failed (…); making it again in 1 s", "browser: rebuilt the network
   browser (back from the background)", "browser: the new network browser has settled: …").

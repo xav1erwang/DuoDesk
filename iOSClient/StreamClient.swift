@@ -3829,9 +3829,15 @@ final class StreamClient: ObservableObject {
         return false
     }
 
-    /// Returning to the foreground is never a loss by itself: the pings stopped while suspended.
+    /// Returning to the foreground is never a loss by itself: the pings stopped while suspended, so
+    /// neither the silence (`lastReceivedAt`) nor the pongs that did not come back meanwhile
+    /// (`lastPongAt`) say anything of the connection or its path. The pongs matter over the cable:
+    /// the network browser made again on the return (`cameForward`) can list the Mac on Wi-Fi alone in
+    /// its first report, and with a pong from before the trip DiscoveryPolicy.pathGone would move a
+    /// working cable session to Wi-Fi, then back once the cable is listed again (issue #69's review).
     /// Main thread.
     func resetLiveness() {
+        lastPongAt = ProcessInfo.processInfo.systemUptime
         queue.async { [weak self] in
             guard let self else { return }
             self.lastReceivedAt = CACurrentMediaTime()

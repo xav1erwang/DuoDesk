@@ -71,7 +71,11 @@ docs; no wire change, nothing on the Mac.
   again when the Mac says the stream stopped, 0.5.1 never does); the nearby browser made again
   (Direct Wireless on, the iPad on the iPhone's hotspot, Sill sent to the background and back: the
   console's "browser: rebuilt the nearby browser (back from the background)", the Direct row kept),
-  which no headless run here could do without turning on this Mac's AWDL.
+  which no headless run here could do without turning on this Mac's AWDL; a session over the USB
+  cable across a short trip to the background (streaming over the cable, Sill sent away for 2 s and
+  back: no "path: the cable went away" on the console, no second "Client connected" in Sill.log;
+  the return stamps the session's pong, `resetLiveness`, so a new browser's first report listing
+  the Mac on Wi-Fi alone no longer moves it, which no test host on loopback can show).
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
