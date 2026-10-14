@@ -313,6 +313,20 @@ final class Probe {
             o.end()
         }
 
+        print("14. A fit, its left edge dragged in on the Mac (the right edge kept), a re-fit, then a stop: its whole frame back, not a move")
+        if let (o, w) = await open("leftedge", S0) {
+            print("  " + fit(w, pad)); await settle()
+            if let l = live(w.windowID) {
+                o.send("frame \(Int(l.minX + 60)) \(Int(l.minY)) \(Int(l.width - 60)) \(Int(l.height))")
+                print("  resized from the left \(fmt(live(w.windowID)))")
+            }
+            print("  " + fit(w, pad)); await settle()             // the catalog's resize check fits it again
+            print("  during  \(fmt(live(w.windowID)))")
+            for l in stop(keeping: nil) { print("  " + l) }; await settle()
+            expect("after", live(w.windowID), S0)
+            o.end()
+        }
+
         tally(frontApp() == front, "the front app never changed (\(front))")
         print("restore probe: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)

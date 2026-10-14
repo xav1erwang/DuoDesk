@@ -7,6 +7,7 @@ import AppKit
 // Accessibility and the window server give them):
 //   move X Y      moved on the Mac
 //   size W H      resized on the Mac (its top-left kept)
+//   frame X Y W H resized on the Mac from another edge or corner (the whole frame given)
 //   min W H       the app's minimum size
 //   close         the window closes
 //   quit
@@ -43,6 +44,7 @@ Thread.detachNewThread {
             switch p.first {
             case "move": window.setFrame(cocoa(CGRect(x: CGFloat(Double(p[1])!), y: CGFloat(Double(p[2])!), width: r.width, height: r.height)), display: true)
             case "size": window.setFrame(cocoa(CGRect(x: r.minX, y: r.minY, width: CGFloat(Double(p[1])!), height: CGFloat(Double(p[2])!))), display: true)
+            case "frame": window.setFrame(cocoa(CGRect(x: CGFloat(Double(p[1])!), y: CGFloat(Double(p[2])!), width: CGFloat(Double(p[3])!), height: CGFloat(Double(p[4])!))), display: true)
             case "min": window.minSize = NSSize(width: Double(p[1])!, height: Double(p[2])!)
             case "close": window.close()
             case "quit": exit(0)

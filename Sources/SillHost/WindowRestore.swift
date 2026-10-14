@@ -33,19 +33,38 @@ enum WindowRestore {
         /// back its old one, and is at this size by the time it stops streaming.
         var asked: CGSize
         /// The window was away from where Sill left it when Sill fitted it again (the person at the
-        /// Mac moved it, or its app did): from then on it keeps its place when it goes back.
+        /// Mac moved it, or its app did; `movedSince`): from then on it keeps its place when it goes back.
         var moved: Bool
     }
 
     /// A fit: Sill resized the window from `before` and the app took `after`, asked for `asked`. The
     /// first makes the record; a later one (a rotation, another Aa step, a restart that resized it)
-    /// keeps the original frame and notes a move since the last.
+    /// keeps the original frame and notes a move since the last (`movedSince`).
     static func fitted(_ r: Record?, before: CGRect, after: CGRect, asked: CGSize) -> Record {
         guard var r else { return Record(original: before, set: after, asked: asked, moved: false) }
-        if !same(before.origin, r.set.origin) { r.moved = true }
+        if movedSince(r, before) { r.moved = true }
         r.set = after
         r.asked = asked
         return r
+    }
+
+    /// Whether the window `r` describes was moved since Sill last fitted it, by the time it is at `now`.
+    /// At Sill's size (read back or asked), when its top-left corner is elsewhere. At another size, the
+    /// person resized it, and a resize from any edge or corner keeps the opposite edge where it was (with
+    /// Option held, it moves the two apart or together): it moves the top-left corner without being a
+    /// move, and the next fit undoes it (keeping that corner), so the window still goes back whole. A
+    /// move then is both its left and right edges, or both its top and bottom, gone the same way from
+    /// where Sill left it, at either of Sill's sizes (an app that applies a size after answering reads
+    /// back its old one).
+    static func movedSince(_ r: Record, _ now: CGRect) -> Bool {
+        if same(now.size, r.set.size) || same(now.size, r.asked) { return !same(now.origin, r.set.origin) }
+        return shifted(from: r.set, to: now) && shifted(from: CGRect(origin: r.set.origin, size: r.asked), to: now)
+    }
+
+    /// Both edges of an axis gone the same way, more than `tolerance` each.
+    static func shifted(from a: CGRect, to b: CGRect) -> Bool {
+        func went(_ near: CGFloat, _ far: CGFloat) -> Bool { abs(near) > tolerance && abs(far) > tolerance && (near > 0) == (far > 0) }
+        return went(b.minX - a.minX, b.maxX - a.maxX) || went(b.minY - a.minY, b.maxY - a.maxY)
     }
 
     /// Why a window that stopped streaming is left as it is.

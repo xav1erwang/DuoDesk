@@ -65,6 +65,47 @@ eq(afterMove.original, O, "fitted: the original survives every later fit")
 eq(WindowRestore.fitted(first, before: R(100, 100, 1000, 700), after: Sf, asked: Sz),
    WindowRestore.Record(original: O, set: Sf, asked: Sz, moved: false),
    "fitted: a resize on the Mac that a re-fit undid is forgotten (no move)")
+// A resize from another edge or corner moves the top-left corner and keeps the opposite edges: no move.
+// Sill left it at (100,100,800×500): right edge 900, bottom 600.
+for (what, before) in [("the left edge", R(-20, 100, 920, 500)), ("the top edge", R(100, 40, 800, 560)),
+                       ("the top-left corner", R(-20, 40, 920, 560)), ("the top-right corner", R(100, 40, 1000, 560)),
+                       ("the bottom-left corner", R(-20, 100, 920, 700)), ("the left edge inwards", R(400, 100, 500, 500))] {
+    let r = WindowRestore.fitted(first, before: before, after: CGRect(origin: before.origin, size: Sz), asked: Sz)
+    eq(r.moved, false, "fitted: a resize from \(what) that a re-fit undid is not a move")
+    eq(decide(r, CGRect(origin: before.origin, size: Sz)), .restore(O, whole: true), "decide: after a resize from \(what) undone: back whole")
+}
+eq(WindowRestore.fitted(first, before: R(100, 100, 802, 500), after: Sf, asked: Sz).moved, false, "fitted: the right edge 2 pt out is no move")
+eq(WindowRestore.fitted(first, before: R(97, 100, 806, 500), after: Sf, asked: Sz).moved, false,
+   "fitted: both side edges 3 pt out (Option held) is a resize, no move")
+eq(WindowRestore.fitted(first, before: R(60, 60, 880, 580), after: Sf, asked: Sz).moved, false,
+   "fitted: every edge 40 pt out (Option, a corner) is a resize, no move")
+eq(WindowRestore.fitted(first, before: R(97, 100, 803, 500), after: Sf, asked: Sz).moved, false, "fitted: the left edge 3 pt out, the right kept: no move")
+eq(WindowRestore.fitted(first, before: R(97, 100, 804, 500), after: Sf, asked: Sz).moved, false,
+   "fitted: the left edge 3 pt out and the right 1 pt out: a resize")
+eq(WindowRestore.fitted(first, before: R(97, 100, 801.5, 500), after: Sf, asked: Sz).moved, true,
+   "fitted: 3 pt left at Sill's size (within 2 pt): a move")
+eq(WindowRestore.fitted(first, before: R(97, 100, 800, 500), after: Sf, asked: Sz).moved, true, "fitted: 3 pt left, its size kept: a move")
+eq(WindowRestore.fitted(first, before: R(97, 100, 799, 500), after: Sf, asked: Sz).moved, true, "fitted: 3 pt left and 1 pt narrower: a move")
+eq(WindowRestore.fitted(first, before: R(150, 100, 900, 500), after: Sf, asked: Sz).moved, true, "fitted: moved right and widened: a move")
+eq(WindowRestore.fitted(first, before: R(100, 160, 800, 700), after: Sf, asked: Sz).moved, true, "fitted: moved down and made taller: a move")
+eq(WindowRestore.fitted(first, before: R(160, 100, 740, 640), after: Sf, asked: Sz).moved, false,
+   "fitted: the left edge in and the bottom out (the right and the top kept): a resize")
+eq(WindowRestore.movedSince(first, R(103, 103, 800, 500)), true, "movedSince: 3 pt each way")
+eq(WindowRestore.movedSince(first, R(100, 103, 800, 500)), true, "movedSince: 3 pt down")
+eq(WindowRestore.movedSince(first, R(100, 103, 800, 497)), false, "movedSince: the top edge 3 pt in")
+eq(WindowRestore.shifted(from: Sf, to: R(103, 100, 800, 500)), true, "shifted: 3 pt across")
+eq(WindowRestore.shifted(from: Sf, to: R(102, 102, 800, 500)), false, "shifted: 2 pt each way is none")
+eq(WindowRestore.shifted(from: Sf, to: R(90, 100, 830, 500)), false, "shifted: the edges apart is none")
+eq(WindowRestore.shifted(from: Sf, to: R(110, 110, 780, 480)), false, "shifted: the edges together is none")
+// An app that applies a size after answering read back its old size (1200×800) for Sill's 800×500: it
+// is moved at either of Sill's sizes, and a resize from an edge is judged from where Sill really left it.
+let late = WindowRestore.fitted(nil, before: O, after: O, asked: Sz)
+eq(WindowRestore.movedSince(late, R(150, 130, 800, 500)), true, "movedSince: a late app moved at the size asked")
+eq(WindowRestore.movedSince(late, R(150, 130, 1200, 800)), true, "movedSince: a late app moved at the size read back")
+eq(WindowRestore.movedSince(late, R(100, 100, 800, 500)), false, "movedSince: a late app where Sill left it")
+eq(WindowRestore.movedSince(late, R(-20, 100, 920, 500)), false, "movedSince: a late app's left edge dragged out from the size asked")
+eq(WindowRestore.movedSince(late, R(160, 40, 740, 560)), false, "movedSince: a late app's top-left corner dragged, the size asked")
+eq(WindowRestore.movedSince(late, R(600, 500, 850, 520)), true, "movedSince: a late app moved and resized")
 
 // MARK: decide
 
@@ -502,7 +543,17 @@ struct Mac: WindowRestore.Access {
 enum Source: Equatable { case none, desktop, window(CGWindowID) }
 
 /// What the person at the Mac expects of one window through a spell of Sill's fits.
-struct Spell { var original: CGRect; var moved = false; var resizedSinceFit = false }
+struct Spell {
+    var original: CGRect
+    var moved = false
+    var resizedSinceFit = false
+    var movedSinceFit = false
+    var resizesSinceFit = 0
+    var fromAnEdgeSinceFit = false
+    /// A move and a resize, or two resizes, between two fits: the rule sees only where they ended, which
+    /// a move and a resize from an edge can both explain, so either way back is right from then on.
+    var loose = false
+}
 
 struct Model {
     var mac = Mac()
@@ -521,7 +572,7 @@ struct Model {
     var shuttingDown = false
     // The oracle.
     var spells: [CGWindowID: Spell] = [:]
-    var expectHome: [CGWindowID: CGRect] = [:]      // a staged window's way home
+    var expectHome: [CGWindowID: [CGRect]] = [:]    // a staged window's way home
     var personFrame: [CGWindowID: CGRect] = [:]     // a window Sill never touched: where the person left it
     var log: [String] = []
     var seen: [String: Int] = [:]
@@ -571,23 +622,35 @@ struct Model {
             if timedOut { note("fit: no answer") }
             let had = ledger.record(id) != nil
             ledger.fitted(id, handle: id, before: before, after: after, asked: target)
-            if had { spells[id]?.resizedSinceFit = false; note("re-fit") } else { spells[id] = Spell(original: before); note("first fit") }
+            if had, var sp = spells[id] {
+                if (sp.movedSinceFit && sp.resizesSinceFit > 0) || sp.resizesSinceFit > 1 { sp.loose = true; note("compound changes between fits") }
+                else if sp.fromAnEdgeSinceFit { note("re-fit after a resize from an edge") }
+                sp.resizedSinceFit = false; sp.movedSinceFit = false; sp.resizesSinceFit = 0; sp.fromAnEdgeSinceFit = false
+                spells[id] = sp
+                note("re-fit")
+            } else if !had {
+                spells[id] = Spell(original: before); note("first fit")
+            }
         }
     }
 
-    /// Where the person expects a window of a spell to end when it stops streaming now.
-    func expected(_ id: CGWindowID) -> CGRect? {
+    /// Where the person expects a window of a spell to end when it stops streaming now (either of two
+    /// after changes the rule cannot tell apart).
+    func expected(_ id: CGWindowID) -> [CGRect]? {
         guard let w = mac.wins[id], !w.closed, let spell = spells[id] else { return nil }
-        if w.fullScreen || spell.resizedSinceFit { return w.frame }
-        guard spell.moved else { return CGRect(origin: spell.original.origin, size: Mac.takes(w.app, spell.original.size)) }
+        if w.fullScreen || spell.resizedSinceFit { return [w.frame] }
+        let size = Mac.takes(w.app, spell.original.size)
+        let whole = CGRect(origin: spell.original.origin, size: size)
         let target = CGRect(origin: w.frame.origin, size: spell.original.size)
-        return CGRect(origin: WindowRestore.keep(target, in: Mac.area(around: w.frame)), size: Mac.takes(w.app, spell.original.size))
+        let kept = CGRect(origin: WindowRestore.keep(target, in: Mac.area(around: w.frame)), size: size)
+        if spell.loose { return [whole, kept] }
+        return [spell.moved ? kept : whole]
     }
 
     // StreamCoordinator.restoreFits: the ledger's restore (WindowRestore.stop for each), then the lines.
     mutating func restoreFits(keeping keep: CGWindowID?, why: String) {
         // What the person expects of each window about to stop, before anything moves.
-        var wants: [CGWindowID: CGRect] = [:]
+        var wants: [CGWindowID: [CGRect]] = [:]
         for id in ledger.entries.keys where id != keep { wants[id] = expected(id) }
         if let s = staged?.id, s != keep, ledger.record(s) != nil { note("skipped: staged"); spells[s] = nil }
         let stopped = ledger.restore(keeping: keep, staged: staged?.id, on: &mac)
@@ -611,7 +674,7 @@ struct Model {
                    "model seed \(seed): window \(id)'s line")
             }
             if st.decision != .gone, let want = wants[id] ?? nil, let now = mac.ax(id) {
-                check(WindowRestore.same(now, want), "model seed \(seed): window \(id) stopped (\(why), \(String(describing: st.decision))) at \(now), the person expects \(want); \(log.suffix(8))")
+                check(want.contains { WindowRestore.same(now, $0) }, "model seed \(seed): window \(id) stopped (\(why), \(String(describing: st.decision))) at \(now), the person expects \(want); \(log.suffix(8))")
             }
             spells[id] = nil
         }
@@ -626,7 +689,7 @@ struct Model {
             note(home == nil ? "staged: as found" : "staged: with a home")
             expectHome[id] = expected(id)
         } else {
-            expectHome[id] = current
+            expectHome[id] = [current]
         }
         let placementHome = home ?? current
         let size = S((panel.map { $0.width / (scale ?? 1) } ?? current.width).rounded(), (panel.map { $0.height / (scale ?? 1) } ?? current.height).rounded())
@@ -647,7 +710,8 @@ struct Model {
             mac.applyLate()
             note("stage released")
             if let want = expectHome[s.id], let now = mac.ax(s.id) {
-                check(WindowRestore.same(now, want) || WindowRestore.same(now, CGRect(origin: want.origin, size: Mac.takes(mac.wins[s.id]!.app, want.size))),
+                let app = mac.wins[s.id]!.app
+                check(want.contains { WindowRestore.same(now, $0) || WindowRestore.same(now, CGRect(origin: $0.origin, size: Mac.takes(app, $0.size))) },
                       "model seed \(seed): staged window \(s.id) went home to \(now), expected \(want); \(log.suffix(8))")
             }
         }
@@ -699,7 +763,7 @@ struct Model {
         if abs(p.x - w.frame.minX) <= 4, abs(p.y - w.frame.minY) <= 4 { p.y += 40 }
         w.frame.origin = p
         mac.wins[id] = w
-        if spells[id] != nil { spells[id]!.moved = true }
+        if spells[id] != nil { spells[id]!.moved = true; spells[id]!.movedSinceFit = true }
         if !mac.touched.contains(id) { personFrame[id] = w.frame }
         log.append("person moved \(id) to \(p)")
     }
@@ -715,10 +779,20 @@ struct Model {
             if WindowRestore.same(s, r.set.size) || WindowRestore.same(s, r.asked) { return }
         }
         if WindowRestore.same(s, w.frame.size) { return }
-        w.frame.size = s
+        // From the bottom-right corner (the top-left kept), the left edge (the right kept), the top (the
+        // bottom kept), the top-left corner, or with Option held (the middle kept).
+        let was = w.frame
+        switch side.int(5) {
+        case 0: w.frame.size = s
+        case 1: w.frame = R(was.maxX - s.width, was.minY, s.width, s.height)
+        case 2: w.frame = R(was.minX, was.maxY - s.height, s.width, s.height)
+        case 3: w.frame = R(was.maxX - s.width, was.maxY - s.height, s.width, s.height)
+        default: w.frame = R((was.midX - s.width / 2).rounded(), (was.midY - s.height / 2).rounded(), s.width, s.height)
+        }
+        if w.frame.origin != was.origin { note("person resized from an edge"); spells[id]?.fromAnEdgeSinceFit = true }
         w.pendingSize = nil
         mac.wins[id] = w
-        if spells[id] != nil { spells[id]!.resizedSinceFit = true }
+        if spells[id] != nil { spells[id]!.resizedSinceFit = true; spells[id]!.resizesSinceFit += 1 }
         if !mac.touched.contains(id) { personFrame[id] = w.frame }
         log.append("person resized \(id) to \(s)")
     }
@@ -822,7 +896,8 @@ for n in 0..<sessions {
 }
 
 // Every transition the issue names, and every outcome, came up.
-let needed = ["first fit", "re-fit", "fit refused", "fit: full screen", "fit: no answer", "read-back failed", "stop: switch", "stop: desktop", "stop: none", "stop: quit", "stop: gone", "decision: whole", "decision: moved", "decision: resized", "decision: full screen", "decision: home", "decision: settle",
+let needed = ["first fit", "re-fit", "fit refused", "fit: full screen", "fit: no answer", "read-back failed", "person resized from an edge",
+              "compound changes between fits", "re-fit after a resize from an edge", "stop: switch", "stop: desktop", "stop: none", "stop: quit", "stop: gone", "decision: whole", "decision: moved", "decision: resized", "decision: full screen", "decision: home", "decision: settle",
               "staged: with a home", "staged: as found", "stage released", "poll restart"]
 for k in needed { check((globalSeen[k] ?? 0) > 0, "model: never came up: \(k)") }
 print("window-restore: the model, \(sessions) sessions: " + needed.map { "\($0) \(globalSeen[$0] ?? 0)" }.joined(separator: ", "))
