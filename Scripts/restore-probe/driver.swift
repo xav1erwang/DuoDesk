@@ -283,6 +283,36 @@ final class Probe {
             oa.end(); ob.end()
         }
 
+        print("13. An app that stops answering once its window is matched (SIGSTOP), during a fit: the size goes unanswered and is recorded all the same; the app takes it, or not, once it runs again (SIGCONT), and the stop puts the window back")
+        if let (o, w) = await open("unanswered", S0) {
+            if let e = sizer.element(for: w) {
+                AXUIElementSetMessagingTimeout(e, 1.0)          // as WindowSizer.resize sets it
+                let p = WindowSizer.Placement(windowID: w.windowID, pid: o.pid, element: e, originalFrame: .null,
+                                              appName: w.owningApplication?.applicationName ?? "?", title: w.title ?? "")
+                var windows = WindowSizer.AXWindows(sizer: sizer)
+                kill(o.pid, SIGSTOP)
+                let t0 = Date()
+                let result = WindowRestore.fit(p, to: pad, fallback: live(w.windowID) ?? S0, on: &windows)
+                let took = Date().timeIntervalSince(t0)
+                kill(o.pid, SIGCONT)
+                print(String(format: "  fit: \(result), in %.2f s", took))
+                if case .fitted(let before, let after, true) = result {
+                    tally(true, "the size went unanswered and was recorded")
+                    ledger.fitted(w.windowID, handle: p.homed(at: before), before: before, after: after, asked: pad)
+                } else {
+                    tally(false, "the size went unanswered and was recorded")
+                }
+                try? await Task.sleep(for: .milliseconds(800))
+                let now = live(w.windowID)
+                print("  after SIGCONT \(fmt(now)): the app \(now.map { WindowRestore.same($0.size, pad) } == true ? "took the size late" : "did not take the size")")
+                for l in stop(keeping: nil) { print("  " + l) }; await settle()
+                expect("after", live(w.windowID), S0)
+            } else {
+                tally(false, "unanswered: no Accessibility element")
+            }
+            o.end()
+        }
+
         tally(frontApp() == front, "the front app never changed (\(front))")
         print("restore probe: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)

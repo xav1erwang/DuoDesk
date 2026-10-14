@@ -5,8 +5,9 @@
 # after: a stop (its whole frame back), a rotation's re-fit, moved on the Mac (its own size where it
 # is), moved then re-fitted, resized on the Mac (left alone), an app's minimum, a window that closes, a
 # fit's nudge undone, a window that cannot be resized (its nudge put back at once), an app that does not
-# answer (SIGSTOP: about a second, no writes), the virtual display's way home (worked out only), and two
-# windows (a pick, then the last device leaving).
+# answer (SIGSTOP: about a second, no writes), the virtual display's way home (worked out only), two
+# windows (a pick, then the last device leaving), and an app that stops answering during a fit (its size
+# unanswered and recorded, taken once it runs again, then put back).
 # usage: Scripts/restore-probe/run.sh
 # Builds under .build/restore-probe/: the window's app (owner.swift in a bundle of its own,
 # me.saffer.sill.restoreprobe, never activated) and the driver (driver.swift with the worktree's

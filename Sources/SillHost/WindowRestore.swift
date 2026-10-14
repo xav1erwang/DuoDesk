@@ -123,9 +123,12 @@ enum WindowRestore {
     /// What a write to a window's position or size came to.
     enum Write: Equatable {
         case done
-        /// Accessibility's error: the app said no (a window that cannot be resized answers -25200), did
-        /// not answer in time, or the window is gone.
+        /// Accessibility's error: the app said no (a window that cannot be resized answers -25200), or
+        /// the window is gone.
         case refused(Int32)
+        /// No answer within the element's timeout (Accessibility's cannotComplete): a busy app may still
+        /// apply it once it gets to it.
+        case timedOut
     }
 
     /// The reads and writes a fit and a window's way back make: Accessibility on the Mac
@@ -157,10 +160,12 @@ enum WindowRestore {
         case fullScreen
         /// The app refused the size (Accessibility's error); a nudge made for it was put back.
         case refused(Int32)
-        /// The size went through but its read-back did not: nothing recorded.
-        case unread
-        /// Sill resized it from `before` and it took `after` (Accessibility's frame, read back).
-        case fitted(before: CGRect, after: CGRect)
+        /// Sill resized it from `before` and it took `after`: Accessibility's frame, read back. When the
+        /// size went through but its read-back did not, the frame it had where Sill put it, as a
+        /// read-back that has not shown the size yet would be (the record's `asked` covers the size, as
+        /// for an app that applies a size after answering). `timedOut`: the size went unanswered, the
+        /// nudge was put back and `after` is `before`; a busy app may still take it.
+        case fitted(before: CGRect, after: CGRect, timedOut: Bool)
     }
 
     /// One fit, as WindowSizer.resize makes it once it has matched the window's element: never of a
@@ -174,24 +179,33 @@ enum WindowRestore {
         let before = read ?? fallback
         let area = a.visibleArea(around: before)
         var nudgedFrom: CGPoint?
+        var at = before.origin
         if let from = read?.origin, let area {
             let to = keep(CGRect(origin: from, size: size), in: area)
             // A window that will not move may still resize.
-            if to != from, a.setPosition(w, to) == .done { nudgedFrom = from }
+            if to != from, a.setPosition(w, to) == .done { nudgedFrom = from; at = to }
         }
-        if case .refused(let code) = a.setSize(w, size) {
+        switch a.setSize(w, size) {
+        case .done:
+            break
+        case .refused(let code):
             // The move was for the new size: without it, the window goes back where it was.
             if let nudgedFrom { _ = a.setPosition(w, nudgedFrom) }
             return .refused(code)
+        case .timedOut:
+            // A busy app may take the size once it gets to it: recorded as asked, from where it was.
+            if let nudgedFrom { _ = a.setPosition(w, nudgedFrom) }
+            return .fitted(before: before, after: before, timedOut: true)
         }
-        guard let took = a.frame(w) else { return .unread }
+        // The write went through, the read-back did not: as if it had not shown the size yet.
+        guard let took = a.frame(w) else { return .fitted(before: before, after: CGRect(origin: at, size: before.size), timedOut: false) }
         if let area {
             let to = keep(took, in: area)
             if to != took.origin, a.setPosition(w, to) == .done {
-                return .fitted(before: before, after: a.frame(w) ?? CGRect(origin: to, size: took.size))
+                return .fitted(before: before, after: a.frame(w) ?? CGRect(origin: to, size: took.size), timedOut: false)
             }
         }
-        return .fitted(before: before, after: took)
+        return .fitted(before: before, after: took, timedOut: false)
     }
 
     /// What became of one window that stopped streaming (`stop`), for the coordinator's line and stats.

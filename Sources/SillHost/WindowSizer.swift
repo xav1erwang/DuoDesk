@@ -32,9 +32,10 @@ final class WindowSizer {
     /// Resizes `window` to `size` in Mac points (top-left anchored), nudging it back onto its
     /// display if the new size would hang off the edge (WindowRestore.fit, the sequence). Returns what
     /// it did (`Fit`: the size the app actually took is `after.size`; apps enforce minimums and some
-    /// snap to a grid), or nil if Accessibility is off, the window cannot be found through AX, it is
-    /// in full screen (left alone: nothing written, nothing to record), or the app refused the size;
-    /// a nudge made for a refused size is put back at once.
+    /// snap to a grid; for a size that went unanswered, the frame it had, in case it takes the size
+    /// later), or nil if Accessibility is off, the window cannot be found through AX, it is in full
+    /// screen (left alone: nothing written, nothing to record), or the app refused the size; a nudge
+    /// made for a refused or unanswered size is put back at once.
     func resize(window: SCWindow, to size: CGSize) -> Fit? {
         guard AXIsProcessTrusted() else {
             if !warnedUntrusted {
@@ -63,9 +64,8 @@ final class WindowSizer {
         case .refused(let code):
             print("Window sizing: AX refused the size (error \(code)).")
             return nil
-        case .unread:
-            return nil
-        case .fitted(let before, let after):
+        case .fitted(let before, let after, let timedOut):
+            if timedOut { print("Window sizing: \(windows.name(p)) did not answer the size in time; if it takes it later, it still goes back.") }
             return Fit(placement: p.homed(at: before), after: after)
         }
     }
@@ -84,9 +84,14 @@ final class WindowSizer {
         func name(_ p: Placement) -> String { WindowRestore.name(app: p.appName, title: p.title) }
     }
 
-    /// An Accessibility write's answer as WindowRestore takes it.
+    /// An Accessibility write's answer as WindowRestore takes it: cannotComplete is what a messaging
+    /// timeout returns (a busy app, which may still apply the write).
     private static func write(_ e: AXError) -> WindowRestore.Write {
-        e == .success ? .done : .refused(e.rawValue)
+        switch e {
+        case .success: return .done
+        case .cannotComplete: return .timedOut
+        default: return .refused(e.rawValue)
+        }
     }
 
     // MARK: Placing a window on the virtual display (--virtual-display)

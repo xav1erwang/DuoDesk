@@ -206,8 +206,14 @@ struct One: WindowRestore.Access {
     var sizeAnswer: WindowRestore.Write = .done
     var minimum = CGSize.zero             // the app's minimum: what it takes for a smaller size
     var putAnswer = true
+    var readBackFails = false             // the read right after a size write that went through gets no answer
+    var failNext = false
     var calls: [String] = []
-    mutating func frame(_ w: Int) -> CGRect? { calls.append("frame"); return at }
+    mutating func frame(_ w: Int) -> CGRect? {
+        calls.append("frame")
+        if failNext { failNext = false; return nil }
+        return at
+    }
     mutating func isFullScreen(_ w: Int) -> Bool { calls.append("fullScreen"); return full }
     mutating func isListed(_ w: Int) -> Bool { calls.append("listed"); return listed }
     mutating func visibleArea(around r: CGRect) -> CGRect? { screen }
@@ -218,7 +224,10 @@ struct One: WindowRestore.Access {
     }
     mutating func setSize(_ w: Int, _ s: CGSize) -> WindowRestore.Write {
         calls.append("size \(Int(s.width))×\(Int(s.height))")
-        if sizeAnswer == .done { at?.size = CGSize(width: max(s.width, minimum.width), height: max(s.height, minimum.height)) }
+        if sizeAnswer == .done {
+            at?.size = CGSize(width: max(s.width, minimum.width), height: max(s.height, minimum.height))
+            failNext = readBackFails
+        }
         return sizeAnswer
     }
     mutating func put(_ w: Int, at f: CGRect) -> Bool {
@@ -236,11 +245,11 @@ do {
     eq(a.calls, ["fullScreen"], "fit: full screen, nothing written")
     // A plain fit: no nudge, the size, the read-back.
     a = One(at: O)
-    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: O, after: Sf), "fit: plain")
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: O, after: Sf, timedOut: false), "fit: plain")
     eq(a.calls, ["fullScreen", "frame", "size 800×500", "frame"], "fit: plain, its calls")
     // Near the right edge: nudged left first so the asked frame stays on the display.
     a = One(at: R(900, 100, 600, 400))
-    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(712, 100, 800, 500)),
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(712, 100, 800, 500), timedOut: false),
        "fit: nudged onto the display")
     eq(a.calls, ["fullScreen", "frame", "position 712,100", "size 800×500", "frame"], "fit: the nudge before the size")
     // The size refused after the nudge: the nudge put back, nothing recorded.
@@ -254,24 +263,48 @@ do {
     eq(a.calls, ["fullScreen", "frame", "size 800×500"], "fit: refused in place, no move")
     // A window that will not move still resizes, and the second nudge, refused too, leaves it where it took the size.
     a = One(at: R(900, 100, 600, 400), positionAnswer: .refused(-25200))
-    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(900, 100, 800, 500)),
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(900, 100, 800, 500), timedOut: false),
        "fit: a window that will not move")
     eq(a.calls, ["fullScreen", "frame", "position 712,100", "size 800×500", "frame", "position 712,100"], "fit: both nudges tried")
     // An app's minimum above the size asked: what it took, kept on the display by a second nudge.
     a = One(at: R(700, 100, 600, 400), minimum: S(900, 600))
-    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(700, 100, 600, 400), after: R(612, 100, 900, 600)),
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(700, 100, 600, 400), after: R(612, 100, 900, 600), timedOut: false),
        "fit: a minimum, nudged after")
     eq(a.calls, ["fullScreen", "frame", "size 800×500", "frame", "position 612,100", "frame"], "fit: the second nudge reads the frame again")
     // A minimum above the size asked, with room for it: what the app took, where it is.
     a = One(at: O, minimum: S(900, 600))
-    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: O, after: R(100, 100, 900, 600)), "fit: a minimum, in place")
-    // No frame from Accessibility: the window server's frame is the one before, and nothing to nudge from.
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: O, after: R(100, 100, 900, 600), timedOut: false), "fit: a minimum, in place")
+    // No frame from Accessibility: the window server's frame is the one before, and nothing to nudge
+    // from; the size went through, unseen: recorded as a read-back that has not shown it yet.
     a = One(at: nil)
-    eq(WindowRestore.fit(1, to: Sz, fallback: O, on: &a), .unread, "fit: no frame, before or after")
+    eq(WindowRestore.fit(1, to: Sz, fallback: O, on: &a), .fitted(before: O, after: O, timedOut: false), "fit: no frame, before or after")
     eq(a.calls, ["fullScreen", "frame", "size 800×500", "frame"], "fit: no frame, no nudge")
+    // The size went through, its read-back did not: its old size where it was put (after the nudge).
+    a = One(at: R(900, 100, 600, 400), readBackFails: true)
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(712, 100, 600, 400), timedOut: false),
+       "fit: a read-back that fails: its old size, where it was put")
+    eq(a.calls, ["fullScreen", "frame", "position 712,100", "size 800×500", "frame"], "fit: a read-back that fails, no second nudge")
+    // Its record goes back whole whether the size showed by the stop or not, the nudge undone either way.
+    let unseen = WindowRestore.fitted(nil, before: R(900, 100, 600, 400), after: R(712, 100, 600, 400), asked: Sz)
+    eq(decide(unseen, R(712, 100, 800, 500)), .restore(R(900, 100, 600, 400), whole: true), "decide: an unseen size that showed: back whole")
+    eq(decide(unseen, R(712, 100, 600, 400)), .restore(R(900, 100, 600, 400), whole: true), "decide: an unseen size not yet shown: the nudge undone")
+    let unseenInPlace = WindowRestore.fitted(nil, before: O, after: O, asked: Sz)
+    eq(decide(unseenInPlace, O), .settle(O), "decide: an unseen size in place, not yet shown: settled")
+    // The size went unanswered: the nudge put back, the frame as it was, the size asked kept in the record.
+    a = One(at: R(900, 100, 600, 400), sizeAnswer: .timedOut)
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(900, 100, 600, 400), timedOut: true),
+       "fit: a size with no answer is recorded")
+    eq(a.calls, ["fullScreen", "frame", "position 712,100", "size 800×500", "position 900,100"], "fit: no answer: the nudge put back, no read-back")
+    a = One(at: O, sizeAnswer: .timedOut)
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: O, after: O, timedOut: true), "fit: no answer in place")
+    eq(a.calls, ["fullScreen", "frame", "size 800×500"], "fit: no answer in place, no move")
+    // Its record: the app takes the size later and goes back whole; or never, and its frame is written again.
+    let unanswered = WindowRestore.fitted(nil, before: O, after: O, asked: Sz)
+    eq(decide(unanswered, Sf), .restore(O, whole: true), "decide: a size that went unanswered and landed later goes back")
+    eq(decide(unanswered, O), .settle(O), "decide: a size that went unanswered and never landed: settled")
     // No display: no nudges.
     a = One(at: R(900, 100, 600, 400), screen: nil)
-    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(900, 100, 800, 500)),
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(900, 100, 800, 500), timedOut: false),
        "fit: no display, no nudge")
 
     // stop: the rule's decision, and the move it calls for through the window's own element.
@@ -358,7 +391,16 @@ struct RNG {
 /// How an app takes a size: its minimum, a grid it snaps down to, whether it applies a size only after
 /// answering the write (Accessibility then reads the old one until it does), and whether its window
 /// cannot be resized at all (it refuses the size, -25200, as the restore probe's step 9 measured).
-struct AppKind { var minSize: CGSize; var grid: CGFloat; var late: Bool; var fixed = false }
+struct AppKind {
+    var minSize: CGSize; var grid: CGFloat; var late: Bool; var fixed = false
+    /// Busy: a size write gets no answer in time (half of them); it lands at the next look, or (a
+    /// quarter of a fit's) never. Only apps that take any size asked are slow or flaky here: a size that
+    /// lands unseen, or a read-back that fails, is taken as the size asked, which an app that clamps or
+    /// snaps does not keep.
+    var slow = false
+    /// The read right after a size write that went through gets no answer (half the time).
+    var flaky = false
+}
 
 struct Win {
     var frame: CGRect
@@ -367,6 +409,7 @@ struct Win {
     var fullScreen = false
     var beforeFullScreen: CGRect = .zero
     var pendingSize: CGSize?
+    var failNextRead = false
 }
 
 /// The Mac: two displays, the windows, and Accessibility's view of them, answering the sequences'
@@ -380,6 +423,11 @@ struct Mac: WindowRestore.Access {
     /// How a window in a full-screen Space answers a move or a size, which nobody has measured: an
     /// error (-25200), or success while nothing changes. Each session takes one.
     var fullScreenWritesDone = false
+    /// For a slow or flaky app's answers, write by write.
+    var dice = RNG(s: 1)
+    /// Inside `put`: a slow app's size that goes unanswered lands at the next look all the same.
+    var putting = false
+    var readsFailed = 0
 
     /// WindowSizer.visibleArea: the display holding most of the rect (the first on a tie).
     static func area(around r: CGRect) -> CGRect {
@@ -403,9 +451,13 @@ struct Mac: WindowRestore.Access {
             if !w.closed { wins[id]!.frame.size = w.pendingSize! }
             wins[id]!.pendingSize = nil
         }
+        for id in wins.keys { wins[id]!.failNextRead = false }
     }
 
-    mutating func frame(_ id: CGWindowID) -> CGRect? { ax(id) }
+    mutating func frame(_ id: CGWindowID) -> CGRect? {
+        if wins[id]?.failNextRead == true { wins[id]!.failNextRead = false; readsFailed += 1; return nil }
+        return ax(id)
+    }
     mutating func isFullScreen(_ id: CGWindowID) -> Bool { wins[id]?.fullScreen ?? false }
     mutating func isListed(_ id: CGWindowID) -> Bool { ax(id) != nil }
     mutating func visibleArea(around r: CGRect) -> CGRect? { Mac.area(around: r) }
@@ -421,15 +473,28 @@ struct Mac: WindowRestore.Access {
         if w.fullScreen { return fullScreenWritesDone ? .done : .refused(-25200) }
         if w.app.fixed { return .refused(-25200) }
         let took = Self.takes(w.app, s)
-        if w.app.late { wins[id]!.pendingSize = took } else { wins[id]!.frame.size = took }
         touched.insert(id)
+        if w.app.slow, dice.chance(0.5) {
+            // Queued behind any earlier size: the last one wins when the app gets to them.
+            if putting || dice.chance(0.75) { wins[id]!.pendingSize = took }
+            return .timedOut
+        }
+        // Answered: whatever was queued before it has been taken, and this comes after.
+        if w.app.late { wins[id]!.pendingSize = took } else { wins[id]!.pendingSize = nil; wins[id]!.frame.size = took }
+        if w.app.flaky, dice.chance(0.5) { wins[id]!.failNextRead = true }
         return .done
     }
-    /// WindowSizer.restore: position, size, position; a window gone is nothing to move.
+    /// WindowSizer.restore: position, size, position, and once more while the window is listed when an
+    /// answer did not come in time; a window gone is nothing to move.
     mutating func put(_ id: CGWindowID, at f: CGRect) -> Bool {
         guard ax(id) != nil else { return true }
-        let a = setPosition(id, f.origin), b = setSize(id, f.size), c = setPosition(id, f.origin)
-        return a == .done && b == .done && c == .done
+        putting = true
+        defer { putting = false }
+        var answers = [setPosition(id, f.origin), setSize(id, f.size), setPosition(id, f.origin)]
+        if answers.contains(.timedOut), isListed(id) {
+            answers = [setPosition(id, f.origin), setSize(id, f.size), setPosition(id, f.origin)]
+        }
+        return answers.allSatisfy { $0 == .done }
     }
     func name(_ id: CGWindowID) -> String { "App\(id) — Doc\(id)" }
 }
@@ -466,6 +531,7 @@ struct Model {
         rng = RNG(s: seed)
         side = RNG(s: seed ^ 0x5EED_5EED)
         mac.fullScreenWritesDone = side.chance(0.5)
+        mac.dice = RNG(s: side.next())
         let kinds = [AppKind(minSize: S(200, 150), grid: 1, late: false), AppKind(minSize: S(700, 450), grid: 1, late: false),
                      AppKind(minSize: S(300, 200), grid: 7, late: false), AppKind(minSize: S(200, 150), grid: 1, late: true)]
         for id in CGWindowID(1)...CGWindowID(4) {
@@ -475,6 +541,10 @@ struct Model {
             let origin = P(a.minX + rng.range(0, Int(max(0, a.width - size.width))), a.minY + rng.range(0, Int(max(0, a.height - size.height))))
             var kind = app
             if side.chance(0.1) { kind.fixed = true }
+            if kind.minSize.width <= 200, kind.grid == 1 {
+                if side.chance(0.25) { kind.slow = true }
+                if side.chance(0.25) { kind.flaky = true }
+            }
             mac.wins[id] = Win(frame: CGRect(origin: origin, size: size), app: kind)
             personFrame[id] = mac.wins[id]!.frame
         }
@@ -488,14 +558,17 @@ struct Model {
         let target = S((panel.width / scale).rounded(), (panel.height / scale).rounded())
         guard let current = mac.wins[id], !current.closed else { return }
         if abs(current.frame.width - target.width) <= 2, abs(current.frame.height - target.height) <= 2 { return }
+        let readsFailed = mac.readsFailed
+        defer { if mac.readsFailed > readsFailed { note("read-back failed") } }
         switch WindowRestore.fit(id, to: target, fallback: current.frame, on: &mac) {
         case .fullScreen:
             note("fit: full screen")
-        case .refused, .unread:
+        case .refused:
             note("fit refused")
             // Refused, with any nudge made for it put back: where it was.
             check(mac.ax(id) == current.frame, "model seed \(seed): window \(id) moved by a refused fit, from \(current.frame) to \(String(describing: mac.ax(id)))")
-        case .fitted(let before, let after):
+        case .fitted(let before, let after, let timedOut):
+            if timedOut { note("fit: no answer") }
             let had = ledger.record(id) != nil
             ledger.fitted(id, handle: id, before: before, after: after, asked: target)
             if had { spells[id]?.resizedSinceFit = false; note("re-fit") } else { spells[id] = Spell(original: before); note("first fit") }
@@ -749,7 +822,7 @@ for n in 0..<sessions {
 }
 
 // Every transition the issue names, and every outcome, came up.
-let needed = ["first fit", "re-fit", "fit refused", "fit: full screen", "stop: switch", "stop: desktop", "stop: none", "stop: quit", "stop: gone", "decision: whole", "decision: moved", "decision: resized", "decision: full screen", "decision: home", "decision: settle",
+let needed = ["first fit", "re-fit", "fit refused", "fit: full screen", "fit: no answer", "read-back failed", "stop: switch", "stop: desktop", "stop: none", "stop: quit", "stop: gone", "decision: whole", "decision: moved", "decision: resized", "decision: full screen", "decision: home", "decision: settle",
               "staged: with a home", "staged: as found", "stage released", "poll restart"]
 for k in needed { check((globalSeen[k] ?? 0) > 0, "model: never came up: \(k)") }
 print("window-restore: the model, \(sessions) sessions: " + needed.map { "\($0) \(globalSeen[$0] ?? 0)" }.joined(separator: ", "))
