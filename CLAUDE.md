@@ -53,12 +53,13 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   notch was never sent; the rule asked with no view in a window. Learned: every simulator's GameController
   counts its own keyboard, UIKit counts one once keys arrive, iPadOS 27 refuses programmatic turns, and a
   pan gets no momentum events.
-- **Untested, for Noah (the plan's 1–10, on the iPad with the Magic Keyboard, a Debug build):** which
+- **Untested, for Noah (the plan's 1–11, on the iPad with the Magic Keyboard, a Debug build):** which
   channel brings Esc (`hwkey:`; `-SillKeyProbe 1`), Esc in iTerm2's vim, zsh's vi mode and Zed, and
   Control-[; typing right after connecting and after a turn; ⌘W closing the Mac's window, not Sill's;
   nothing drawn, and nothing popping up when the keyboard is taken away; the Keyboard button's two states;
   Esc over Settings, the tour and pairing; the tour on a fresh install with the keyboard attached;
-  two-finger scrolling (any double coast) and a mouse's wheel; VoiceOver.
+  two-finger scrolling (any double coast) and a mouse's wheel; VoiceOver; an input method's candidates
+  (none drawn during the hold: the Keyboard button brings iPadOS's views back).
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then

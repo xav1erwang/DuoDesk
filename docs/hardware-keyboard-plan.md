@@ -236,6 +236,9 @@ this branch (the console's `hwkey:` and `keyboard:` lines) against Sill.app buil
    the first ends), and the scroll stops when two fingers touch again. A mouse's wheel (a USB or Bluetooth
    mouse) scrolls in steps, one notch at a time included. Over the portrait trackpad nothing scrolls.
 10. **VoiceOver** with the keyboard attached: nothing reads differently (the input view is not an element).
+11. **An input method** (Japanese or Chinese on the Magic Keyboard, if used): during the hold the input view
+    is empty, so iPadOS's candidate bar may not show; the Keyboard button then gives iPadOS's own keyboard
+    views back. Note whether typing in one works either way.
 
 ## Results
 
