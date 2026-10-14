@@ -77,9 +77,11 @@ Changes apply at once; a change to a streaming setting restarts the current
 stream for a moment. Opening Sill.app while it runs (Finder,
 Spotlight) shows Settings, which is also where Quit Sill is when the menu bar
 has no room for the icon. Settings is as tall as its tab needs, up to its
-screen less the menu bar, the Dock and 12 pt above and below; a taller tab
-scrolls (issue #59, docs/settings-window-plan.md: one constraint in
-`SettingsWindowController`, its arithmetic in `SettingsWindowFit`, checked by
+screen's height between the menu bar and the Dock less 24 pt; a taller tab
+scrolls, and a window Sill's own resizing leaves partly off the screen is
+moved back on, 12 pt clear of the edge it ran past (issue #59,
+docs/settings-window-plan.md: one constraint in `SettingsWindowController`,
+its arithmetic in `SettingsWindowFit`, checked by
 `Tests/checks/settings-window`).
 
 Quality is the stream's bitrate per 60 fps (a 120 fps stream gets twice as

@@ -109,6 +109,14 @@ placed at its old height and then shortened from the bottom, it would keep no ma
 the first runs: its top at the top of the visible frame). `show` lays the window out after
 `bringForward` and places it then.
 
+AppKit places the window too, and `placed` keeps what it does whenever the window fits: a saved
+frame sets where the window's top-left goes (its pane, not the saved frame, sets its height), and
+a window that ran off the bottom of the screen while it was hidden is ordered in with its bottom at
+the screen's bottom (seen with the Dock hidden). A window inside the visible frame is never moved,
+so the 12 pt margin is kept only on a side Sill moved the window away from: a capped window can
+sit right under the menu bar with all 24 pt over the Dock, or on the screen's bottom with the 24 pt
+above it (Results).
+
 ### Hooks (TEST ONLY; the bare SillMenuBar binary)
 
 - `-SillSettingsAfter '<s> <tab>[; <s> <tab> …]'`: opens Settings on that tab s seconds after
@@ -131,8 +139,12 @@ Sill.app itself ignores all three with one line each, as it does every `-Sill…
 
 ## Open questions, with the default taken
 
-1. **The margin.** 12 pt above and below a capped window. Alternatives: none (a capped window
-   fills the visible frame, as the green button's zoom does), or 20.
+1. **The margin.** The cap leaves 12 pt for above and below the window, 24 in all, and a window
+   Sill moves keeps 12 pt from the edge it is moved away from; where AppKit or the user put a
+   window that fits, it stays, even flush with the menu bar or the screen's bottom (The move).
+   Alternatives: none (a capped window fills the visible frame, as the green button's zoom does),
+   or 20; or also moving a window that lies inside but within 12 pt of an edge (not taken: it
+   would move a window the user put there at every tab click).
 2. **Which tabs.** Every tab gets the cap, not only Remote Access: General overflows a 14-inch with
    larger text too.
 3. **Resizable.** The window stays fixed in size; the cap decides its height, and the pane scrolls.
@@ -229,14 +241,16 @@ and macOS 14 and 15.
 With Sill.app from this branch (`Scripts/make-app.sh --install --open`) on the 14-inch MacBook:
 - **U1.** System Settings › Displays at the scaling at the far left (larger text), and the Dock
   showing (System Settings › Desktop & Dock, "Automatically hide and show the Dock" off). Open
-  Settings (⌘,) and click every tab: each window fits between the menu bar and the Dock with room
-  above and below; General scrolls to Quit Sill; Remote Access, with Remote Access and "Allow
-  connections from the internet" on, scrolls to Sleep. At the default scaling Remote Access with
-  the internet switch still scrolls a little, and the others show whole.
+  Settings (⌘,) and click every tab: each window fits between the menu bar and the Dock (12 pt
+  clear on a side Sill moved it away from; a window that fit where macOS put it stays there, so it
+  can sit right under the menu bar with 24 pt over the Dock); General scrolls to Quit Sill; Remote
+  Access, with Remote Access and "Allow connections from the internet" on, scrolls to Sleep. At
+  the default scaling Remote Access with the internet switch still scrolls a little, and the others
+  show whole.
 - **U2.** With Settings open on Remote Access (the internet switch on), change the scaling, then
-  the Dock's size, then hide and show it: Settings shortens or grows to fit each time, its bottom
-  12 pt over the Dock. If a Dock change shows only at the next tab click, note it (macOS would then
-  not announce the Dock's changes as a change of screens).
+  the Dock's size, then hide and show it: Settings shortens or grows to fit each time and stays
+  between the menu bar and the Dock. If a Dock change shows only at the next tab click, note it
+  (macOS would then not announce the Dock's changes as a change of screens).
 - **U3.** An external display: drag Settings from the larger screen to the smaller one; it
   shortens on the way; let go with it low on the smaller screen: once the button is up it moves up
   until its bottom clears the Dock. Drag it back: it grows to its pane's own height.

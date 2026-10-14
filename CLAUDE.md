@@ -28,9 +28,12 @@ nothing on the iOS side, the CLI untouched.
   below, whole points, at least 200) at priority 750; the Forms scroll. Set at show, on every tab
   switch (`SettingsTabController.onSelect`), on `NSApplication.didChangeScreenParametersNotification`
   and `windowDidChangeScreen`; a new cap lays a window on screen out at once. `place()` (after
-  `windowDidResize` and `refit`) moves the window back inside the visible frame, 12 pt over the
-  Dock, when Sill's own changes leave it partly outside; never sideways, never while a mouse button
-  is down (then once all are up, `placeOnRelease`). Sill's virtual display is never the screen
+  `windowDidResize` and `refit`) moves the window back inside the visible frame, 12 pt clear of the
+  edge it ran past, when Sill's own changes leave it partly outside; never sideways, never while a
+  mouse button is down (then once all are up, `placeOnRelease`), and never a window that fits where
+  it is: a saved frame sets only the window's top-left, and AppKit orders a window that ran off the
+  bottom while hidden back in at the screen's bottom, so a capped window can sit flush with the menu
+  bar or the screen's bottom, the 24 pt on the other side. Sill's virtual display is never the screen
   (`SettingsWindowFit.screenIndex`). Rejected in the probe: an NSHostingController subclass clamping
   preferredContentSize (SwiftUI never calls its setter) and a SwiftUI `.frame(maxHeight:)` on the
   pane (lowered while a pane showed, it left the window tall: the probe's 501 constraint did not
