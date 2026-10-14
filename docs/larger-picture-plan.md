@@ -15,9 +15,9 @@ fixed 16:10 pane at the top (PhonePortraitLayout.swift: `picture`), 30 % of an 1
 screen: 424×265 pt. Under it come row 1 (Apps, Aa, Keyboard, Desktop, Settings), the thumbnails,
 the key row and the trackpad, which takes the rest: 412×389 on the Pro Max. The rows take a fixed
 240 pt. Shrinking them buys 25 to 30 pt. The real limit is the software keyboard: it comes up over
-the bottom of the screen and must never cover the key row (the plan's keyboard table: 320 pt on the
-18 Pro Max, 301 on the 18 Pro and the 17e, 216 on the SE). Below the key row there is only the
-trackpad, which the keyboard covers anyway.
+the bottom of the screen and must never cover the key row (the portrait plan's keyboard table: 320
+pt on the 18 Pro Max, 301 on the 18 Pro and the 17e, 216 on the SE, which measures 233: Results).
+Below the key row there is only the trackpad, which the keyboard covers anyway.
 
 ## Decision
 
