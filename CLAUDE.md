@@ -9,7 +9,7 @@ Formerly winstream; the folder still carries the old name.
 ## Current step
 
 **A hardware keyboard and trackpad on the device (2026-10-14, branch `hardware-keyboard` from main at
-985a733, PR #PRNUM; issues #67 and #68; the plan, its ten open questions with the defaults taken, and the
+985a733, PR #80; issues #67 and #68; the plan, its ten open questions with the defaults taken, and the
 results are in `docs/hardware-keyboard-plan.md`).** Noah: "Work on the keyboard and trackpad change (#67
 and #68 together)". Device only: no wire change, nothing on the Mac changed.
 - Esc (#67: an iPad Pro M4's Magic Keyboard sent none, 22 `in.text` and no `in.key`):

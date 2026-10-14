@@ -1,7 +1,7 @@
 # A hardware keyboard and trackpad on the device — the plan
 
 2026-10-14. Branch `hardware-keyboard` (worktree `/Users/noah/Downloads/winstream-hardware-keys`)
-from origin/main at 985a733; line numbers are at 985a733. Issues #67 and #68. Device app only; no
+from origin/main at 985a733, PR #80; line numbers are at 985a733. Issues #67 and #68. Device app only; no
 wire change, nothing on the Mac changes. The triage that led here, with file:line evidence for each
 cause, is `~/Downloads/sill-handoff/triage/2026-10-13-open-items.md`.
 
@@ -341,5 +341,5 @@ device; what iPadOS draws for the person's own keyboard with a Magic Keyboard; C
 ## Progress
 
 - 2026-10-14: the plan (c641950); the rule, Esc's key command, the scroll pans and their checks, with the
-  lone notch's and the no-view fixes the simulator runs found (f0ca916); the key rig, the Settings
-  panel's DEBUG Esc line, the docs; the pull request.
+  lone notch's and the no-view fixes the simulator runs found (f0ca916); the key rig and EscapeKey's
+  DEBUG line (08635bf); the docs (73fcf77, 2f266ff); PR #80.
