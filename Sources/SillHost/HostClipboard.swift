@@ -22,9 +22,10 @@ import StreamProtocol
 ///
 /// Never logs what was copied. Stats: `clip.sent` (messages sent), `clip.recv` (texts taken).
 ///
-/// Threading: main actor. The look is a Task.sleep loop, not a RunLoop timer, which the CLI's
-/// dispatchMain never runs; NSPasteboard is used from whichever thread drains the main queue there,
-/// one call at a time.
+/// Threading: main actor for the subscribers and the lines; the pasteboard itself is read and written
+/// on a queue of its own (`Board`), one call at a time, so a slow read (an app asked for text it only
+/// promised, which can take a while) never holds up the main actor, where devices' input is handled.
+/// The look is a Task.sleep loop, not a RunLoop timer, which the CLI's dispatchMain never runs.
 @MainActor
 final class HostClipboard {
     /// Share clipboard with devices.
@@ -33,9 +34,8 @@ final class HostClipboard {
     var advertised: Int? { enabled ? ClipboardPolicy.generation : nil }
 
     private let server: StreamServer
-    private let launchID: String
-    /// `NSPasteboard.general`; a synthetic host's own (`pasteboardName`).
-    private let board: NSPasteboard
+    /// The pasteboard, on its own queue: `NSPasteboard.general`, or a synthetic host's own.
+    private let board: Board
     /// A synthetic host's own pasteboard: its name, said at its first subscription. Nil for the Mac's.
     private let testBoardName: String?
     private var saidTestBoard = false
@@ -48,9 +48,6 @@ final class HostClipboard {
     private var subscribers: [ObjectIdentifier: (connection: NWConnection, who: String)] = [:]
     /// In the order they subscribed, for a stable order of sends.
     private var order: [ObjectIdentifier] = []
-    /// The change count the look has dealt with, and the one after this host's own last write.
-    private var seen = 0
-    private var ownChangeCount: Int?
     private var look: Task<Void, Never>?
     /// Each connection's kind 32s of the last second (ClipboardPolicy.admits).
     private var arrivals: [ObjectIdentifier: [Double]] = [:]
@@ -66,15 +63,14 @@ final class HostClipboard {
          environment env: [String: String] = ProcessInfo.processInfo.environment) {
         self.server = server
         self.enabled = enabled
-        self.launchID = launchID
         var lines: [String] = []
         if synthetic {
             let named = env["SILL_TEST_PASTEBOARD"].flatMap { $0.isEmpty ? nil : $0 }
             let name = named ?? "me.saffer.sill.test.\(getpid())"
-            board = NSPasteboard(name: NSPasteboard.Name(name))
+            board = Board(name: name, launchID: launchID)
             testBoardName = name
         } else {
-            board = .general
+            board = Board(name: nil, launchID: launchID)
             testBoardName = nil
             if let named = env["SILL_TEST_PASTEBOARD"], !named.isEmpty {
                 lines.append("SILL_TEST_PASTEBOARD ignored: only a --synthetic host takes it.")
@@ -127,7 +123,7 @@ final class HostClipboard {
             subscribe(connection, who: who)
         case .set(let text):
             subscribe(connection, who: who)
-            write(text)
+            board.write(text)
             Stats.shared.bump("clip.recv")
             let others = ClipboardPolicy.forward(to: order, from: id).compactMap { subscribers[$0]?.connection }
             if testLog { print("Test clipboard: \(text.utf8.count) bytes from \(who) set on the pasteboard, sent to \(others.count) other device\(others.count == 1 ? "" : "s").") }
@@ -168,12 +164,15 @@ final class HostClipboard {
 
     private func startLooking() {
         guard look == nil else { return }
-        seen = board.changeCount       // what is on the clipboard now is never sent
+        board.takeAsSeen()             // what is on the clipboard now is never sent
         look = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(ClipboardPolicy.lookInterval))
+                guard !Task.isCancelled, let board = self?.board else { return }
+                // On the board's queue; the main actor waits for nothing meanwhile.
+                guard let (count, decision) = await board.look() else { continue }
                 guard !Task.isCancelled, let self else { return }
-                self.lookAtBoard()
+                self.lookedAt(count, decision)
             }
         }
     }
@@ -183,18 +182,8 @@ final class HostClipboard {
         look = nil
     }
 
-    /// One look: nothing unless the change count moved; then ClipboardPolicy decides from the items'
-    /// types, reading the marker and the text only when it needs them.
-    private func lookAtBoard() {
-        let count = board.changeCount
-        guard count != seen else { return }
-        seen = count
-        let items = board.pasteboardItems ?? []
-        let types = items.flatMap { $0.types.map(\.rawValue) }
-        let own = NSPasteboard.PasteboardType(ClipboardPolicy.ownType)
-        let decision = ClipboardPolicy.hostDecides(types: types, changeCount: count, ownChangeCount: ownChangeCount, launchID: launchID,
-                                                   ownMarker: { [board] in board.string(forType: own) },
-                                                   text: { [board] in board.string(forType: .string) })
+    /// A change the board looked at: to every subscriber, when ClipboardPolicy took it.
+    private func lookedAt(_ count: Int, _ decision: ClipboardPolicy.HostDecision) {
         switch decision {
         case .send(let payload):
             let to = order.compactMap { subscribers[$0]?.connection }
@@ -205,15 +194,67 @@ final class HostClipboard {
         }
     }
 
-    /// A device's text, for this Mac only, marked as this launch's, its change count kept.
-    private func write(_ text: String) {
-        board.prepareForNewContents(with: .currentHostOnly)
-        let item = NSPasteboardItem()
-        item.setString(text, forType: .string)
-        item.setString(launchID, forType: NSPasteboard.PasteboardType(ClipboardPolicy.ownType))
-        board.writeObjects([item])
-        ownChangeCount = board.changeCount
-        seen = board.changeCount
+    /// The pasteboard, read and written on `queue` alone, in order: a write a device asked for is
+    /// done before any later look, so the look always finds it as this host's own (its change count
+    /// taken as seen, and its marker naming this launch besides).
+    private final class Board: @unchecked Sendable {
+        private let queue = DispatchQueue(label: "sill.clipboard", qos: .userInitiated)
+        private let board: NSPasteboard
+        private let launchID: String
+        // On `queue`: the change count the looks have dealt with, the one after this host's own last
+        // write, and the first look at a change whose pasteboard was still empty (ClipboardPolicy.hostWaits).
+        private var seen = 0
+        private var ownChangeCount: Int?
+        private var firstLook: (count: Int, at: Double)?
+
+        /// `name`: a pasteboard of a synthetic host's own; nil, the Mac's.
+        init(name: String?, launchID: String) {
+            board = name.map { NSPasteboard(name: NSPasteboard.Name($0)) } ?? .general
+            self.launchID = launchID
+        }
+
+        /// The change count as it stands is seen: what is on the clipboard now is never sent.
+        func takeAsSeen() {
+            queue.async { self.seen = self.board.changeCount }
+        }
+
+        /// One look: nil unless the change count moved; then ClipboardPolicy's decision from the
+        /// items' types, the marker and the text read only when it needs them.
+        func look() async -> (Int, ClipboardPolicy.HostDecision)? {
+            await withCheckedContinuation { done in
+                queue.async { done.resume(returning: self.lookNow()) }
+            }
+        }
+
+        private func lookNow() -> (Int, ClipboardPolicy.HostDecision)? {
+            let count = board.changeCount
+            guard count != seen else { return nil }
+            let types = (board.pasteboardItems ?? []).flatMap { $0.types.map(\.rawValue) }
+            // Cleared and not yet written: look again (the write does not move the count).
+            let now = ProcessInfo.processInfo.systemUptime
+            if firstLook?.count != count { firstLook = (count, now) }
+            if ClipboardPolicy.hostWaits(types: types, firstLook: firstLook?.at ?? now, now: now) { return nil }
+            seen = count
+            let own = NSPasteboard.PasteboardType(ClipboardPolicy.ownType)
+            let decision = ClipboardPolicy.hostDecides(types: types, changeCount: count, ownChangeCount: ownChangeCount,
+                                                       launchID: launchID,
+                                                       ownMarker: { self.board.string(forType: own) },
+                                                       text: { self.board.string(forType: .string) })
+            return (count, decision)
+        }
+
+        /// A device's text, for this Mac only, marked as this launch's, its change count kept.
+        func write(_ text: String) {
+            queue.async {
+                self.board.prepareForNewContents(with: .currentHostOnly)
+                let item = NSPasteboardItem()
+                item.setString(text, forType: .string)
+                item.setString(self.launchID, forType: NSPasteboard.PasteboardType(ClipboardPolicy.ownType))
+                self.board.writeObjects([item])
+                self.ownChangeCount = self.board.changeCount
+                self.seen = self.board.changeCount
+            }
+        }
     }
 
     private func send(payload: Data?, to connections: [NWConnection]) {

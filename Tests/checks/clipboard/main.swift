@@ -127,6 +127,14 @@ check(decide(plain, text: atCap + "!") == .skip(.tooLong), "over 256 KB: stays o
 check(decide(plain, text: controls) == .skip(.tooLong), "JSON over 1 MiB: stays on the Mac")
 check(decide(plain, text: atCap) == .send(P.payload(text: atCap)!), "at the cap: sent")
 
+// A change whose pasteboard is still empty: an app cleared it and has not written yet.
+check(P.hostWaits(types: [], firstLook: 10, now: 10) && P.hostWaits(types: [], firstLook: 10, now: 10.99),
+      "an empty pasteboard: the host looks again, for up to a second")
+check(!P.hostWaits(types: [], firstLook: 10, now: 11), "after a second: decided (left empty)")
+check(!P.hostWaits(types: plain, firstLook: 10, now: 10), "items there: decided at once")
+check(!P.hostWaits(types: [P.concealedType], firstLook: 10, now: 10), "a marker alone is an item too: decided at once")
+check(P.settleWindow == 1, "the settle window: a second")
+
 // MARK: - The host: a device's message
 
 check(P.fromDevice(data("{}")) == .subscribe, "{} subscribes")
@@ -317,7 +325,7 @@ for run in 0..<2_000 {
         }
     }
     for step in 0..<Int.random(in: 1...40, using: &rng) {
-        switch Int.random(in: 0..<6, using: &rng) {
+        switch Int.random(in: 0..<7, using: &rng) {
         case 0:   // a device subscribes
             let d = Int.random(in: 0..<devices, using: &rng)
             if case .subscribe = P.fromDevice(P.subscription) { subscribed.insert(d) }
@@ -346,6 +354,15 @@ for run in 0..<2_000 {
             for other in P.forward(to: subscribed.sorted(), from: d) {
                 received[other].append(got); expected[other].append(got)
             }
+        case 5:   // an app clears the pasteboard, the host looks before it writes, then the write
+            count += 1
+            board = ([], nil, nil)
+            let t0 = Double(step)
+            if !P.hostWaits(types: board.types, firstLook: t0, now: t0) { look() }   // it waits: no look taken
+            let t = "slow copy \(step)"
+            board = (plain, t, nil)
+            for d in subscribed { expected[d].append(t) }
+            look()
         default:  // the host looks (again)
             look()
         }

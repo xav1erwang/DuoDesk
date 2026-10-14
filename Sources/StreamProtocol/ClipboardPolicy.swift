@@ -25,6 +25,8 @@ public enum ClipboardPolicy {
     public static let activationWindow = 15.0
     /// How long "Sent to…" or "Too long…" stays.
     public static let noteLifetime = 3.0
+    /// How long the host waits for an empty pasteboard to get its contents (`hostWaits`).
+    public static let settleWindow = 1.0
 
     // MARK: The wire
 
@@ -87,6 +89,16 @@ public enum ClipboardPolicy {
     /// launch), then the markers and Universal Clipboard's, from the types alone, so neither a
     /// password manager's data nor another device's is ever read; only then the text (`text`), and the
     /// marker's value (`ownMarker`) only when its type is there.
+    /// A change whose pasteboard has no items yet: the host looks again before deciding, for up to
+    /// `settleWindow` from its first look at that change count (`firstLook`). An app that copies
+    /// clears the pasteboard (which moves the change count) and then writes, and the count does not
+    /// move again for the write: a look between the two that took the count as dealt with would lose
+    /// the copy (found live, a test copy lost to a look between them). A pasteboard left empty is
+    /// decided once the window is over.
+    public static func hostWaits(types: [String], firstLook: Double, now: Double) -> Bool {
+        types.isEmpty && now - firstLook < settleWindow
+    }
+
     public static func hostDecides(types: [String], changeCount: Int, ownChangeCount: Int?, launchID: String,
                                    ownMarker: () -> String?, text: () -> String?) -> HostDecision {
         if let own = ownChangeCount, own == changeCount { return .skip(.own) }

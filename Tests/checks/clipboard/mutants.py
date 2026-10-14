@@ -27,6 +27,8 @@ MUTANTS = [
     ("the concealed marker misspelt", P, 'public static let concealedType = "org.nspasteboard.ConcealedType"', 'public static let concealedType = "org.nspasteboard.Concealed"'),
     ("the transient marker misspelt", P, 'public static let transientType = "org.nspasteboard.TransientType"', 'public static let transientType = "org.nspasteboard.transientType"'),
     ("1Password's own marker left out", P, '"de.petermaurer.TransientPasteboardType", "com.agilebits.onepassword"]', '"de.petermaurer.TransientPasteboardType"]'),
+    ("an empty pasteboard decided at once", P, "types.isEmpty && now - firstLook < settleWindow", "false && now - firstLook < settleWindow"),
+    ("the settle window's end inside it", P, "types.isEmpty && now - firstLook < settleWindow", "types.isEmpty && now - firstLook <= settleWindow"),
     ("Universal Clipboard's copies sent", P, "        if types.contains(remoteClipboardType) { return .skip(.remote) }\n", ""),
     ("the text read before the markers", P,
      "        if types.contains(where: { markerTypes.contains($0) }) { return .skip(.marked) }\n        if types.contains(remoteClipboardType) { return .skip(.remote) }\n        if types.contains(ownType), ownMarker() == launchID { return .skip(.own) }\n        guard let text = text() else { return .skip(.noText) }\n",
