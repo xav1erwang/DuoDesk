@@ -288,14 +288,14 @@ own runs (R1 to R4).
 - **H1, builds:** iOS Debug and Release for the generic simulator (arm64) and Debug for a generic
   device, `CODE_SIGNING_ALLOWED=NO`: `** BUILD SUCCEEDED **`, only the known `StreamClient` capture
   warning (StreamClient.swift:3435, 3430 at main); the Release binary holds none of the DEBUG
-  arguments or console lines. `swift build -c release` (nothing of the host changed): built, only
-  the CaptureProbe warning.
+  arguments or console lines. `swift build -c release` (nothing of the host changed): built from
+  clean in 43 s, only the CaptureProbe warning.
 - **H2, `phone-portrait`:** 401 checks (165 at main, unchanged but for the standard arrangement's
   keyboard table, which now has the SE's and the minis' measured keyboards) and 68 of 68 mutants
   (31 at main; M12 and M13 follow the ruler into a function; 28 new with the build, 9 with the
   review's fixes).
 - **H3, `tour`:** 111,079 checks (51,840 at main) and 80 of 80 mutants (72 at main, 8 new).
-- **H4:** `Tests/checks/run-all.sh`, all 40 passed.
+- **H4:** `Tests/checks/run-all.sh`, all 40 passed (6 min, on cfad7f3).
 - **H5, nothing else moved:** 33 harness photos on an 18 Pro Max simulator, the switch off, against
   main's build (985a733, from `git archive`): 402x812, 393x793, 390x797, 375x762 and 375x647 plain,
   drawer, ruler, the Desktop, Settings at its end and a thumbnail's lights, 874x402 plain and
@@ -432,5 +432,5 @@ device; a real iPhone Duo; the Menus button's Large Content Viewer (the review's
 - 2026-10-14, the review's fixes: Larger Picture only where it is larger, and the panel's switch
   only there (0e9aa0e); the drawer above row 1 (77abae3) and read after it by VoiceOver (d6322a9);
   the switch applying as Settings closes (0cbe883); the docs, these results and the review's section
-  (the docs commit). Simulators deleted; the review's photos in
+  (cfad7f3, and this line). Simulators deleted; the review's photos in
   `~/Downloads/sill-handoff/larger-picture/review-fixes/`. PR #79's body updated; left for Noah.
