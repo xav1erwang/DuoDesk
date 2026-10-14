@@ -272,8 +272,9 @@ final class StreamClient: ObservableObject {
     private var settingsExpiry: DispatchWorkItem?
     /// The worst round trip of the last second that had a pong (`linkStats.rtt.max`), for the pick
     /// timeout. Kept across seconds without one: a stalled slow link reports no rtt at all, and
-    /// that must not shrink the timeout back to 4 s. Nil until measured; cleared on tear-down.
-    private var lastRttMaxMs: Int?
+    /// that must not shrink the timeout back to 4 s. Nil until measured; cleared on tear-down. Read by
+    /// the clipboard's Paste too (ClipboardPolicy.receiptWait).
+    private(set) var lastRttMaxMs: Int?
     #if DEBUG
     /// Harness `pending` case: the mock never answers and never times out.
     var mockFrozen = false
@@ -750,6 +751,10 @@ final class StreamClient: ObservableObject {
     var clipboardSent: ClipboardPolicy.Sent?
     var clipboardChipExpiry: DispatchWorkItem?
     var clipboardNoteExpiry: DispatchWorkItem?
+    /// A Paste waiting for the pong that says the Mac has read it (ClipboardPolicy.receiptLength), and
+    /// its timeout (`receiptWait`).
+    var clipboardReceipt: ClipboardReceipt?
+    var clipboardReceiptExpiry: DispatchWorkItem?
     /// This device's path (status, interfaces, cost), for "did it leave home since the loss".
     var pathSignature = ""
     var pathMonitor: NWPathMonitor?
@@ -3489,6 +3494,11 @@ final class StreamClient: ObservableObject {
                 self.receiveSettings(state)
             }
         case .pong:
+            // A Paste's receipt (StreamClient+Clipboard): its own random payload, not a time.
+            if data.count == ClipboardPolicy.receiptLength {
+                DispatchQueue.main.async { self.clipboardReceiptCame(data) }
+                return
+            }
             // The host echoes the ping's payload unchanged: our own monotonic send time.
             guard data.count >= 8 else { return }
             let sent = Double(bitPattern: data.readBigEndianUInt64())

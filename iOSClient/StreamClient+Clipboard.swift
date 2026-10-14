@@ -13,6 +13,18 @@ struct ClipboardNote: Equatable {
     var at: TimeInterval
 }
 
+/// A Paste waiting for its receipt (ClipboardPolicy.receiptLength): the ping sent after the text, whose
+/// pong says the Mac has read it.
+struct ClipboardReceipt: Equatable {
+    /// The receipt ping's payload, random.
+    let nonce: Data
+    /// This device's clipboard's change count when the text went: dealt with once the Mac has it.
+    let changeCount: Int
+    /// Its time ran out ("Didn’t reach…" shown, the chip offered again); a receipt that comes later
+    /// still counts.
+    var late = false
+}
+
 // The clipboard, this device's side (kind 32; docs/clipboard-plan.md). ClipboardPolicy has the rules;
 // this reads and writes UIPasteboard and keeps the session's state.
 //
@@ -21,7 +33,8 @@ struct ClipboardNote: Equatable {
 //   the chip never offers the Mac's own text back.
 // - This device's text: Sill never reads the clipboard by itself (iOS would ask "Allow Paste?"). It
 //   reads only `changeCount` and `hasStrings`, which never ask, to offer the chip; the text is read
-//   by the system's Paste control (UIPasteControl, SwiftUI's PasteButton) when the person taps it.
+//   by the system's Paste control (UIPasteControl, SwiftUI's PasteButton) when the person taps it,
+//   and counts as sent only once the Mac has read it (a ping after it comes back: the receipt).
 // - The subscription: an empty kind 32 once the Mac's list says it takes the clipboard and the switch
 //   is on, again on a move's new connection; `stop` when the switch goes off.
 //
@@ -110,6 +123,9 @@ extension StreamClient {
         hostClipboard = nil
         clipboardSubscribed = false
         clipboardSent = nil
+        clipboardReceipt = nil
+        clipboardReceiptExpiry?.cancel()
+        clipboardReceiptExpiry = nil
         hideClipboardChip()
         clipboardNoteExpiry?.cancel()
         clipboardNoteExpiry = nil
@@ -152,10 +168,13 @@ extension StreamClient {
         #endif
         let board = UIPasteboard.general
         let count = board.changeCount
-        let offer = ClipboardPolicy.offersChip(connected: connected, hostClipboard: hostClipboard, switchOn: Self.clipboardOn,
-                                               hasStrings: board.hasStrings, changeCount: count, handled: clipboardHandled)
+        // Not while a Paste waits for its receipt: the chip comes back if it never comes.
+        let waiting = clipboardReceipt.map { !$0.late } ?? false
+        let offer = !waiting && ClipboardPolicy.offersChip(connected: connected, hostClipboard: hostClipboard, switchOn: Self.clipboardOn,
+                                                           hasStrings: board.hasStrings, changeCount: count, handled: clipboardHandled)
         #if DEBUG
-        print("clipboard: \(why): change \(count), handled \(clipboardHandled.map(String.init) ?? "none"): \(offer ? "the chip" : "no chip")")
+        print("clipboard: \(why): change \(count), handled \(clipboardHandled.map(String.init) ?? "none")"
+              + (waiting ? ", a Paste waiting for its receipt" : "") + ": \(offer ? "the chip" : "no chip")")
         #endif
         guard offer, !clipboardChip else { return }
         clipboardChip = true
@@ -181,20 +200,27 @@ extension StreamClient {
     // MARK: Paste on the Mac
 
     /// What the system's Paste control read on the person's tap (the chip's, or the Settings group's):
-    /// sent to the Mac, or "too long".
+    /// sent to the Mac, with its receipt to wait for, or "too long".
     func sendClipboard(_ strings: [String]) {
         let mac = macName.isEmpty ? "the Mac" : macName
         switch ClipboardPolicy.deviceSends(strings, connected: connected, hostClipboard: hostClipboard, switchOn: Self.clipboardOn) {
         case .send(let payload):
             send(.clipboard, payload: payload)
+            // Its receipt: a ping after it through the same door, whose pong says the Mac has read it.
+            // Until then nothing says it was sent, and the copy is not dealt with.
+            let nonce = Data((0..<ClipboardPolicy.receiptLength).map { _ in UInt8.random(in: .min ... .max) })
+            send(.ping, payload: nonce)
             let count = UIPasteboard.general.changeCount
             if let text = strings.first(where: { !$0.isEmpty }) { clipboardSent = ClipboardPolicy.Sent(text: text, changeCount: count) }
-            clipboardHandled = count
+            clipboardReceipt = ClipboardReceipt(nonce: nonce, changeCount: count)
             hideClipboardChip()
-            showClipboardNote(ClipboardPolicy.Copy.sent(mac: mac), spoken: ClipboardPolicy.Copy.sentSpoken(mac: mac), warning: false)
-            if UIDevice.current.userInterfaceIdiom == .phone { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+            clipboardReceiptExpiry?.cancel()
+            let wait = ClipboardPolicy.receiptWait(worstRttMs: lastRttMaxMs)
+            let work = DispatchWorkItem { [weak self] in self?.clipboardReceiptLate() }
+            clipboardReceiptExpiry = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
             #if DEBUG
-            print("clipboard: sent \(payload.count) bytes of JSON to the Mac (change \(count))")
+            print("clipboard: sent \(payload.count) bytes of JSON to the Mac (change \(count)), its receipt awaited for \(wait) s")
             #endif
         case .tooLong:
             showClipboardNote(ClipboardPolicy.Copy.tooLong(mac: mac), spoken: ClipboardPolicy.Copy.tooLong(mac: mac), warning: true)
@@ -202,6 +228,39 @@ extension StreamClient {
         case .nothing:
             break
         }
+    }
+
+    /// A receipt's pong (StreamClient.handle): the Mac has read the text. "Sent…", and the copy is dealt
+    /// with. One that comes after its time ran out still counts.
+    func clipboardReceiptCame(_ payload: Data) {
+        guard let receipt = clipboardReceipt, receipt.nonce == payload else { return }
+        clipboardReceiptExpiry?.cancel()
+        clipboardReceiptExpiry = nil
+        clipboardReceipt = nil
+        clipboardHandled = receipt.changeCount
+        hideClipboardChip()
+        let mac = macName.isEmpty ? "the Mac" : macName
+        showClipboardNote(ClipboardPolicy.Copy.sent(mac: mac), spoken: ClipboardPolicy.Copy.sentSpoken(mac: mac), warning: false)
+        if UIDevice.current.userInterfaceIdiom == .phone { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+        #if DEBUG
+        print("clipboard: the Mac has read it (its receipt" + (receipt.late ? ", after its time ran out)" : ")"))
+        #endif
+    }
+
+    /// No receipt in time: "Didn’t reach…", and the copy not dealt with, so the chip offers it again (once
+    /// the note has gone) while the session lasts, and at the next look after.
+    private func clipboardReceiptLate() {
+        clipboardReceiptExpiry = nil
+        guard var receipt = clipboardReceipt, !receipt.late else { return }
+        receipt.late = true
+        clipboardReceipt = receipt
+        let mac = macName.isEmpty ? "the Mac" : macName
+        showClipboardNote(ClipboardPolicy.Copy.notSent(mac: mac), spoken: ClipboardPolicy.Copy.notSent(mac: mac), warning: true)
+        if UIDevice.current.userInterfaceIdiom == .phone { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        #if DEBUG
+        print("clipboard: no receipt in time: did not reach the Mac")
+        #endif
+        lookAtClipboard(why: "a Paste did not reach the Mac")
     }
 
     func showClipboardNote(_ text: String, spoken: String, warning: Bool) {

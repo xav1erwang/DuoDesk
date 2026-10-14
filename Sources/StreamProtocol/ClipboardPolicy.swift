@@ -322,6 +322,19 @@ public enum ClipboardPolicy {
         return .send(data)
     }
 
+    /// A Paste's text counts as sent once the Mac has read it: a ping that goes after it through the
+    /// session's one door (StreamClient's SessionLink, so on the same connection and after it, wherever
+    /// a move takes what waits) comes back, and the Mac echoes a ping only once it has read all that
+    /// came before it on that connection. Its payload is this many random bytes, so no other pong
+    /// passes for it: an ordinary ping's is 8 (the time it went), a move's fence ping's 8. Found in
+    /// review: "Sent" came as the message was handed over, and a connection already dead (an app switch,
+    /// the Mac asleep) lost the text while the copy counted as handled for good.
+    public static let receiptLength = 16
+
+    /// How long a Paste waits for that pong before it says the text did not reach the Mac: four times
+    /// the worst recent round trip, and at least 4 s, as a settings pick waits.
+    public static func receiptWait(worstRttMs: Int?) -> Double { max(4, 4 * Double(worstRttMs ?? 0) / 1000) }
+
     /// Where the chip goes on the stream panel: under the bar at its top trailing corner sideways, and
     /// at its bottom corner while the link's line holds the top; held upright, at the picture's bottom
     /// trailing corner, just above the window bar or row 1 (the bar is under the picture there).
@@ -351,6 +364,9 @@ public enum ClipboardPolicy {
         public static func sent(mac: String) -> String { "Sent to \(mac)’s clipboard. Press ⌘V there." }
         public static func sentSpoken(mac: String) -> String { "Sent to \(mac)’s clipboard. Press Command-V there." }
         public static func tooLong(mac: String) -> String { "Too long to send: \(mac) takes up to \(cap) of text." }
+        /// No receipt in time (`receiptWait`): the copy is not counted as dealt with, so the chip offers
+        /// it again.
+        public static func notSent(mac: String) -> String { "Didn’t reach \(mac). Try Paste again." }
 
         // The Settings panel's This iPad group.
         public static let switchTitle = "Share Clipboard"

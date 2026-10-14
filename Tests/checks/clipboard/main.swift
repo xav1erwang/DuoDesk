@@ -304,6 +304,16 @@ check(P.deviceSends(["abc"], connected: false, hostClipboard: 1, switchOn: true)
 check(P.deviceSends(["abc"], connected: true, hostClipboard: nil, switchOn: true) == .nothing, "a Mac that does not take it: nothing")
 check(P.deviceSends(["abc"], connected: true, hostClipboard: 1, switchOn: false) == .nothing, "the switch off: nothing")
 
+// A Paste's receipt: a ping after the text whose pong says the Mac has read it. The review's finding:
+// "Sent" came as the text was handed over, and a dead connection lost it while the copy counted as dealt
+// with. Its payload must never pass for an ordinary ping's (8 bytes: the time it went) or a move's fence
+// ping's (8 bytes), nor they for it.
+check(P.receiptLength == 16 && P.receiptLength != 8, "a receipt's payload: 16 bytes, never a ping's 8")
+check(P.receiptWait(worstRttMs: nil) == 4 && P.receiptWait(worstRttMs: 0) == 4 && P.receiptWait(worstRttMs: 1000) == 4,
+      "it waits 4 s while the round trip is a second or less")
+check(P.receiptWait(worstRttMs: 2500) == 10 && P.receiptWait(worstRttMs: 1001) > 4, "and four times the worst round trip above that")
+check(C.notSent(mac: "Mac mini") == "Didn’t reach Mac mini. Try Paste again.", "no receipt in time: the note")
+
 check(P.chipCorner(landscape: true, linkLineShown: false) == .topTrailing, "sideways: under the bar")
 check(P.chipCorner(landscape: true, linkLineShown: true) == .bottomTrailing, "sideways with the link's line at the top: the bottom corner")
 check(P.chipCorner(landscape: false, linkLineShown: false) == .bottomTrailing && P.chipCorner(landscape: false, linkLineShown: true) == .bottomTrailing,
@@ -332,7 +342,7 @@ check(C.ignoredLine(rate: 0, tooLong: 0, undecodable: 2) == "Clipboard from devi
 let words = [C.chipTitle(mac: "M"), C.chipSubtitle, C.chipSpoken(mac: "M", device: "iPad"), C.pasteHint(mac: "M", device: "iPad"), C.sent(mac: "M"),
              C.sentSpoken(mac: "M"), C.tooLong(mac: "M"), C.switchTitle, C.rowTitle(mac: "M"), C.footnote(on: true, mac: "M", device: "iPad"),
              C.footnote(on: false, mac: "M", device: "iPad"), C.sharesLine(device: "d"), C.stoppedLine(device: "d"), C.ignoredLine(rate: 1, tooLong: 1, undecodable: 1),
-             C.macFootnote, C.macAccessButton]
+             C.macFootnote, C.macAccessButton, C.notSent(mac: "M")]
     + [P.MacAccess.allowed, .notAsked, .asks, .denied].flatMap { [C.macAccessWarning($0), C.macAccessHint($0), C.macAccessLine($0)].compactMap { $0 } }
 check(words.allSatisfy { !$0.contains("—") && !$0.contains("–") }, "no dashes in the words")
 
