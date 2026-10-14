@@ -59,14 +59,18 @@ nothing on the iOS side, the CLI untouched.
   pt); Sill.app's ignore lines, from the binary in a scratch bundle under `sandbox-exec` with binds
   denied; CI's "Build and check" on c2339e2. Photos without personal details in
   `~/Downloads/sill-handoff/settings-window/`.
-- **Untested, for Noah** (the plan's U1 to U6, with Sill.app from this branch on the 14-inch): at
+- **Untested, for Noah** (the plan's U1 to U8, with Sill.app from this branch on the 14-inch): at
   the scaling at the far left with the Dock showing, every tab fits between the menu bar and the
-  Dock, General scrolls to Quit Sill and Remote Access (Remote Access and "Allow connections from
-  the internet" on) to Sleep; with Settings open, change the scaling and the Dock's size and
-  hiding: it follows each time (note a Dock change that shows only at the next tab click); drag it
-  to a smaller external display and let go low: it moves up once the button is up, and grows back
-  on the larger one; a held click on a tab never moves it; VoiceOver reaches Quit Sill in a capped
-  General; macOS 14 or 15 if at hand.
+  Dock (12 pt clear only on a side Sill moved it away from), General scrolls to Quit Sill and Remote
+  Access (Remote Access and "Allow connections from the internet" on) to Sleep; with Settings open,
+  change the scaling and the Dock's size and hiding: it follows each time (note a Dock change that
+  shows only at the next tab click); drag it to a smaller external display and let go low: it moves
+  up once the button is up, and grows back on the larger one; a held click on a tab never moves it;
+  VoiceOver reaches Quit Sill in a capped General; macOS 26, the reporter's (everything was
+  measured on 27.0.1, and merging closes #59): U1 on a Mac with 26, or a build for rosstex; with
+  Sill's virtual display there (Virtual Display on, a window streaming), every tab shows on the
+  built-in display and fits it, also once Virtual Display is turned off with Settings open; macOS 14
+  or 15 if at hand.
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then

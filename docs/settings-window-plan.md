@@ -230,11 +230,17 @@ was emptied after.
   `~/Downloads/sill-handoff/settings-window/`. Those of Remote Access turned on show this Mac's
   Tailscale name and addresses; they were deleted, not kept.
 
-Not verified here: another display (this Mac has one), the Dock showing or changing (the
-notification's path was run with `height=`, not by the Dock itself), a drag between screens or a
-mouse button held during a resize (no input is posted here), VoiceOver in a capped pane, Sill.app
-itself (the bundle's own executable was not run: it would read and write Sill.app's preferences),
-and macOS 14 and 15.
+Not verified here:
+- macOS 26, the reporter's (rosstex: 26.6.2). Everything the fix rests on was measured on macOS
+  27.0.1 alone: AppKit's constraint at 501, under the cap's 750; the window keeping its top-left as
+  it is laid out; a hidden window laid out all the same. Merging the pull request closes #59 (U6).
+- Sill's virtual display present. None was made here: adding a display can move the windows of
+  whoever uses this Mac. That the cap and the move never use it is in the check (`screenIndex`),
+  and the move off it is `WindowPlacement.bringForward`'s, as before (U7).
+- Another display (this Mac has one), the Dock showing or changing (the notification's path was
+  run with `height=`, not by the Dock itself), a drag between screens or a mouse button held during
+  a resize (no input is posted here), VoiceOver in a capped pane, Sill.app itself (the bundle's own
+  executable was not run: it would read and write Sill.app's preferences), and macOS 14 and 15.
 
 ## Untested, for Noah
 
@@ -258,7 +264,14 @@ With Sill.app from this branch (`Scripts/make-app.sh --install --open`) on the 1
   moves while the button is held, and moves up once it is released if it ran off the screen.
 - **U5.** VoiceOver in a capped pane (General, larger text): moving through it reaches Quit Sill,
   the pane scrolling to it.
-- **U6.** On macOS 14 or 15, if a Mac with one is at hand: U1.
+- **U6.** macOS 26, the reporter's (rosstex: 26.6.2), before #59 is closed (merging this pull
+  request closes it): U1 on a Mac with macOS 26, or a build of this branch for rosstex to try.
+- **U7.** Sill's virtual display: Virtual Display on (Sill's menu) and a window streaming to the
+  iPad, so Sill's own display exists. Open Settings from Sill's menu and click every tab: it shows
+  on the built-in display, never on Sill's, and fits it as in U1 (Remote Access with the internet
+  switch on scrolls, at any scaling but More Space). Then turn Virtual Display off with Settings
+  open: it stays where it is and still fits.
+- **U8.** On macOS 14 or 15, if a Mac with one is at hand: U1.
 
 ## Progress
 
