@@ -137,6 +137,8 @@ extension StreamClient {
         clipboardReceiptExpiry?.cancel()
         clipboardReceiptExpiry = nil
         hideClipboardChip()
+        // The next stream screen says again whether the chip shows (its onChange starts from this).
+        clipboardChipOnScreen = false
         clipboardNoteExpiry?.cancel()
         clipboardNoteExpiry = nil
         clipboardNote = nil
