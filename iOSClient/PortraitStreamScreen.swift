@@ -350,6 +350,7 @@ struct PortraitStreamScreen: View {
                     dim.placed(layout.dim[index], in: layout.size)
                 }
                 drawer
+                    .modifier(AfterRow1(active: larger))
                     .placed(layout.drawer, in: layout.size)
                     .transition(.opacity)
             }
@@ -580,6 +581,22 @@ struct PortraitStreamScreen: View {
                         .foregroundStyle(open ? Palette.accent : Palette.barLabel)
                 }
             }
+        }
+    }
+}
+
+/// Larger Picture's drawer, above row 1, read after it: the accessibility tree orders what is at one
+/// level top to bottom, which would put the whole list before the Apps button that opened it, so a
+/// swipe on from Apps would never reach it. As one container sorted after the rest, VoiceOver reads
+/// row 1, then the list, as under row 1 in every other arrangement.
+private struct AfterRow1: ViewModifier {
+    let active: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if active {
+            content.accessibilityElement(children: .contain).accessibilitySortPriority(-1)
+        } else {
+            content
         }
     }
 }
