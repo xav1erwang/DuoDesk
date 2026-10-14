@@ -290,12 +290,12 @@ struct ContentView: View {
 ///   mock never browses; Search Nearby and a row's tap only change what it shows (see
 ///   `MockCatalog.ConnectCase`).
 /// * `-SillBrowserFail N` — in the normal app and under `-SillLive 1`: each of the first N network
-///   browsers is reported failed with kDNSServiceErr_DefunctConnection (-65569) half a second after
-///   it starts, as iOS reports a suspended app's, so the browser is made again after 1, 2, 4… s
-///   (DiscoveryPolicy.rebuildBrowser): the simulator's browsers use the Mac's own mDNSResponder,
-///   which never makes an app's connection defunct. The console says what happened ("browser: …";
-///   the return from the background makes both browsers again too, "browser: rebuilt … (back from
-///   the background)"), and the automatic reconnect its dials ("reconnect: …").
+///   browsers is reported failed with kDNSServiceErr_DefunctConnection (-65569) half a second after it
+///   starts, as iOS reports a suspended app's, so the browser is made again after 1, 2, 4… s
+///   (DiscoveryPolicy.rebuildBrowser): the simulator's browsers use the Mac's own mDNSResponder, which
+///   never makes an app's connection defunct. The console says what happened ("browser: …"; the return
+///   from the background makes the network browser again too, and the nearby one if it runs, "browser:
+///   rebuilt … (back from the background)"), and the automatic reconnect its dials ("reconnect: …").
 /// * Pairing at home, in the normal app and under `-SillLive 1` (§7.9): `-SillServiceType
 ///   _silltest._tcp` (the browsers look for that type: a test host registered with
 ///   SILL_TEST_SERVICE_TYPE is a real row, and no real Mac is; the Debug build's Info.plist

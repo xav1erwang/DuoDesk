@@ -968,11 +968,11 @@ final class StreamClient: ObservableObject {
         discoveryChanged()
     }
 
-    /// Back from the background (issue #69): both browsers are made again (DiscoveryPolicy.rebuildBrowser:
-    /// iOS may have made their connection to mDNSResponder defunct while the app was suspended, and said
-    /// nothing yet), and the automatic reconnect's count of dials starts again: the person is back, so
-    /// a listed row is dialled at once. Only after the app was seen going to the background. Main
-    /// thread.
+    /// Back from the background (issue #69): the network browser is made again, and the nearby one if it runs
+    /// (DiscoveryPolicy.rebuildBrowser: iOS may have made their connection to mDNSResponder defunct while the
+    /// app was suspended, and said nothing yet), and the automatic reconnect's count of dials starts again:
+    /// the person is back, so a listed row is dialled at once. Only after the app was seen going to the
+    /// background. Main thread.
     private func cameForward() {
         let wasInBackground = !appInForeground
         appInForeground = true

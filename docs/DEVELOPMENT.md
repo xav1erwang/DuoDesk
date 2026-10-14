@@ -204,14 +204,14 @@ Sill is stuck), again 5, 10, 20 and every 30 s after, 12 times at most and only
 while Sill is in front. After the third the status line says the Mac may be
 asleep, and after the twelfth that it stopped trying. The row listed afresh
 (the Mac's Sill relaunched), Sill back from the background, or a tap starts
-again. Back from the background the device also makes its Bonjour browsers
-again, since iOS cuts a suspended app's connection to mDNSResponder and a
-browser made before then lists what it saw then; the rows it had stay up for
-the new browser's first 3 s, so a Mac that stays listed never blinks. A
-Desktop stream that the Mac stops (its capture stopped) is asked for again by
-itself, at most once every 10 s. docs/reconnect-after-sleep-plan.md has the
-rules; `iOSClient/DiscoveryPolicy.swift` is them, checked in
-`Tests/checks/policy`.
+again. Back from the background the device also makes its Bonjour browser again
+(and the nearby one, if it runs), since iOS cuts a suspended app's connection
+to mDNSResponder and a browser made before then lists what it saw then; the
+rows it had stay up for the new browser's first 3 s, so a Mac that stays listed
+never blinks. A Desktop stream that the Mac stops (its capture stopped) is
+asked for again by itself, at most once every 10 s.
+docs/reconnect-after-sleep-plan.md has the rules;
+`iOSClient/DiscoveryPolicy.swift` is them, checked in `Tests/checks/policy`.
 
 The gear at the end of the bar opens Settings: the Mac's streaming settings,
 changed from the device, and Disconnect at the bottom. After the Mac's settings
@@ -734,12 +734,13 @@ simulator:
 - `-SillBrowserFail N` (the normal app and `-SillLive 1`): each of the first N
   network browsers is reported failed as iOS reports a suspended app's
   (-65569), so the device makes it again after 1, 2, 4… s; the simulator's
-  browsers use this Mac's own mDNSResponder, which never cuts them. Sending
-  the app to the background and back (`xcrun simctl launch <udid>
+  browsers use this Mac's own mDNSResponder, which never cuts them. Sending the
+  app to the background and back (`xcrun simctl launch <udid>
   com.apple.Preferences`, then `xcrun simctl launch <udid> me.saffer.sill`)
-  makes both browsers again. The console says "browser: …", and the automatic
-  reconnect's dials "reconnect: …". `-SillConnectCase asleep` shows the
-  connect screen's line after three dials that did not connect.
+  makes the network browser again, and the nearby one if it runs. The console
+  says "browser: …", and the automatic reconnect's dials "reconnect: …".
+  `-SillConnectCase asleep` shows the connect screen's line after three dials
+  that did not connect.
 - `-SillConnect 127.0.0.1:PORT`: connect by address, also in the normal app.
   There, and under `-SillLive 1`, `-SillDrawer 1`, `-SillSettings 1` and
   `-SillScaleOpen 1` open theirs 1.5 s after the stream starts.
