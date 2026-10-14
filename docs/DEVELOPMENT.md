@@ -951,6 +951,19 @@ no profile yet, so publish from your Mac with `release.sh --publish` and leave
 both submissions are the run's artifact `notary-v<version>` for 30 days: when
 the job's log says a notary log lists issues, read them there.
 
+Homebrew: Sill for Mac is also the cask `sill` in Sill's own tap,
+[Saffsanity/homebrew-sill](https://github.com/Saffsanity/homebrew-sill), so
+`brew install --cask saffsanity/sill/sill` installs it (that command taps
+the repository and trusts the one cask, which Homebrew 6 and later need for a
+tap that isn't Homebrew's own). The cask names the release's `Sill.dmg` by
+its version and SHA-256, so each release bumps it once it is published
+(docs/release-checklist.md, part 2), and the tap's `brew test-bot` workflow
+checks every pull request, downloading the image. It moves to Homebrew's main
+repository once it qualifies (docs/release-checklist.md, part 1 §6). On a Mac
+where Sill.app runs from /Applications, try the cask only with `brew install
+--cask --appdir=<a scratch folder>`, and never `brew uninstall --zap`, which
+trashes the running Sill's settings and log.
+
 The iOS app goes to App Store Connect (TestFlight, then the App Store) from
 `Scripts/release-ios.sh`: a Release archive signed by Xcode's automatic
 signing on team 9B2KKVM937, exported as `.build/ios/export/Sill.ipa` and
