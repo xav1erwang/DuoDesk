@@ -173,10 +173,12 @@ Sill.app itself ignores all three with one line each, as it does every `-Sill…
 - The bare binary with `--synthetic` (no Screen Recording, nothing advertised), test hosts on
   loopback with the software encoder, only while the no-device check passes, Sill.app untouched:
   each tab at this screen's height (natural heights, nothing capped but what overflows 949 pt) and
-  with `-SillTestScreenHeight 700` (capped, its bottom 12 pt over the imagined Dock, the Form
-  scrolling); Remote Access with Remote Access and the internet switch on (`-SillSetAfter`), the
-  tallest pane; a switch from a tall tab to a short one and back; the window reopened after
-  `close`; photos of each. A saved frame from before the fix (951 pt tall) restored and capped.
+  with `-SillTestScreenHeight 700` (capped inside the imagined screen, 12 pt over the imagined
+  Dock when Sill moved it there, the Form scrolling); Remote Access with Remote Access and the
+  internet switch on (`-SillSetAfter`), the tallest pane; a switch from a tall tab to a short one
+  and back; the window reopened after `close`; photos of each. A window opened at a saved frame
+  from before the fix (951 pt tall), capped; after the review, where a capped window sits when
+  AppKit placed it (a saved frame, a Dock appearing under it, a pane grown while it was closed).
 - Previews (`-SillRenderPreviews`) against 985a733's: identical (no pane changes).
 - No iOS file changes, so no iOS build is needed for this change; the CLI's output is untouched (no
   host file changes).
