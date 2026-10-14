@@ -297,9 +297,10 @@ struct ProblemLine: View {
 /// key before any key command sees it, and SwiftUI's `.cancelAction` shortcut does not ask for
 /// priority, so while this view is on screen a key command that does sits on the hosting
 /// controller, which every responder chain in the window passes through. ⌘. stays with the
-/// Cancel buttons' shortcuts (verified in the simulator). Esc itself is unverified: XCUITest's
-/// Escape never reaches the app on the iPadOS 27 simulator (a first-responder probe saw no press
-/// at all), so a real keyboard decides (R12).
+/// Cancel buttons' shortcuts (verified in the simulator). XCUITest's Escape never reaches the app on
+/// the iPadOS 27 simulator, but a virtual keyboard's does (Tests/keyrig): there this command closed the
+/// Settings panel and skipped the tour, with nothing sent to the Mac (docs/hardware-keyboard-plan.md).
+/// A real keyboard on a device decides (R12).
 struct EscapeKey: UIViewRepresentable {
     let action: () -> Void
 
@@ -353,7 +354,12 @@ struct EscapeKey: UIViewRepresentable {
             Self.live.removeAll { $0 === self }
         }
 
-        fileprivate static func fire() { live.last?.action?() }
+        fileprivate static func fire() {
+            #if DEBUG
+            print("escape: Esc to what is on screen (its EscapeKey), not to the Mac")
+            #endif
+            live.last?.action?()
+        }
     }
 }
 
