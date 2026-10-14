@@ -52,7 +52,9 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   fresh iPhone; wheel notches; the touch rig 72 of 72 against main's. Found there and fixed: a lone wheel
   notch was never sent; the rule asked with no view in a window. Learned: every simulator's GameController
   counts its own keyboard, UIKit counts one once keys arrive, iPadOS 27 refuses programmatic turns, and a
-  pan gets no momentum events.
+  pan gets no momentum events. CI's Build and check passed on 807c8ef. With the other open pull requests
+  it meets in the docs and, with #79, in StreamScreen.swift's DEBUG hooks (keep both): the plan's
+  Progress.
 - **Untested, for Noah (the plan's 1–11, on the iPad with the Magic Keyboard, a Debug build):** which
   channel brings Esc (`hwkey:`; `-SillKeyProbe 1`), Esc in iTerm2's vim, zsh's vi mode and Zed, and
   Control-[; typing right after connecting and after a turn; ⌘W closing the Mac's window, not Sill's;

@@ -343,3 +343,10 @@ device; what iPadOS draws for the person's own keyboard with a Magic Keyboard; C
 - 2026-10-14: the plan (c641950); the rule, Esc's key command, the scroll pans and their checks, with the
   lone notch's and the no-view fixes the simulator runs found (f0ca916); the key rig and EscapeKey's
   DEBUG line (08635bf); the docs (73fcf77, 2f266ff); PR #80.
+- 2026-10-14: CI's Build and check passed on 807c8ef (run 38489635350: `swift build -c release`, the 41
+  pure checks with hardware-keyboard's 51 and key-strokes' 347, the iOS app on `Xcode_27.1_beta.app` with
+  only the StreamClient capture warning). The private simulators are deleted. The pull request merges
+  into main (985a733) without a conflict. With the other open pull requests it meets in the docs
+  (CLAUDE.md's Current step, ci.yml's mutants matrix, Tests/checks/README.md, docs/DEVELOPMENT.md,
+  docs/app-store-metadata.md) and, with #79, in StreamScreen.swift's DEBUG hooks (`-SillTurnAt` beside
+  its `-SillAXDump` and `-SillLargerPictureToggle`: keep both), so whichever merges second takes main in.
