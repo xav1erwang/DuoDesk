@@ -298,7 +298,7 @@ Made for touch
 • Apple Pencil works as a mouse, with hover on iPad models that support it.
 • Hold your device upright for a laptop layout: the picture on top, a trackpad and a row of keys below.
 • On iPhone Duo, open it flat and your Mac fills the inner display. Half open, it’s a laptop: the picture above the fold, a trackpad and keys below. Closed, Sill runs on the cover display.
-• Type with the on-screen keyboard or a hardware keyboard. Shortcuts work too.
+• Type with the on-screen keyboard, or on a hardware keyboard as soon as you connect, with shortcuts and Esc. A trackpad or a mouse scrolls the window under the pointer.
 • Swipe and pinch with three fingers for Mission Control, App Exposé, Spaces, Apps and Show Desktop.
 • Use the menus of the app you’re in: tap Menus in the bar, or on iPad with iPadOS 26 or later, use the menu bar at the top of the screen.
 • Switch windows from live thumbnails in the bar. Touch and hold one to close, minimize or go full screen. Drag it to reorder.
@@ -393,6 +393,13 @@ Local-only build (0.5.1's other changes are all away from home's):
 Made for iPhone Duo. Open it flat and your Mac fills the inner display. Half open, it’s a laptop: the picture above the fold, a trackpad and keys below. Closed, Sill runs on the cover display. Nothing you touch sits on the fold.
 
 Sill for iPhone and iPad and Sill for Mac now share one version number: this is 0.5.1, with Sill for Mac 0.5.1 from getsill.app.
+```
+
+The next version's, a draft: what changed since 0.5.1 (4), as its release notes say it, a paragraph a
+change (the same in the local-only build).
+
+```text
+With a keyboard attached to your iPhone or iPad, what you type goes to your Mac as soon as its picture shows, Esc included, without the Keyboard button. Two fingers on a trackpad, or a mouse's scroll wheel, now scroll the window under the pointer.
 ```
 
 ## 6. Export compliance (encryption)
@@ -721,6 +728,10 @@ Safe:
   description and App Store Connect's notes in section 7, the same way:
   description 2,872 (local-only 2,651) of 4,000 characters; review notes
   3,952 bytes (local-only 3,709) of 4,000, all ASCII; the rest unchanged.
+- With a hardware keyboard and trackpad (#67, #68; the bullet that starts
+  "Type with the on-screen keyboard" and the next version's What's New), the
+  same way: description 2,963 (local-only 2,742) of 4,000 characters; the next
+  What's New 247 characters; the rest unchanged.
 - The encryption key, now in `iOSClient/Info.plist`: Release builds of this
   branch for the simulator and for a device each have
   `"ITSAppUsesNonExemptEncryption" => false` in the built Sill.app's

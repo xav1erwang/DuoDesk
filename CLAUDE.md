@@ -8,6 +8,58 @@ Formerly winstream; the folder still carries the old name.
 
 ## Current step
 
+**A hardware keyboard and trackpad on the device (2026-10-14, branch `hardware-keyboard` from main at
+985a733, PR #PRNUM; issues #67 and #68; the plan, its ten open questions with the defaults taken, and the
+results are in `docs/hardware-keyboard-plan.md`).** Noah: "Work on the keyboard and trackpad change (#67
+and #68 together)". Device only: no wire change, nothing on the Mac changed.
+- Esc (#67: an iPad Pro M4's Magic Keyboard sent none, 22 `in.text` and no `in.key`):
+  `InputOverlayView.keyCommands` adds Esc with each of the sixteen ⌃⌥⇧⌘ combinations
+  (`wantsPriorityOverSystemBehavior`, no title) while the view is first responder and no `EscapeKey` is on
+  screen (`EscapeKey.onScreen`); the action goes through `ForwardedKeys.commanded` (down and up, the
+  command's modifiers). One key press is sent once whichever channel brings it (`pressed`: a press no
+  later than a command is swallowed with its up; `commanded`: nothing while the press holds it down). The
+  Settings panel gains `EscapeKey(action: close)` (Done keeps `.cancelAction` for ⌘.). DEBUG: an `hwkey:`
+  line for every hardware key and its channel, `escape:` when an EscapeKey takes Esc, `-SillKeyProbe 1`
+  (GameController's view of each key), `-SillEscViaCommand 1`. For the reporter: Control-[ is Esc in a
+  terminal.
+- Keys without the Keyboard button (#68): `HardwareKeyboardPolicy` (pure, `Tests/checks/hardware-keyboard`),
+  owned by `InputOverlayProxy` (one per stream screen; it outlives a rotation). With a hardware keyboard
+  (`HardwareKeyboardMonitor`, GameController's coalesced keyboard; DEBUG `-SillHardwareKeyboard 1|0`) the
+  input view takes the keyboard by itself when a view joins a window (a session's start, a rotation, a
+  reconnect), a keyboard attaches or the last taker closes (`StreamScreen.keyboardTakers`: Settings,
+  pairing, the tour, the Apps drawer, Menus), and lets go when a taker opens or the keyboard goes; another
+  responder's keyboard is not fought. Never the person's own: `keyboardShown` (the Keyboard button, the key
+  row's cap, the tour's busy and activity tests) is only the person's (`onOwnChange`), so keyboard users get
+  the tour. The button: over the hold, the person's (`makeOwn`: iPadOS's keyboard views back); again, the
+  hardware keyboard's (`makeAutomatic`). During the hold the input view is an empty view with no assistant
+  groups: nothing drawn, even where UIKit and GameController disagree.
+- Trackpad and wheel (#68): two scroll-only pans (`.continuous`, a phased gesture with the finger's coast;
+  `.discrete`, plain deltas), `maximumNumberOfTouches = 0`, `[.indirectPointer]`, touches refused, beside
+  the hover; one path with the finger pan (`scroll(_:at:translation:velocity:from:)`), one scroll gesture
+  at a time; a pointer scroll's first event and a lone notch are deltas (`scrolled(to:at:)`).
+- Defaults taken: the button keeps its software-keyboard meaning; the drawer and Menus are takers; all
+  sixteen Esc combinations; nothing drawn during the hold; the person's keyboard across a rotation and ⌘W
+  with a taker open as before; Sill's own coast for a trackpad; no scrolling over the on-screen trackpad.
+- Verified (the plan's Results): hardware-keyboard 51 checks, 20,000 random sessions, 31 of 31 mutants (in
+  CI's matrix); key-strokes 347 (18 new) and 81 of 81 mutants (9 new); `run-all.sh` all 41; the iOS app
+  Debug and Release for the simulator and Debug for a device, and `swift build -c release`, with the known
+  warnings only; 19 harness photos identical to main's (the Menus pull-down open among them, the hold let
+  go under it); live on private simulators against `SillHost --synthetic`, with `Tests/keyrig` (new, TEST
+  ONLY: a virtual HID keyboard and mouse inside the simulator, as duorig): keys and ⌘W with no Keyboard
+  button, after two turns too (an iPhone, `-SillTurnAt`); Esc,
+  ⇧Esc, ⌘Esc and ⌥⌘Esc through both channels; Esc closing Settings and skipping the tour with nothing
+  sent; the tour shown with a keyboard attached; a keyboard going and coming; the button's two states on a
+  fresh iPhone; wheel notches; the touch rig 72 of 72 against main's. Found there and fixed: a lone wheel
+  notch was never sent; the rule asked with no view in a window. Learned: every simulator's GameController
+  counts its own keyboard, UIKit counts one once keys arrive, iPadOS 27 refuses programmatic turns, and a
+  pan gets no momentum events.
+- **Untested, for Noah (the plan's 1–10, on the iPad with the Magic Keyboard, a Debug build):** which
+  channel brings Esc (`hwkey:`; `-SillKeyProbe 1`), Esc in iTerm2's vim, zsh's vi mode and Zed, and
+  Control-[; typing right after connecting and after a turn; ⌘W closing the Mac's window, not Sill's;
+  nothing drawn, and nothing popping up when the keyboard is taken away; the Keyboard button's two states;
+  Esc over Settings, the tour and pairing; the tour on a fresh install with the keyboard attached;
+  two-finger scrolling (any double coast) and a mouse's wheel; VoiceOver.
+
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
 once that is merged do #48. Then run the release procedure").** Noah: "I want the release in the GitHub to line up with the app version, I want
@@ -4817,10 +4869,18 @@ good.
   AB02/FB02),
   `InputOverlay` (direct touch, Pencil, keyboard, scroll momentum; each input
   says what drew this device's pointer; hardware keys through `ForwardedKeys`,
-  let go when the overlay stops taking keys), `KeyChords` (`KeyModifiers`; a
+  let go when the overlay stops taking keys; Esc's key commands; the iPad's
+  trackpad's and a wheel's scroll pans beside the finger pan, one scroll path
+  (`scroll(_:at:translation:velocity:from:)`); `InputOverlayProxy`, who holds
+  the keyboard, carrying out `HardwareKeyboardPolicy`; `HardwareKeyboardMonitor`,
+  GameController's keyboard), `HardwareKeyboardPolicy` (when the stream's input
+  view holds the keyboard for a hardware keyboard and when it is the person's
+  own; pure, `Tests/checks/hardware-keyboard`; pbxproj AC01/FC01), `KeyChords`
+  (`KeyModifiers`; a
   shortcut with its modifiers' own keys pressed around it, the Spotlight key's
   ⌘Space, the trackpad's modifier keys around a click; `ForwardedKeys`, a
-  hardware key's up after its down; pure, `Tests/checks/key-strokes` with the
+  hardware key's up after its down, and Esc's key command sent once beside
+  pressesBegan; pure, `Tests/checks/key-strokes` with the
   host's KeyStrokes), `TrackpadView` (the relative pad: its
   cursor a `PadCursor`, from the anchor; a recognizer that only counts fingers;
   `verticalSpan`, a phone's width ÷ 1.6, and the DEBUG input test),
@@ -4975,6 +5035,7 @@ good.
   arguments and the SVG's size and edge), `door-policy`, `duo` (DuoPosture;
   `tour` and `phone-portrait` take the Duo's real sizes too), `encoder-mailbox`,
   `encoder-slowstate`, `fence`, `gesture-chords`, `gestures`, `goodbye`,
+  `hardware-keyboard` (iOSClient's HardwareKeyboardPolicy),
   `home-device`, `home-model`, `home-records`, `home-txt`, `key-strokes` (the
   host's KeyStrokes and the device's KeyChords, against a model of the Mac's
   HID state table and of a Mac from before), `ledger`,
@@ -5005,6 +5066,14 @@ good.
   UDID pose <closed-upright|closed-side|flat-portrait|flat-landscape|laptop|book>`,
   `run.sh UDID shot <pose> FILE.png`, `hinge`, `orient`, `watch`; only a
   booted iPhone Duo simulator, by UDID (its README).
+- `Tests/keyrig/` — TEST ONLY, private interfaces, simulator only: a hardware
+  keyboard and a mouse for the iOS Simulator, key presses, pointer moves and
+  wheel scrolls posted from a virtual HID device inside the simulator (`xcrun
+  simctl spawn`, as duorig), which UIKit routes as a real one's
+  (pressesBegan, key commands, the text system, GameController, hover, scroll
+  pans); `run.sh build`, `run.sh UDID keys SPEC`, `run.sh UDID point SCRIPT`;
+  only a booted simulator of your own, by UDID (its README has what it showed:
+  after its keys UIKit there counts a hardware keyboard for good).
 
 ## Build and run
 
@@ -5046,6 +5115,7 @@ python3 -m http.server 8000 --directory site   # the website at http://localhost
 Scripts/encoder-check/run.sh            # the encoder checks that never touch an encoder (safe while Sill.app streams)
 Scripts/menu-check/run.sh               # the menus' reader and mirror against Scripts/menufixture.swift, no host, no encoder (needs Accessibility)
 Tests/duorig/run.sh UDID pose book && Tests/duorig/run.sh UDID shot book book.png   # TEST ONLY: fold and photograph an iPhone Duo simulator (laptop, flat-portrait, flat-landscape, closed-upright, closed-side)
+Tests/keyrig/run.sh UDID keys 29,04,e3:down,1a,e3:up && Tests/keyrig/run.sh UDID point 'move 300,200|wheel -3'   # TEST ONLY: Esc, a and ⌘W from a hardware keyboard, then a wheel's notch, inside a simulator of your own
 SILL_TEST_ENCODER_RECYCLE=0 swift run -c release SillHost   # =0 keeps every hardware session, =1 replaces one in the slow state, as by default (A/B on the real Desktop: --synthetic moves every frame and never reaches the slow state)
 Scripts/encoder-check/verify-hardware.sh harness   # USES THE HARDWARE ENCODER; skips each run while a device is connected
 ```
@@ -5321,7 +5391,11 @@ with no finger, t seconds after the session's first window list: `down`, `pad
 DX,DY`, `lift` and `click` on the portrait pad, `tap X,Y` on the stream at a
 frame fraction, `key USAGE` a hardware key, `row USAGE` a key of the portrait
 key row, `gesture NAME[,FINGERS]` a three-finger gesture through
-`StreamClient.sendGesture`; the console's "input script: …" and "pointer: …" lines say what
+`StreamClient.sendGesture`, `esc [MODS]` Esc through the stream's key command
+(only while the input view takes Esc), `scroll DX,DY` a trackpad's two-finger
+scroll with its coast, `wheel DX,DY` a wheel's plain deltas, `keyboard
+attach|detach` a hardware keyboard coming or going, `orient landscape|portrait`
+the scene turned (an iPhone's); the console's "input script: …" and "pointer: …" lines say what
 happened; it runs only when the session was dialled by `-SillConnect` to a
 loopback address, `127.0.0.1:P`, `::1:P` or `localhost:P`, and the host's first
 window list has no version: Sill.app's always has, and would post the input to
@@ -5356,13 +5430,28 @@ those seconds as the Keyboard button does, and in a live session (the normal
 app with `-SillConnect`, or `-SillLive 1`) `-SillDrawer 1`, `-SillSettings 1`
 and `-SillScaleOpen 1` open theirs 1.5 s after the stream starts. The console
 prints `viewport: 386×241 pt, scale none, 60 fps` for each viewport sent.
+A hardware keyboard (docs/hardware-keyboard-plan.md): a simulator's GameController
+always counts the simulator's own keyboard, so the stream's input view takes the
+keyboard by itself there (an empty input view: nothing drawn); `-SillHardwareKeyboard
+1|0` says a keyboard is attached or not for the run instead. The console prints
+`keyboard: …` for what HardwareKeyboardPolicy does and `hwkey: usage 41 down via
+pressesBegan (none): to the Mac` (or `keyCommand`) for every hardware key the input
+view sees; `-SillKeyProbe 1` adds GameController's own view of each key,
+`-SillEscViaCommand 1` hands Esc on from pressesBegan so its key commands take it,
+and `-SillTurnAt <s>[,<s>…]` turns an iPhone's scene mid-session (iPadOS's windowing
+refuses). `Tests/keyrig` presses real keys and turns a wheel inside the simulator;
+after its keys UIKit there counts a hardware keyboard, so a fresh simulator is the
+one that shows the software keyboard. A test host's Desktop takes input only with
+`SILL_TEST_POINTER_PATH` (else it has nowhere to land).
 `-SillIdiom pad` draws a screen taller than wide and narrower than 600 pt as
 an iPad does (the compact halves) rather than as a phone, so an iPhone
 simulator photographs it (`phone` the other way round; the normal app too).
 `-SillInputTest 1`, with `-SillConnect` on this Mac's loopback: once, the
 portrait key row taps cmd, esc, shift and ctrl through its caps' action, then
 the trackpad checks that a touch at its centre lands on it, strokes, taps with
-the latched keys held and scrolls, through its own code ("input test: …"); a
+the latched keys held and scrolls, through its own code, and in every layout
+the stream's input view sends Esc and ⇧Esc through its key command, a
+trackpad's scroll with its coast and a wheel's ("input test: …"); a
 synthetic host counts what it gets as `in.dry` and posts nothing, but a real
 host (Sill.app, SillHost without `--synthetic`) posts it on this Mac and the
 test does not look at which host it reached, so point it only at a synthetic
