@@ -168,6 +168,40 @@ check(P.admits(arrivals: [0.2, 0.5, 0.9, 0.95], now: 1.0).taken == false, "four 
 check(P.admits(arrivals: [0.2, 0.5, 0.9, 0.95], now: 1.0).kept == [0.2, 0.5, 0.9, 0.95], "a refusal keeps what was there")
 check(P.perSecond == 4, "4 a second, as settings and gestures")
 
+// hostReceives: what a device's message asks first, then the rate, which only subscriptions and texts
+// meet. The review's finding: a stop that was the fifth kind 32 in a second was refused by the rate, so
+// the device whose switch had gone off stayed subscribed and the Mac's next copy still went to it.
+func receives(_ messages: [(Double, String)]) -> [P.FromDevice] {
+    var kept: [Double] = []
+    return messages.map { (t, json) in
+        let got = P.hostReceives(data(json), arrivals: kept, now: t)
+        kept = got.kept
+        return got.ask
+    }
+}
+let stopJSON = #"{"stop":true}"#
+check(receives([(0, "{}"), (2.0, stopJSON), (2.1, "{}"), (2.2, stopJSON), (2.3, "{}"), (2.4, stopJSON)])
+      == [.subscribe, .stop, .subscribe, .stop, .subscribe, .stop],
+      "the review's sequence (on, then off, on, off, on, off within a second): every stop taken")
+check(receives([(3.0, "{}"), (3.1, "{}"), (3.2, "{}"), (3.3, "{}"), (3.4, stopJSON)]).last == .stop,
+      "a stop after four subscriptions in the second: taken")
+check(receives([(3.0, "{}"), (3.1, "{}"), (3.2, "{}"), (3.3, "{}"), (3.4, "{}")]).last == .refuse(.rate),
+      "a fifth subscription in the second: refused by the rate")
+check(receives([(0, #"{"text":"a"}"#), (0.1, #"{"text":"b"}"#), (0.2, #"{"text":"c"}"#), (0.3, #"{"text":"d"}"#), (0.4, #"{"text":"e"}"#)])
+      == [.set("a"), .set("b"), .set("c"), .set("d"), .refuse(.rate)], "a fifth text in the second: refused, the Mac's clipboard kept")
+check(receives([(0, stopJSON), (0.1, stopJSON), (0.2, stopJSON), (0.3, stopJSON), (0.4, stopJSON), (0.5, "{}"), (0.6, "{}"), (0.7, "{}"), (0.8, "{}")])
+      .suffix(4) == [.subscribe, .subscribe, .subscribe, .subscribe], "stops count nothing: four subscriptions after five stops are taken")
+check(receives([(0, "junk"), (0.1, "junk"), (0.2, "junk"), (0.3, "junk"), (0.4, "{}")]).last == .subscribe,
+      "refusals count nothing: a subscription after four undecodable messages is taken")
+check(receives([(0, "{}"), (0.1, "{}"), (0.2, "{}"), (0.3, "{}"), (0.4, "{}"), (0.5, "{}")]).suffix(2) == [.refuse(.rate), .refuse(.rate)],
+      "after a refusal the second's arrivals are kept: a sixth is refused too")
+check(receives([(0, "{}"), (0.1, "{}"), (0.2, "{}"), (0.3, "{}"), (1.05, "{}")]).last == .subscribe, "a second after the first: taken again")
+check(P.hostReceives(data("junk"), arrivals: [0.5], now: 1).ask == .refuse(.undecodable)
+      && P.hostReceives(Wire.encode(Clipboard(text: atCap + "a")), arrivals: [], now: 0).ask == .refuse(.tooLong),
+      "a refusal says why")
+check(P.Refusal.rate.rawValue == "rate" && P.Refusal.tooLong.rawValue == "tooLong" && P.Refusal.undecodable.rawValue == "undecodable",
+      "the refusals' names are the ignored line's counts")
+
 // MARK: - The device: its subscription
 
 check(!P.hostTakes(nil) && !P.hostTakes(0) && P.hostTakes(1) && P.hostTakes(2), "a host takes it from generation 1")
@@ -297,6 +331,52 @@ for _ in 0..<5_000 {
     }
 }
 check(modelFailures == 0, "5,000 random sessions: the device's subscription and the host's agree (\(modelFailures) wrong)")
+
+// MARK: - Model 1b: the same, quickly, with the rate
+
+// The switch flipped several times a second, a Paste now and then while it is on, the Mac's setting
+// going off and on. The host takes each message by hostReceives, as HostClipboard does. Whatever the
+// timing, the host never has the device subscribed while its switch is off: a stop is never lost to
+// the rate (the review's finding). A subscription past the rate may be refused (the device then gets
+// nothing until it subscribes again: it fails closed).
+var quickFailures = 0
+var refusedSubscriptions = 0
+for _ in 0..<5_000 {
+    var hostOn = true, switchOn = Bool.random(using: &rng)
+    var deviceSubscribed = false, hostSubscribed = false
+    var arrivals: [Double] = [], now = 0.0
+    for _ in 0..<Int.random(in: 1...40, using: &rng) {
+        now += Double.random(in: 0...0.4, using: &rng)
+        var payload: Data? = nil
+        switch Int.random(in: 0..<8, using: &rng) {
+        case 0:
+            hostOn.toggle()
+            if !hostOn { hostSubscribed = false; arrivals = [] }     // setEnabled(false) forgets them all
+        case 1:
+            // A Paste: only with the switch on, to a Mac that takes the clipboard (deviceSends).
+            if case .send(let p) = P.deviceSends(["pasted"], connected: true, hostClipboard: hostOn ? P.generation : nil, switchOn: switchOn) { payload = p }
+        default:
+            switchOn.toggle()
+        }
+        let step = P.deviceSubscription(hostClipboard: hostOn ? P.generation : nil, switchOn: switchOn, subscribed: deviceSubscribed)
+        deviceSubscribed = step.subscribed
+        if step.send != .none { payload = step.send == .subscribe ? P.subscription : P.stopping }
+        if let payload {
+            if !hostOn { quickFailures += 1; break }               // a kind 32 to a host that did not say it takes it
+            let got = P.hostReceives(payload, arrivals: arrivals, now: now)
+            arrivals = got.kept
+            switch got.ask {
+            case .subscribe, .set: hostSubscribed = true
+            case .stop: hostSubscribed = false
+            case .refuse(.rate): if step.send == .subscribe { refusedSubscriptions += 1 }
+            case .refuse: quickFailures += 1
+            }
+        }
+        if hostSubscribed && !(hostOn && switchOn) { quickFailures += 1; break }   // copies to a device whose switch is off
+    }
+}
+check(quickFailures == 0, "5,000 quick sessions: never subscribed at the host while the device's switch is off (\(quickFailures) wrong)")
+check(refusedSubscriptions > 0, "…and the model reached the rate (\(refusedSubscriptions) subscriptions refused)")
 
 // MARK: - Model 2: a host with several devices
 

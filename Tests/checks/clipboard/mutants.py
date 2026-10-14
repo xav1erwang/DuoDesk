@@ -43,6 +43,13 @@ MUTANTS = [
     ("undecodable read as a subscription", P, "guard let clip = Wire.decode(Clipboard.self, from: payload) else { return .refuse(.undecodable) }",
      "guard let clip = Wire.decode(Clipboard.self, from: payload) else { return .subscribe }"),
     ("a device's text back to it too", P, "subscribers.filter { $0 != sender }", "subscribers"),
+    ("every kind 32 counted against the rate (the review's finding: a stop lost to it)", P,
+     "guard countsAgainstRate(ask) else { return (ask, arrivals) }", "guard true else { return (ask, arrivals) }"),
+    ("a stop counted against the rate", P, "case .stop, .refuse: return false", "case .stop: return true\n        case .refuse: return false"),
+    ("a refusal counted against the rate", P, "case .stop, .refuse: return false", "case .stop: return false\n        case .refuse: return true"),
+    ("past the rate taken anyway", P, "return (admitted.taken ? ask : .refuse(.rate), admitted.kept)", "return (ask, admitted.kept)"),
+    ("a refusal by the rate forgets the second", P, "return (admitted.taken ? ask : .refuse(.rate), admitted.kept)",
+     "return admitted.taken ? (ask, admitted.kept) : (.refuse(.rate), [])"),
     ("five a second", P, "guard recent.count < perSecond else { return (false, recent) }", "guard recent.count <= perSecond else { return (false, recent) }"),
     ("a two-second window", P, "let recent = arrivals.filter { now - $0 < 1 }", "let recent = arrivals.filter { now - $0 < 2 }"),
     # The device.

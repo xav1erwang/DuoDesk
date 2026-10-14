@@ -117,10 +117,10 @@ final class HostClipboard {
     func received(_ payload: Data, from connection: NWConnection, who: String) {
         guard enabled else { return }
         let id = ObjectIdentifier(connection)
-        let admitted = ClipboardPolicy.admits(arrivals: arrivals[id] ?? [], now: ProcessInfo.processInfo.systemUptime)
-        arrivals[id] = admitted.kept
-        guard admitted.taken else { ignored.count("rate"); return }
-        switch ClipboardPolicy.fromDevice(payload) {
+        // What it asks first, then the rate, which a stop never meets (ClipboardPolicy.hostReceives).
+        let got = ClipboardPolicy.hostReceives(payload, arrivals: arrivals[id] ?? [], now: ProcessInfo.processInfo.systemUptime)
+        arrivals[id] = got.kept
+        switch got.ask {
         case .subscribe:
             subscribe(connection, who: who)
         case .set(let text):
@@ -136,7 +136,7 @@ final class HostClipboard {
             print(ClipboardPolicy.Copy.stoppedLine(device: gone.who))
             if subscribers.isEmpty { stopLooking() }
         case .refuse(let why):
-            ignored.count(why == .tooLong ? "tooLong" : "undecodable")
+            ignored.count(why.rawValue)     // "rate", "tooLong", "undecodable"
         }
     }
 

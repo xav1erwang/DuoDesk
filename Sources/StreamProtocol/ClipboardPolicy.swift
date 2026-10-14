@@ -11,8 +11,9 @@ public enum ClipboardPolicy {
     public static let generation = 1
     /// The most a kind 32's JSON may be, either way (Clipboard.maxTextBytes says why).
     public static let maxPayload = StreamMessage.maxClientPayload
-    /// A device's kind 32s a second, per connection: a tap sends one. More is a runaway or hostile
-    /// client, and each could replace the Mac's clipboard.
+    /// A device's subscriptions and texts a second, per connection: a tap sends one. More is a runaway
+    /// or hostile client, and each could replace the Mac's clipboard. A stop is never limited
+    /// (`hostReceives`).
     public static let perSecond = 4
     /// How often the host looks at its pasteboard's change count while a device subscribes.
     public static let lookInterval = 0.25
@@ -116,6 +117,8 @@ public enum ClipboardPolicy {
         case undecodable
         /// Text longer than `Clipboard.maxTextBytes` (a device of this change never sends it).
         case tooLong
+        /// A subscription or text past `perSecond` in a second (`hostReceives`).
+        case rate
     }
 
     /// What a device's kind 32 asks of the host.
@@ -145,9 +148,33 @@ public enum ClipboardPolicy {
         subscribers.filter { $0 != sender }
     }
 
-    /// A connection's kind 32 at `now`, after `arrivals` (the times of its earlier ones): whether it
-    /// is taken, at most `perSecond` in any second, and the arrivals to keep (the last second's,
-    /// with this one when taken).
+    /// A device's kind 32 at `now`, as the host takes it: what it asks (`fromDevice`), and the
+    /// connection's `arrivals` to keep (the times of its subscriptions and texts taken in the last
+    /// second). A subscription or text is taken at most `perSecond` times in any second (`admits`),
+    /// the rest refused (`rate`). A stop is always taken, past the rate too: the device's switch went
+    /// off, and a stop lost to the rate left the Mac's copies going to that device (found in review:
+    /// off, on, off, on, off within a second, and the next copy still went). Neither a stop nor a
+    /// refusal counts against the rate.
+    public static func hostReceives(_ payload: Data, arrivals: [Double], now: Double) -> (ask: FromDevice, kept: [Double]) {
+        let ask = fromDevice(payload)
+        guard countsAgainstRate(ask) else { return (ask, arrivals) }
+        let admitted = admits(arrivals: arrivals, now: now)
+        return (admitted.taken ? ask : .refuse(.rate), admitted.kept)
+    }
+
+    /// What the rate counts: a subscription or text, each of which can replace the Mac's clipboard
+    /// or print a line. Never a stop, which only ends what goes to the device, nor a refusal, which
+    /// does nothing.
+    static func countsAgainstRate(_ ask: FromDevice) -> Bool {
+        switch ask {
+        case .subscribe, .set: return true
+        case .stop, .refuse: return false
+        }
+    }
+
+    /// The rate of a connection's subscriptions and texts at `now`, after `arrivals` (the times of its
+    /// earlier ones taken): whether this one is taken, at most `perSecond` in any second, and the
+    /// arrivals to keep (the last second's, with this one when taken).
     public static func admits(arrivals: [Double], now: Double) -> (taken: Bool, kept: [Double]) {
         let recent = arrivals.filter { now - $0 < 1 }
         guard recent.count < perSecond else { return (false, recent) }
