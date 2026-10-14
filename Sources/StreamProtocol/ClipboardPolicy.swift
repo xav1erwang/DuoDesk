@@ -84,11 +84,6 @@ public enum ClipboardPolicy {
         case skip(HostSkip)
     }
 
-    /// A change of the Mac's pasteboard (`changeCount`, its items' `types`): whether the host sends
-    /// it. Its own write first (`ownChangeCount`, the count after it; or its marker naming this
-    /// launch), then the markers and Universal Clipboard's, from the types alone, so neither a
-    /// password manager's data nor another device's is ever read; only then the text (`text`), and the
-    /// marker's value (`ownMarker`) only when its type is there.
     /// A change whose pasteboard has no items yet: the host looks again before deciding, for up to
     /// `settleWindow` from its first look at that change count (`firstLook`). An app that copies
     /// clears the pasteboard (which moves the change count) and then writes, and the count does not
@@ -99,6 +94,11 @@ public enum ClipboardPolicy {
         types.isEmpty && now - firstLook < settleWindow
     }
 
+    /// A change of the Mac's pasteboard (`changeCount`, its items' `types`): whether the host sends
+    /// it. Its own write first (`ownChangeCount`, the count after it; or its marker naming this
+    /// launch), then the markers and Universal Clipboard's, from the types alone, so neither a
+    /// password manager's data nor another device's is ever read; only then the text (`text`), and the
+    /// marker's value (`ownMarker`) only when its type is there.
     public static func hostDecides(types: [String], changeCount: Int, ownChangeCount: Int?, launchID: String,
                                    ownMarker: () -> String?, text: () -> String?) -> HostDecision {
         if let own = ownChangeCount, own == changeCount { return .skip(.own) }
