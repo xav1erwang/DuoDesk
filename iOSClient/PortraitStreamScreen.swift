@@ -304,9 +304,10 @@ struct PortraitStreamScreen: View {
     /// every point that keeps the key row 10 pt above the software keyboard, its pane at the
     /// picture's own shape at the top of that room (`pane(video:)`), the trackpad is the keyboard's
     /// footprint, and the Menus button joins row 1 after Apps. Windows come from Apps (an open app
-    /// again shows its next window) and from the Mac's Window menu. The viewport is the layout's
-    /// picture in both arrangements (with Larger Picture the whole room), so the Mac fits a window to
-    /// all of it.
+    /// again shows its next window) and from the Mac's Window menu; the drawer opens above row 1,
+    /// over the room (`layout.drawer`), so a keyboard up, the Mac's or its own search field's, covers
+    /// none of it. The viewport is the layout's picture in both arrangements (with Larger Picture
+    /// the whole room), so the Mac fits a window to all of it.
     private func phone(_ layout: PhonePortraitLayout, origin: CGPoint) -> some View {
         let span = layout.trackpadSpan(video: client.videoSize)
         return phoneStack(layout, span: span)

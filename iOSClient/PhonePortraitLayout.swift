@@ -13,7 +13,8 @@ import CoreGraphics
 /// on and the software keyboard's height known (`keyboard`), the thumbnails' row goes and the picture
 /// gets every point that keeps the key row `keyboardClearance` above the keyboard (on an 18 Pro Max
 /// 424×422 against 424×265); the trackpad is the keyboard's footprint, so nothing moves when it comes
-/// up. The picture's frame then takes the picture's own shape inside that room (`pane(video:)`, so a
+/// up, and the Apps drawer opens above row 1, where no keyboard reaches (`drawer`). The picture's
+/// frame then takes the picture's own shape inside that room (`pane(video:)`, so a
 /// 16:10 window keeps its shape and a taller one gains), and the viewport is the whole room, which
 /// the Mac fits a window to once Aa sets its text size (or on the virtual display). It applies only
 /// where it makes the picture larger (`largerPictureGains`: not where Display Zoom makes the screen
@@ -142,7 +143,8 @@ struct PhonePortraitLayout: Equatable {
     let rulerStepBesideMenus: CGFloat
     /// The app drawer and the Settings panel, from under row 1 across its whole span (Apps' leading
     /// edge to Settings' trailing one), so nothing cut shows beside them; each is at most this tall
-    /// (the panel follows its content).
+    /// (the panel follows its content). With Larger Picture the drawer is above row 1 instead, over
+    /// the picture's room, clear of any keyboard (on an 18 Pro Max 412×438 from 8).
     let drawer: CGRect
     let settings: CGRect
     /// The Settings panel's top-trailing corner as fractions of `size`: where it grows from.
@@ -228,10 +230,18 @@ struct PhonePortraitLayout: Equatable {
         (ruler, rulerStep) = Self.ruler(on: buttons[Button.textSize.rawValue], in: row1)
         (rulerBesideMenus, rulerStepBesideMenus) = Self.ruler(on: buttonsBesideMenus[Button.textSize.rawValue], in: row1)
 
-        // The drawer and the panel hang under row 1 and span it, down to the trackpad's bottom.
+        // The drawer and the panel hang under row 1 and span it, down to the trackpad's bottom. With
+        // Larger Picture the drawer opens upward instead, over the picture's room to `panelGap` above
+        // row 1: under row 1 is the keyboard's footprint, so a keyboard up (the Mac's, or the one the
+        // drawer's own search field brings) would leave only the search field in view there. The
+        // panel stays under row 1: opening it takes the keyboard down, and the picture stays in view.
         let panelTop = row1.maxY + Self.panelGap
         let panelHeight = max(0, height - Self.bottom - panelTop)
-        drawer = CGRect(x: Self.side, y: panelTop, width: rowWidth, height: panelHeight)
+        if footprint == nil {
+            drawer = CGRect(x: Self.side, y: panelTop, width: rowWidth, height: panelHeight)
+        } else {
+            drawer = CGRect(x: Self.side, y: Self.margin, width: rowWidth, height: max(0, row1.minY - Self.panelGap - Self.margin))
+        }
         settings = CGRect(x: Self.side, y: panelTop, width: rowWidth, height: panelHeight)
         settingsAnchor = CGPoint(x: width > 0 ? settings.maxX / width : 1, y: height > 0 ? settings.minY / height : 0)
 

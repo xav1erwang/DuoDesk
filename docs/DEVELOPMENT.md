@@ -735,6 +735,8 @@ simulator:
 - `-SillConnect 127.0.0.1:PORT`: connect by address, also in the normal app.
   There, and under `-SillLive 1`, `-SillDrawer 1`, `-SillSettings 1` and
   `-SillScaleOpen 1` open theirs 1.5 s after the stream starts.
+  `-SillDrawerSearch <text>` makes the open drawer search for that text with
+  the keyboard up for its field.
 - `-SillKeyboard 1` brings the software keyboard up in a live session (in the
   mock it only lights the button), and `-SillKeyboardToggle 5,8.5` toggles it
   at those seconds as the Keyboard button does. A simulator shows it only

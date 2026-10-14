@@ -5407,7 +5407,9 @@ its bottom edge: photograph it on a larger simulator, or in the normal app.
 mock only lights the button), `-SillKeyboardToggle <s>[,<s>…]` toggles it at
 those seconds as the Keyboard button does, and in a live session (the normal
 app with `-SillConnect`, or `-SillLive 1`) `-SillDrawer 1`, `-SillSettings 1`
-and `-SillScaleOpen 1` open theirs 1.5 s after the stream starts. The console
+and `-SillScaleOpen 1` open theirs 1.5 s after the stream starts
+(`-SillDrawerSearch <text>`: the open drawer searches with its field's keyboard
+up). The console
 prints `viewport: 386×241 pt, scale none, 60 fps` for each viewport sent, and on
 a phone upright `trackpad: …, vertical span …` and, once the keyboard has moved,
 `keyboard: up, 301 pt tall, its top at …; the key row ends 10 pt above it`.

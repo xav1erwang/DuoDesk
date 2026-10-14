@@ -92,6 +92,11 @@ MUTANTS = {
     "N5 the keyboard whatever the gain": ("return largerPictureGains(container, keyboard: keyboard) ? keyboard : nil", "return keyboard"),
     "N6 the switch judged on the screen as it is held": ("let upright = CGSize(width: min(screen.width, screen.height), height: max(screen.width, screen.height))",
                                                          "let upright = screen"),
+    # Larger Picture's drawer above row 1, clear of the keyboard (the review of 2026-10-14).
+    "D1 the drawer under row 1 with Larger Picture": ("drawer = CGRect(x: Self.side, y: Self.margin, width: rowWidth, height: max(0, row1.minY - Self.panelGap - Self.margin))",
+                                                      "drawer = CGRect(x: Self.side, y: panelTop, width: rowWidth, height: panelHeight)"),
+    "D2 the drawer against row 1 without its gap": ("height: max(0, row1.minY - Self.panelGap - Self.margin))", "height: max(0, row1.minY - Self.margin))"),
+    "D3 the drawer from the screen's top edge": ("drawer = CGRect(x: Self.side, y: Self.margin,", "drawer = CGRect(x: Self.side, y: 0,"),
 }
 caught = 0
 for name, (old, new) in MUTANTS.items():

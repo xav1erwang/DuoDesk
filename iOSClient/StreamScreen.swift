@@ -1775,6 +1775,9 @@ struct AppDrawer: View {
     @ObservedObject var client: StreamClient
     @Binding var drawerOpen: Bool
     @State private var search = ""
+    /// The search field has the keyboard. Set only by DEBUG `-SillDrawerSearch` (ContentView's
+    /// contract); a tap focuses the field as before.
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 6) {
@@ -1829,11 +1832,29 @@ struct AppDrawer: View {
                 .textInputAutocapitalization(.never)
                 .submitLabel(.search)
                 .accessibilityLabel("Search apps on this Mac")
+                .focused($searchFocused)
         }
         .frame(height: 48)
         .padding(.horizontal, 14)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.control))
+        #if DEBUG
+        .onAppear(perform: searchFromLaunchArguments)
+        #endif
     }
+
+    #if DEBUG
+    /// `-SillDrawerSearch <text>` (ContentView's contract): the drawer, once open, searches for that
+    /// text with the keyboard up for its field, as a tap and typing would, so a photo shows what the
+    /// keyboard leaves in view of the results.
+    private func searchFromLaunchArguments() {
+        guard let query = UserDefaults.standard.string(forKey: "SillDrawerSearch") else { return }
+        search = query
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            searchFocused = true
+            print("harness: the drawer's search field has the keyboard, searching for \"\(query)\"")
+        }
+    }
+    #endif
 
     private func header(_ title: String) -> some View {
         Text(title)

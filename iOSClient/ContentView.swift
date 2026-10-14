@@ -96,6 +96,8 @@ struct ContentView: View {
 /// * `-SillDrawer 1` — start with the app drawer open. This, `-SillScaleOpen 1` and `-SillSettings 1`
 ///   also work in a live session (the normal app with `-SillConnect`, and `-SillLive 1`), where each
 ///   opens 1.5 s after the stream screen shows, once the Desktop has started (StreamScreen).
+///   `-SillDrawerSearch <text>`: the open drawer searches for that text with the keyboard up for its
+///   field (in a live session the real keyboard), so a photo shows what the keyboard leaves in view.
 /// * `-SillScaleOpen 1` — start with the Aa slider unfolded (as while a finger holds it);
 ///   `-SillScale 1.5` sets the scale it opens at.
 /// * `-SillWindowMenu 1` — open the first thumbnail's traffic lights and keep them open.

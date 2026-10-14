@@ -487,9 +487,14 @@ for row in largerTable {
     check("\(n): the trackpad \(Int(row.trackpad.width))×\(Int(row.trackpad.height)) from \(Int(row.padTop)): the keyboard's footprint, 16 pt off the bottom",
           l.trackpad == CGRect(x: 14, y: row.padTop, width: row.trackpad.width, height: row.trackpad.height)
             && l.trackpad.minY == size.height - k && l.trackpad.maxY == size.height - 16)
-    check("\(n): the drawer and the panel get \(Int(row.panelRoom)) pt (the keyboard + 46), from 8 under row 1, across it",
-          l.drawer == CGRect(x: 14, y: row.row1.1 + 8, width: size.width - 28, height: row.panelRoom) && l.settings == l.drawer
-            && row.panelRoom == k + 46)
+    check("\(n): the panel gets \(Int(row.panelRoom)) pt (the keyboard + 46), from 8 under row 1, across it",
+          l.settings == CGRect(x: 14, y: row.row1.1 + 8, width: size.width - 28, height: row.panelRoom) && row.panelRoom == k + 46)
+    // The review of 2026-10-14: under row 1 a keyboard up left only the drawer's 62 pt of padding and
+    // search field in view. The drawer opens above row 1 instead, over the room, to 8 pt above row 1.
+    check("\(n): the drawer above row 1, from 8 to 8 above it (\(Int(row.room.height + 16)) pt: the room + 16), across it",
+          l.drawer == CGRect(x: 14, y: 8, width: size.width - 28, height: row.row1.0 - 16) && l.drawer.height == row.room.height + 16)
+    check("\(n): the whole drawer clear of the keyboard, by \(Int(size.height - k - l.drawer.maxY)) pt (a candidate bar's 44 more too)",
+          l.drawer.maxY == size.height - k - 128 && l.drawer.maxY < size.height - k - 44)
     check("\(n): the Desktop's frame \(Int(row.desktop.width))×\(Int(row.desktop.height))",
           l.pane(video: macBookDesktop).size == row.desktop)
     check("\(n): the dim is above and below row 1's buttons",
@@ -499,6 +504,16 @@ for row in largerTable {
           near(l.settingsAnchor.x, (size.width - 14) / size.width) && near(l.settingsAnchor.y, (row.row1.1 + 8) / size.height))
     check("\(n): with a candidate bar (44 pt more) row 1 is still clear of the keyboard (\(Int(size.height - k - 44 - l.row1.maxY)) pt)",
           l.row1.maxY < size.height - k - 44)
+}
+// The review's numbers (2026-10-14): a drawer under Larger Picture's row 1, which ends 70 pt above the
+// keyboard, kept 62 pt in view above the keyboard on every phone (its padding and search field), where
+// today's keeps 219, 167, 138 and 100; the drawer above row 1 has all of its 438, 356, 316 and 278.
+for (p, today, drawer) in [(proMax, CGFloat(219), CGFloat(438)), (fifteenPro, 167, 356), (mini, 138, 316), (se, 100, 278)] {
+    let c = p.container, top = c.height - p.keyboard!
+    let larger = L(size: c, keyboard: p.keyboard!), standard = L(size: c)
+    check("\(p.name): with the keyboard up, today's drawer keeps \(Int(today)) pt in view; under Larger Picture's row 1 one would keep 62; above it, all \(Int(drawer))",
+          top - standard.drawer.minY == today && top - (larger.row1.maxY + 8) == 62
+            && larger.drawer.height == drawer && larger.drawer.maxY < top)
 }
 check("Larger Picture is larger on every phone it applies to (all but those Display Zoom makes 320 pt wide)",
       largerTable.allSatisfy { r in r.room.height > r.today && L.largerPictureGains(r.phone.container, keyboard: r.phone.keyboard!) })
@@ -608,7 +623,7 @@ let lRoom = Rule("Larger Picture: the room at (8, 8), W − 16 wide, the height 
 let lRow1 = Rule("Larger Picture: five equal buttons as today, and beside the Mac's menus six, Menus second, each (W − 68) ÷ 6, 8 apart, from 14 to W − 14")
 let lCaps = Rule("Larger Picture: six equal caps, 44 tall, 8 apart, from 14 to W − 14")
 let lRulers = Rule("Larger Picture: both rulers over row 1, centred on their Aa, inside the row, 36 a detent where they fit")
-let lPanels = Rule("Larger Picture: the drawer and the panel from 8 under row 1 to 16 off the bottom, across row 1; the anchor their corner; the dim all but row 1")
+let lPanels = Rule("Larger Picture: the panel from 8 under row 1 to 16 off the bottom, the drawer from 8 to 8 above row 1 (128 above the keyboard), both across row 1; the anchor the panel's corner; the dim all but row 1")
 let lFrames = Rule("Larger Picture: each frame inside the room, from its top, whole points, at the picture's shape (to a point), centred across when taller than the room; the span the pad's width × the frame's shape")
 let largerRules = [lInside, lOrdered, lGaps, lRoom, lRow1, lCaps, lRulers, lPanels, lFrames]
 let frameVideos = [CGSize.zero, CGSize(width: 3024, height: 1964), CGSize(width: 2560, height: 1080), CGSize(width: 1000, height: 1000),
@@ -646,7 +661,8 @@ for keyboard: CGFloat in [233, 301, 310, 320] {
                     && near(ruler.width, 4 * step + 60) && ruler.minX >= 14 - 0.001 && ruler.maxX <= W - 14 + 0.001 && near(step, fitting)
             }
             lRulers.expect(rulersOK, size)
-            lPanels.expect(l.drawer == CGRect(x: 14, y: l.row1.maxY + 8, width: W - 28, height: H - 16 - l.row1.maxY - 8) && l.settings == l.drawer
+            lPanels.expect(l.settings == CGRect(x: 14, y: l.row1.maxY + 8, width: W - 28, height: H - 16 - l.row1.maxY - 8)
+                           && l.drawer == CGRect(x: 14, y: 8, width: W - 28, height: l.row1.minY - 16) && l.drawer.maxY == H - keyboard - 128
                            && near(l.settingsAnchor.x, l.settings.maxX / W, 0.0001) && near(l.settingsAnchor.y, l.settings.minY / H, 0.0001)
                            && l.dim == [CGRect(x: 0, y: 0, width: W, height: l.row1.minY), CGRect(x: 0, y: l.row1.maxY, width: W, height: H - l.row1.maxY)], size)
             var framesOK = true, bad = ""
