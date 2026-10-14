@@ -224,6 +224,11 @@ struct StreamScreen: View {
                 .onChange(of: DuoLayout.of(geo.size).isPortrait, initial: true) { _, portrait in
                     client.setPointerLayout(portrait: portrait)
                 }
+                // The clipboard's chip on screen or not: its 20 s run only while it is, and VoiceOver
+                // is told when it first shows (ClipboardPolicy.chipCounts).
+                .onChange(of: clipboardChipOnScreen, initial: true) { _, onScreen in
+                    client.clipboardChipShown(onScreen)
+                }
                 // The clipboard's chip (docs/clipboard-plan.md): a sibling after the layouts, so its
                 // Paste button and Dismiss take their touches over the stream's UIKit input view, and
                 // nothing else does (the frame around it is empty). Near the bar, off the link's line,
@@ -361,6 +366,11 @@ struct StreamScreen: View {
     /// Aa ruler either (the Settings panel has its own Paste).
     private var clipboardChipAllowed: Bool { linkLineAllowed && windowMenu == nil && !scaleOpen }
 
+    /// The chip itself on screen, not its note in its place: its time runs only then.
+    private var clipboardChipOnScreen: Bool {
+        clipboardChipAllowed && client.clipboardChip && client.clipboardNote == nil && tourTargets[.stream] != nil
+    }
+
     /// Runs LinkLine on the report and what is open, says the line once a spell, and looks again at
     /// the linger's end.
     private func updateLinkLine() {
@@ -419,7 +429,8 @@ struct StreamScreen: View {
     /// mock only lights the button, from its init); `-SillKeyboardToggle <s>[,<s>…]` toggles it at
     /// those seconds as the Keyboard button does, a stand-in for a tap. In a live session (the
     /// normal app with `-SillConnect`, or `-SillLive 1`) `-SillDrawer 1`, `-SillSettings 1` and
-    /// `-SillScaleOpen 1` (with `-SillScale`) open theirs 1.5 s in, once the Desktop has started:
+    /// `-SillScaleOpen 1` (with `-SillScale`) open theirs 1.5 s in, once the Desktop has started
+    /// (`-SillSettingsCloseAt <s>` closes the panel again s seconds in):
     /// its start closes a drawer opened before it, and the normal app has no harness to pass them
     /// in at the start.
     private func runLaunchArguments() {
@@ -452,6 +463,10 @@ struct StreamScreen: View {
         }
         if defaults.bool(forKey: "SillSettings") {
             after(1.5) { print("harness: the Settings panel opened"); setSettings(true) }
+            // `-SillSettingsCloseAt <s>`: closed again s seconds in, as Done does (the clipboard's chip
+            // waiting under it, then showing: docs/clipboard-plan.md).
+            let closeAt = defaults.double(forKey: "SillSettingsCloseAt")
+            if closeAt > 1.5 { after(closeAt) { print("harness: the Settings panel closed"); setSettings(false) } }
         }
         if defaults.bool(forKey: "SillScaleOpen") {
             after(1.5) {

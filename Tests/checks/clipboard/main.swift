@@ -287,6 +287,18 @@ for connected in [false, true] {
         }
     }
 }
+// The chip's 20 s run only while it is on screen, Sill active and VoiceOver off (the review's finding:
+// it ran out unseen under the tour or the Settings panel, and for VoiceOver in 20 s, and the copy then
+// counted as dealt with).
+for onScreen in [false, true] {
+    for active in [false, true] {
+        for voiceOver in [false, true] {
+            check(P.chipCounts(onScreen: onScreen, active: active, voiceOver: voiceOver) == (onScreen && active && !voiceOver),
+                  "the chip's time: on screen \(onScreen), active \(active), VoiceOver \(voiceOver)")
+        }
+    }
+}
+check(C.chipAnnouncement(mac: "Mac mini") == "Paste on Mac mini is available, near the bar.", "VoiceOver told when the chip shows")
 check(P.looksAtSessionStart(activatedAt: nil, now: 100) == false, "no activation: no look")
 check(P.looksAtSessionStart(activatedAt: 100, now: 100) && P.looksAtSessionStart(activatedAt: 100, now: 115), "within 15 s: the look")
 check(!P.looksAtSessionStart(activatedAt: 100, now: 115.01), "after 15 s: none")
@@ -342,7 +354,7 @@ check(C.ignoredLine(rate: 0, tooLong: 0, undecodable: 2) == "Clipboard from devi
 let words = [C.chipTitle(mac: "M"), C.chipSubtitle, C.chipSpoken(mac: "M", device: "iPad"), C.pasteHint(mac: "M", device: "iPad"), C.sent(mac: "M"),
              C.sentSpoken(mac: "M"), C.tooLong(mac: "M"), C.switchTitle, C.rowTitle(mac: "M"), C.footnote(on: true, mac: "M", device: "iPad"),
              C.footnote(on: false, mac: "M", device: "iPad"), C.sharesLine(device: "d"), C.stoppedLine(device: "d"), C.ignoredLine(rate: 1, tooLong: 1, undecodable: 1),
-             C.macFootnote, C.macAccessButton, C.notSent(mac: "M")]
+             C.macFootnote, C.macAccessButton, C.notSent(mac: "M"), C.chipAnnouncement(mac: "M")]
     + [P.MacAccess.allowed, .notAsked, .asks, .denied].flatMap { [C.macAccessWarning($0), C.macAccessHint($0), C.macAccessLine($0)].compactMap { $0 } }
 check(words.allSatisfy { !$0.contains("—") && !$0.contains("–") }, "no dashes in the words")
 

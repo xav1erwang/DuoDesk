@@ -299,6 +299,15 @@ public enum ClipboardPolicy {
         connected && hostTakes(hostClipboard) && switchOn && hasStrings && changeCount != handled
     }
 
+    /// Whether the chip's `chipLifetime` runs now: only while the chip is on screen (nothing open over
+    /// the stream, no note in its place), Sill is active, and VoiceOver is off. Hidden, it waits; with
+    /// VoiceOver on it stays until Paste or Dismiss. Found in review: it ran out unseen under the tour
+    /// or the Settings panel, and in 20 s for someone finding it with VoiceOver, and each time the copy
+    /// counted as dealt with.
+    public static func chipCounts(onScreen: Bool, active: Bool, voiceOver: Bool) -> Bool {
+        onScreen && active && !voiceOver
+    }
+
     /// A session's first list that says the Mac takes the clipboard, at `now`: whether Sill's
     /// activation (`activatedAt`, nil for none yet) owes it the chip's look.
     public static func looksAtSessionStart(activatedAt: Double?, now: Double) -> Bool {
@@ -357,6 +366,8 @@ public enum ClipboardPolicy {
             "Paste on \(mac). Sends the text you copied on this \(device) to \(mac)’s clipboard. Then press Command-V there."
         }
         public static let dismiss = "Dismiss"
+        /// Told to VoiceOver when the chip first shows for a copy (found in review: it came unannounced).
+        public static func chipAnnouncement(mac: String) -> String { "Paste on \(mac) is available, near the bar." }
         /// The Paste button's hint, on the chip and in Settings.
         public static func pasteHint(mac: String, device: String) -> String {
             "Sends the text you copied on this \(device) to \(mac)’s clipboard."

@@ -60,12 +60,22 @@ extension StreamClient {
 
     private var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    /// Sill becoming active (and a scene of it) is when the chip looks. From init.
+    /// Sill becoming active (and a scene of it) is when the chip looks; Sill no longer active, and
+    /// VoiceOver turning on or off, stop or start the chip's time (`updateClipboardChipClock`). From init.
     func observeClipboardActivation() {
+        let center = NotificationCenter.default
         for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.clipboardBecameActive()
             }
+        }
+        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.clipboardAppActive = false
+            self.updateClipboardChipClock()
+        }
+        center.addObserver(forName: UIAccessibility.voiceOverStatusDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateClipboardChipClock()
         }
     }
 
@@ -150,8 +160,11 @@ extension StreamClient {
 
     // MARK: The chip
 
-    /// Sill became active: the chip looks now, or at the session's start soon after (`hostClipboardChanged`).
+    /// Sill became active: the chip's time runs again if it shows, and the chip looks now, or at the
+    /// session's start soon after (`hostClipboardChanged`).
     func clipboardBecameActive() {
+        clipboardAppActive = true
+        updateClipboardChipClock()
         // The app's and its scene's notifications come together: one look.
         if let last = clipboardActivatedAt, uptime - last < 0.5 { return }
         clipboardActivatedAt = uptime
@@ -178,13 +191,61 @@ extension StreamClient {
         #endif
         guard offer, !clipboardChip else { return }
         clipboardChip = true
-        clipboardChipExpiry?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.dismissClipboardChip() }
-        clipboardChipExpiry = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + ClipboardPolicy.chipLifetime, execute: work)
+        clipboardChipShownFor = 0
+        clipboardChipAnnounced = false
+        updateClipboardChipClock()
     }
 
-    /// Dismiss, or its time was up: handled for this change count.
+    /// The stream screen says whether the chip itself is on screen (StreamScreen.clipboardChipOnScreen):
+    /// its time runs only then, and VoiceOver is told the first time it shows for a copy.
+    func clipboardChipShown(_ onScreen: Bool) {
+        guard onScreen != clipboardChipOnScreen else { return }
+        clipboardChipOnScreen = onScreen
+        if onScreen, clipboardChip, !clipboardChipAnnounced {
+            clipboardChipAnnounced = true
+            let mac = macName.isEmpty ? "the Mac" : macName
+            UIAccessibility.post(notification: .announcement, argument: ClipboardPolicy.Copy.chipAnnouncement(mac: mac))
+            #if DEBUG
+            print("clipboard: the chip shows; VoiceOver told")
+            #endif
+        }
+        updateClipboardChipClock()
+    }
+
+    /// The chip's `chipLifetime`, counted only while ClipboardPolicy.chipCounts says (on screen, Sill
+    /// active, VoiceOver off), from what it has spent so far; at its end the copy is dealt with.
+    func updateClipboardChipClock() {
+        let now = uptime
+        if let since = clipboardChipCountingSince {
+            clipboardChipShownFor += now - since
+            clipboardChipCountingSince = nil
+        }
+        clipboardChipExpiry?.cancel()
+        clipboardChipExpiry = nil
+        guard clipboardChip else { return }
+        #if DEBUG
+        if mockDiscovery { return }      // the harness's chip stays
+        #endif
+        let counts = ClipboardPolicy.chipCounts(onScreen: clipboardChipOnScreen, active: clipboardAppActive,
+                                                voiceOver: HostSettingsPanel.voiceOverRunning)
+        let left = ClipboardPolicy.chipLifetime - clipboardChipShownFor
+        #if DEBUG
+        print("clipboard: the chip's time " + (counts ? "runs" : "waits") + String(format: ", %.1f s left", max(0, left)))
+        #endif
+        guard counts else { return }
+        guard left > 0 else { dismissClipboardChip(); return }
+        clipboardChipCountingSince = now
+        let work = DispatchWorkItem { [weak self] in
+            #if DEBUG
+            print("clipboard: the chip's time is up")
+            #endif
+            self?.dismissClipboardChip()
+        }
+        clipboardChipExpiry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + left, execute: work)
+    }
+
+    /// Dismiss, or its time on screen was up: handled for this change count.
     func dismissClipboardChip() {
         guard clipboardChip else { return }
         clipboardHandled = UIPasteboard.general.changeCount
@@ -194,6 +255,7 @@ extension StreamClient {
     func hideClipboardChip() {
         clipboardChipExpiry?.cancel()
         clipboardChipExpiry = nil
+        clipboardChipCountingSince = nil
         if clipboardChip { clipboardChip = false }
     }
 

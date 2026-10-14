@@ -751,6 +751,14 @@ final class StreamClient: ObservableObject {
     var clipboardSent: ClipboardPolicy.Sent?
     var clipboardChipExpiry: DispatchWorkItem?
     var clipboardNoteExpiry: DispatchWorkItem?
+    /// The chip is on screen (StreamScreen: nothing open over the stream, no note in its place), its time
+    /// on screen so far, since when that counts, and whether VoiceOver was told it came; Sill is active
+    /// (ClipboardPolicy.chipCounts: its 20 s run only while all say so, and VoiceOver is off).
+    var clipboardChipOnScreen = false
+    var clipboardChipShownFor: TimeInterval = 0
+    var clipboardChipCountingSince: TimeInterval?
+    var clipboardChipAnnounced = false
+    var clipboardAppActive = UIApplication.shared.applicationState == .active
     /// A Paste waiting for the pong that says the Mac has read it (ClipboardPolicy.receiptLength), and
     /// its timeout (`receiptWait`).
     var clipboardReceipt: ClipboardReceipt?
