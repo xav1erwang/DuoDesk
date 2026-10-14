@@ -76,6 +76,13 @@ dependency, the device through the local package).
   `me.saffer.sill.clipboard` naming its launch); only a change with text, not empty, at most 256 KB,
   whose JSON fits. A marker's types are read before any data, so neither a password manager's text
   nor another device's is ever read.
+- **The rate** (`hostReceives`, after the review): what a device's message asks is decided first; a
+  subscription or text is taken at most 4 times in any second (`admits`), the rest refused (`rate`); a
+  stop is always taken and counts nothing, nor does a refusal (`countsAgainstRate`).
+- **macOS's paste privacy** (`MacAccess`, `hostLooks`, `accessStep`, `accessLine`, after the review):
+  NSPasteboard's `accessBehavior` (macOS 15.4 and later) read as allowed, not asked yet, asks or denied
+  (a value this build does not know as asks); the host reads its pasteboard only while macOS allows
+  every read, and what was copied while it did not is never sent.
 - **Who a device's text goes to**: every subscriber but its sender (`forward`).
 - **The device's subscription** (`deviceSubscription`): subscribe while the Mac says 1 or more, the
   switch is on and this connection has not; stop when it has and the switch is off; nothing otherwise.
@@ -85,6 +92,11 @@ dependency, the device through the local package).
   says 1 or more, text not empty and within the cap, and not the text this device sent while its
   clipboard still holds it (its change count unchanged since the send: the Mac's echo, which a host of
   this change never sends, but a later one could).
+- **A Paste's receipt** (`receiptLength`, `receiptWait`, after the review): "Sent" only once a ping sent
+  after the text comes back, its payload 16 random bytes; none within max(4 s, 4 × the worst round trip),
+  "Didn’t reach ‹Mac›. Try Paste again." and the copy not dealt with.
+- **The chip's time** (`chipCounts`, after the review): its 20 s run only while it is on screen, Sill is
+  active and VoiceOver is off.
 - **The chip** (`offersChip`): connected, the Mac says 1 or more, the switch on, the device's clipboard
   has text (`hasStrings`), and its change count is not the one Sill last handled (sent, wrote from the
   Mac, or dismissed). When Sill becomes active, or when a session's first list says 1 or more within
@@ -115,13 +127,26 @@ dependency, the device through the local package).
 - **A device's text.** `prepareForNewContents(with: .currentHostOnly)` (so Universal Clipboard does
   not carry it to the person's other devices, the device included), one item with the text and the
   marker, the change count kept, and the text forwarded to every other subscriber.
-- **Limits.** At most 4 kind 32 a second per connection (a tap sends one); the rest, and text over
-  the cap, ignored with one line a minute (`RefusalSummary`). Contents are never logged. Stats keys
+- **Limits.** At most 4 subscriptions and texts a second per connection (a tap sends one); the rest,
+  and text over the cap, ignored with one line a minute (`RefusalSummary`). A stop is never limited. Contents are never logged. Stats keys
   `clip.sent` (messages sent) and `clip.recv` (texts taken), only in seconds they happen.
+- **macOS's paste privacy** (after the review). The look reads NSPasteboard.general only while
+  `MacClipboard.access()` says macOS allows every read (`accessBehavior` `.alwaysAllow`, or a macOS
+  before 15.4); otherwise it reads nothing, not even the change count, and when reads are allowed again
+  the count is taken as seen. One line when macOS's answer changes ("Clipboard: macOS asks before Sill
+  reads the clipboard, so what is copied on this Mac stays here. …"). A device's text is still written
+  (the count from `prepareForNewContents`). Settings › General (`ClipboardSection`): under the switch,
+  while macOS asks or denies, the reason, what to do and "Allow in System Settings…", which opens
+  Privacy & Security › Paste from Other Apps (`Privacy_Pasteboard`); while macOS has not asked about
+  Sill yet, Sill is not listed there (NSPasteboard.h), so the button first makes one read on that click
+  (`MacClipboard.askOnce`, off the main thread, the text dropped) for macOS to ask. `PermissionsModel`
+  reads the state with the permissions.
 - **Test hosts.** A synthetic host never reads or writes this Mac's clipboard, as it never reads the
   real pointer: it uses a pasteboard of its own, `me.saffer.sill.test.<pid>`, or the one
   `SILL_TEST_PASTEBOARD=<name>` names (TEST ONLY), said once at its first subscription.
   `SILL_TEST_CLIPBOARD_LOG=1` (TEST ONLY) prints each decision with the text's size, never the text.
+  `SILL_TEST_CLIPBOARD_ACCESS` (TEST ONLY) gives its pasteboard macOS's answer: a word, or a file
+  holding one, read at each look.
 
 ### Device
 
@@ -135,19 +160,31 @@ dependency, the device through the local package).
   then press ⌘V there) with the system Paste button and a dismiss button appears near the bar: under
   the bar at the stream panel's top trailing corner sideways (its bottom corner while the link's line
   shows at the top), at the picture's bottom trailing corner, just above the window bar or row 1, held
-  upright. It hides while the Settings panel, the Apps list, the pairing overlay or the tour is open.
-  A tap on Paste sends the text as kind 32 and shows "Sent to ‹Mac›’s clipboard. Press ⌘V there." for
-  3 s (spoken by VoiceOver); text over 256 KB is not sent ("Too long to send…"). The same Paste is in
-  the Settings group whenever it shows.
+  upright. It hides while the Settings panel, the Apps list, the pairing overlay, the tour, a
+  thumbnail's lights or the Aa ruler is open; its 20 s run only while it shows with Sill active, and
+  not at all under VoiceOver; VoiceOver is told when it first shows ("Paste on ‹Mac› is available,
+  near the bar.").
+  A tap on Paste sends the text as kind 32, then a ping with a random 16-byte payload through the same
+  door; its pong (the receipt) shows "Sent to ‹Mac›’s clipboard. Press ⌘V there." for 3 s (spoken by
+  VoiceOver) and counts the copy as dealt with; no receipt within max(4 s, 4 × the worst round trip)
+  shows "Didn’t reach ‹Mac›. Try Paste again." and offers the chip again. Text over 256 KB is not sent
+  ("Too long to send…"). The same Paste is in the Settings group whenever it shows.
 - **Subscription.** An empty kind 32 at the session's first window list that says 1 or more (and on a
   move's new connection), with the switch on; `{"stop": true}` when the switch goes off.
-- `-SillClipboardChip 1` and `-SillClipboardNote sent|long` (DEBUG) put the chip and the note on the
-  harness's mock; the mock Mac says `clipboard` 1 in every settings case but `legacy`.
+- `-SillClipboardChip 1` and `-SillClipboardNote sent|long|notsent` (DEBUG) put the chip and the note
+  on the harness's mock; the mock Mac says `clipboard` 1 in every settings case but `legacy`.
+  `-SillSettingsScript '<t> paste TEXT'` sends TEXT as the Paste control hands it over, and
+  `-SillSettingsCloseAt <s>` closes the panel `-SillSettings 1` opened (live, DEBUG).
 
 ## Open questions, with the default taken
 
 1. **On by default?** On, on the Mac and on the device (the task). Both have a switch, and the
-   privacy policy says what travels.
+   privacy policy says what travels. The review's note, for Noah: with both on, a device that updates
+   subscribes at connect, so every Mac copy made while it is connected (an app's own included, such
+   as a terminal that copies on select) replaces what was on the device's clipboard (a photo, say),
+   and that text expires 10 minutes later, leaving the device's clipboard empty, for people who never
+   use the feature. A longer or no expiry, or off by default on the device, is one line each
+   (`ClipboardPolicy.deviceExpiry`, `StreamClient.clipboardOn`).
 2. **What a new subscriber gets.** Nothing that was on the clipboard before; only copies made while
    a device shares it. Connecting never sends an old copy (a password from an hour ago).
 3. **The device's switch off mid-session.** `stop`, an optional field beyond `{text, image}`: without it
@@ -171,6 +208,19 @@ dependency, the device through the local package).
     screen and type on it. With Require pairing off that is anyone on the network with Sill; the
     privacy page already says so for the screen.
 11. **Rich text, images, files.** Text only (generation 1). Rich text copies send their plain text.
+12. **macOS's paste privacy** (after the review). The default: read only while macOS allows every read,
+    never in the background while it asks (its alert at every copy) or denies; Settings › General says
+    why and opens Paste from Other Apps, asking once first while macOS has not asked about Sill. The
+    device is not told (no wire change): its footnote still says the Mac's copies are ready while the
+    Mac keeps them. A later field in the window list could say so.
+13. **The receipt** (after the review). A ping after the text, no wire change and no answer from the
+    host: it says the Mac read the text, not that the pasteboard took it (a Mac whose Share clipboard
+    with devices went off in that moment, or past the rate, which a tap never reaches).
+14. **The chip under VoiceOver** (after the review). No time limit while VoiceOver is on (it stays until
+    Paste or Dismiss); hidden, it waits.
+15. **The site's words before the release** (after the review). Kept with this pull request, as the other
+    features' are, between `<!-- Clipboard` markers that a republish before the release cuts
+    (docs/release-checklist.md, part 1 §3); the README describes main's code, as #39's did.
 
 ## Test plan
 
@@ -269,6 +319,94 @@ What differs from the plan above, each found while building or testing:
   simulator's pasteboard (no Simulator.app running, so nothing synced), and a read of
   `NSPasteboard.general.changeCount` alone before and after (317 throughout).
 
+### The review (2026-10-14) and what changed
+
+An adversarial review of 7e6468a reran the gates (all held) and found eight things; each was checked
+against the code first, and all eight were taken, one commit per theme:
+
+1. **A stop lost to the rate (should-fix; c2d7b6a).** HostClipboard applied the 4-a-second rate to
+   every kind 32 before reading it, so a `{"stop":true}` that was the fifth in a second was refused
+   and the device stayed subscribed. Reproduced on loopback against 7e6468a: subscribe, then stop,
+   `{}`, stop, `{}`, stop at 2.0 to 2.4 s: "1 from devices sending more than 4 a second", and a Mac copy
+   at 5 s reached the client ("clipboard at 5.180s: 32 bytes 'copied after the switch went off'").
+   Now `hostReceives` decides first and rates only subscriptions and texts: the same run gives a third
+   "stopped sharing" and nothing at 5 s; five texts in a second still set four (the pasteboard holds the
+   fourth, one ignored line), and a stop right after them is taken. Check: the sequence, the rate's
+   edges and model 1b (5,000 quick sessions through `hostReceives`: never subscribed at the host while
+   the device's switch is off); five mutants, the review's ordering among them.
+2. **macOS's paste privacy (should-fix; 210ba4b).** Sill.app read NSPasteboard.general at every copy
+   and never looked at `accessBehavior`; NSPasteboard.h (the macOS 27 SDK) says the general pasteboard
+   asks at each programmatic read by default once that is on (`.default`, then `.ask`), lists an app
+   in Privacy & Security › Paste from Other Apps only after its first alert, and returns nothing while
+   denied. Now the look reads only while macOS allows every read (`MacAccess`, `hostLooks`; before macOS
+   15.4 there is no such setting), reads nothing otherwise, and takes the count as seen when reads come
+   back (`accessStep`); one line when the answer changes (`accessLine`). Settings › General's
+   `ClipboardSection`: an orange line, what to do, and "Allow in System Settings…", which opens
+   `Privacy_Pasteboard` and, while macOS has not asked about Sill, first makes one read on that click
+   so that macOS asks and lists it. On this Mac (macOS 27.0.1) apps read `.alwaysAllow` (the review read
+   2 from an ad hoc app), so nothing changes today. Live on loopback with TEST ONLY
+   `SILL_TEST_CLIPBOARD_ACCESS` read from a file: denied, then asks, then allowed, then not asked, each
+   with its line; the copies made while denied and while asked never went, the one made after reads came
+   back went at 9.03 s, and a device's text was written while not asked. Previews of the section in
+   each state (`pane-clipboard-*`). Check: the mapping, the steps, the lines, the words, and model 2
+   with macOS's answer changing; ten mutants.
+3. **The floor's image rule (162b00a).** CLAUDE.md's floor, Clipboard.swift and this plan now say that
+   `{}` is text alone and a host sends `image` only to a subscription that says it takes images
+   (`"accepts":2`, say). #66's host sends an image to every subscriber; it follows this as it rebases.
+4. **"Sent" before the Mac had it (768f207).** A Paste said "Sent to ‹Mac›’s clipboard" and counted the
+   copy as dealt with as it handed kind 32 over, while the connection could be dead without its end read
+   (Sill back from another app after the Mac evicted it, a network change, a Mac asleep). Now a ping
+   with 16 random bytes follows the text through the same door; its pong is the receipt ("Sent…", the
+   haptic, the copy dealt with); none in max(4 s, 4 × the worst round trip) gives "Didn’t reach ‹Mac›.
+   Try Paste again." and the chip again; a late receipt still counts. No wire change. Live on the
+   simulator: a Paste (`-SillSettingsScript '3 paste …'`) to the test host gave "its receipt awaited for
+   4.0 s", then "the Mac has read it", and the host's pasteboard held the 32 bytes with the launch's
+   marker; through `sillrelay.py --blackhole-after 3`, a Paste at 3 s gave "no receipt in time: did not
+   reach the Mac" and the chip again, and the host got nothing. Check: the length (never a ping's 8) and
+   the wait; three mutants.
+5. **The chip unannounced, and running out unseen (2eb0fb2, a371cb6).** Its 20 s ran under the Settings
+   panel, the Apps list, the tour (on a fresh install the tour covers the first session's chip a second
+   in), a thumbnail's lights or the Aa ruler, and for someone using VoiceOver, and then counted the copy
+   as dealt with. Now `chipCounts`: only while it shows, Sill active and VoiceOver off; VoiceOver is
+   told when it first shows ("Paste on ‹Mac› is available, near the bar."). Live on the simulator: the
+   chip offered, the Settings panel over it 1.5 s in ("waits, 18.3 s left"), the panel closed at 12 s
+   ("runs, 18.3 s left"), then "time is up"; Sill sent to Settings.app 6 s in ("waits, 14.6 s left") and
+   back at 14 s ("runs, 14.6 s left"), then "time is up"; with `-SillVoiceOver 1` it stayed 30 s. Check:
+   the rule's eight cases; three mutants. A session that ends with the chip showing now forgets that it
+   showed (a371cb6).
+6. **On by default replaces the device's clipboard (documented).** Noah's call: open question 1 says
+   what it does to people who never use the feature, and Untested has the steps.
+7. **Copy (d5b22a7).** Settings › General's footnote now says only copies a password manager marks as
+   concealed stay, and that a device's text comes with Paste; support.html and privacy.html say "Sill
+   never reads your iPhone or iPad’s (device’s) clipboard by itself". A mutant puts the old words back.
+8. **The site's words before the release (f8355aa).** Kept with this pull request, as #79's and #75's
+   are, inside `<!-- Clipboard: … -->` blocks (support.html's section, privacy.html's three items), and
+   docs/release-checklist.md part 1 §3 says how a republish before the release cuts them (a perl line,
+   the date put back). A copy cut that way differs from main's pages only in the date and in words true
+   of the builds out too. support.html also gains the line for macOS's paste privacy.
+
+Verified after the fixes (the code at a371cb6):
+- `Tests/checks/clipboard` 259 checks; its mutants, 72 of 72 caught (the 50 before and 22 new; 39 min under other
+  agents' load). `Tests/checks/run-all.sh`: all 41
+  passed (7 min 05 s).
+- `swift build -c release` from `git archive` of a371cb6: 42.9 s, only the CaptureProbe warning. The iOS
+  app from the same archive, Debug and Release for the generic simulator and Debug for a generic device
+  (`CODE_SIGNING_ALLOWED=NO`, arm64): BUILD SUCCEEDED (18 s, 36 s, 17 s), only the known StreamClient
+  capture warning (StreamClient.swift:3469, main's 3430). Its Debug build on the private simulator: a
+  Paste's receipt again, the host's pasteboard holding the 38 bytes with the launch's marker.
+- H2 again, origin/main's CLI against this branch's, both from `git archive`: idle 35 s side by side
+  identical masked and sorted (7 lines); a client picking the Desktop for 15 s that never subscribes:
+  identical in order without the `[1s]` lines (35 lines each), no clipboard line.
+- Harness photos on a private iPad Pro 13-inch (iOS 27.0, deleted after): the chip sideways and upright,
+  a Paste's note, the Settings group and the stream: byte for byte the reviewed build's (7e6468a); the
+  new note, "Didn’t reach Mac mini. Try Paste again.", sideways and upright.
+- Sill.app's previews from the final bare binary against the reviewed build's: 130 files byte for byte
+  but the General pane (its footnote), and 10 new (the clipboard section in each of macOS's answers, and
+  with the switch off). Copies are in `~/Downloads/sill-handoff/clipboard/photos/review/`.
+- Not rerun: the XCUITest tap on the system Paste control (the receipt was driven through
+  `sendClipboard`, the code the control's tap reaches), the bare app's switch, the phone's arrangement
+  and the Duo's poses (no layout changed). macOS's alert itself: nothing here reads the real clipboard.
+
 ## Untested, for Noah
 
 On the iPad mini and the iPhone 15 Pro with this branch's builds and this Sill.app:
@@ -283,11 +421,29 @@ On the iPad mini and the iPhone 15 Pro with this branch's builds and this Sill.a
    chip may come once offering it back (known); copy on the iPhone: Sill does not pass it on.
 5. Settings › General's switch while the iPad streams: the This iPad group loses its rows, copies stop;
    on again, they come back.
-6. VoiceOver on the iPad: the chip's words, Paste with its hint, Dismiss; "Sent to ‹Mac›’s clipboard"
-   spoken after a Paste.
+6. VoiceOver on the iPad: when the chip shows, "Paste on ‹Mac› is available, near the bar."; the chip's
+   words, Paste with its hint, Dismiss; it stays until Paste or Dismiss; "Sent to ‹Mac›’s clipboard"
+   spoken once the Mac has it.
 7. Split View or a window beside Sill: a copy there brings no chip until Sill becomes active again
    (known); the Settings group's Paste works any time.
-8. On the iPhone: the chip above row 1, the success haptic on a send.
+8. On the iPhone: the chip above row 1, the success haptic once the Mac has the text.
+9. macOS's paste alert (the review's finding 2), with this Sill.app: `defaults write me.saffer.sill.mac
+   EnablePasteboardPrivacyDeveloperPreview -bool yes`, Quit Sill from its menu and open it again, connect
+   the iPad. Settings › General shows "macOS asks before Sill reads the clipboard, so what you copy here
+   stays on this Mac." under the switch; copy in TextEdit: no alert, nothing arrives, and Sill.log has
+   the line once. Click Allow in System Settings…: macOS's alert (note its words and buttons), then
+   Privacy & Security › Paste from Other Apps with Sill listed; set Allow: the orange line goes (within a
+   second while Settings shows), a copy in TextEdit arrives on the iPad, and Sill.log says "macOS lets Sill
+   read the clipboard again". Set Deny: "macOS doesn’t let Sill read the clipboard…", copies stay, and a
+   Paste from the iPad still sets the Mac's clipboard. Then `defaults delete me.saffer.sill.mac
+   EnablePasteboardPrivacyDeveloperPreview` and open Sill again.
+10. The receipt (finding 4): copy in Notes, stay away from Sill about 10 s (the Mac lets the suspended
+    iPad go after 4 s), come back and tap Paste on the chip at once: either "Sent to ‹Mac›’s clipboard"
+    and ⌘V on the Mac pastes it, or "Didn’t reach ‹Mac›. Try Paste again." and the chip comes back once
+    the session is up again; never "Sent" while ⌘V pastes something else.
+11. On by default (finding 6, open question 1): copy a photo on the iPad, then with Sill connected copy
+    text on the Mac: the photo is gone from the iPad's clipboard; 10 minutes later the iPad's clipboard
+    is empty. Say whether either should change.
 
 ## Progress
 
@@ -299,3 +455,12 @@ On the iPad mini and the iPhone 15 Pro with this branch's builds and this Sill.a
   197 checks and 50 of 50 mutants; a clean `swift build -c release` from `git archive` (50 s, only
   the CaptureProbe warning); the iOS app three ways (only the StreamClient warning); CI's "Build and
   check" passed on the pull request (8 min 16 s). The private simulator is deleted.
+- 2026-10-14, after the review (Results, "The review"): a stop never lost to the rate (c2d7b6a); the
+  Mac's clipboard read only while macOS allows it, with Settings › General's section (210ba4b); the
+  Mac's footnote and the site's sentences (d5b22a7); the floor's image rule (162b00a); "Sent" only on
+  the Mac's receipt (768f207); the chip's time while it shows, and VoiceOver told (2eb0fb2, a371cb6);
+  the site's words marked for the release (f8355aa); these docs.
+- Final, after the review: `Tests/checks/run-all.sh` all 41 passed (7 min 05 s); `Tests/checks/clipboard`
+  259 checks and 72 of 72 mutants; `swift build -c release` and the iOS app three ways from `git
+  archive` of a371cb6 (only the known warnings); the live runs and photos in Results. The private
+  simulator is deleted.

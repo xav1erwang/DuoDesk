@@ -8,60 +8,81 @@ Formerly winstream; the folder still carries the old name.
 
 ## Current step
 
-**The clipboard both ways (2026-10-14, branch `clipboard` from main at 985a733; issue #64; the plan,
-its open questions with the default taken for each, and the results are in
-`docs/clipboard-plan.md`).** Noah: work on the clipboard (after #67/#68, #69, #59, #57, #58), text
+**The clipboard both ways (2026-10-14, branch `clipboard` from main at 985a733; issue #64; PR #78;
+the plan, its open questions with the default taken for each, the results and the review's fixes are
+in `docs/clipboard-plan.md`).** Noah: work on the clipboard (after #67/#68, #69, #59, #57, #58), text
 first. Wire, host and device; additive.
 - Wire: kind 32 `clipboard`, both ways, JSON `Clipboard {text, image, stop}` (Clipboard.swift): pull
   request #66's number and shape (`image` reserved for a later generation; `stop`, a device's switch
   going off, is this change's); `WindowList.clipboard: Int?` (1: text), so #66's `Bool` becomes an
   Int as it rebases (a Bool does not decode). A device sends kind 32 only to a host that says 1 or
-  more; any kind 32 subscribes. Text at most 256 KB of UTF-8, the JSON at most 1 MiB either way.
-  Kinds 29–31 stay free (audio, #66's side streams).
+  more; any kind 32 subscribes, and `{}` is text alone: a host sends `image` only to a subscription
+  that says it takes images (the floor; #66's host sends one to every subscriber). Text at most
+  256 KB of UTF-8, the JSON at most 1 MiB either way. Kinds 29–31 stay free (audio, #66's).
 - Rules, pure, both ends: `ClipboardPolicy` (StreamProtocol). Never sent: an item a password manager
   or another app marks `org.nspasteboard.ConcealedType` or `org.nspasteboard.TransientType` (and
   three older markers), one from another device through Universal Clipboard
   (`com.apple.is-remote-clipboard`: reading it fetches it from there, found while building), the
-  host's own write; types are judged before any data is read.
+  host's own write; types are judged before any data is read. A device's subscriptions and texts are
+  rated 4 a second, its stop never (`hostReceives`).
 - Host: `HostClipboard` (main actor; the pasteboard read and written on a queue of its own,
   `Board`, so a slow read never holds up input): the look at the change count four times a second
-  while a device subscribes (Task.sleep, not a RunLoop timer); an empty pasteboard waits up to a
-  second for its contents (`hostWaits`: an app clears, then writes, and only the clear moves the
-  count; found live, 9 of 12 slow copies lost before, none now); what was on the clipboard when the
-  first subscribed is never sent; a device's text written `.currentHostOnly` with this launch's
-  marker and passed to the other subscribers; 4 kind 32 a second per connection; one line per
-  subscription or stop ("Clipboard: iPad (iPad14,1) shares the clipboard."), none per copy, never
-  contents; `clip.sent`/`clip.recv`. `HostConfig.shareClipboard` (on): Settings › General "Share
-  clipboard with devices" (`shareClipboard`), the CLI's `--no-clipboard`; the Mac's alone, applied
-  at once by `setTarget` (subscriptions dropped, lists sent again). A synthetic host shares a
-  pasteboard of its own (TEST ONLY `SILL_TEST_PASTEBOARD`, `SILL_TEST_CLIPBOARD_LOG=1`), never this
-  Mac's clipboard.
+  while a device subscribes (Task.sleep, not a RunLoop timer), and only while macOS allows every read
+  (`MacClipboard.access`, NSPasteboard's `accessBehavior`, macOS 15.4 and later: while it would ask,
+  an alert at every copy, or denies, nothing is read, nothing copied meanwhile is sent, one line when
+  that changes); an empty pasteboard waits up to a second for its contents (`hostWaits`: found live,
+  9 of 12 slow copies lost before, none now); what was on the clipboard when the first subscribed is
+  never sent; a device's text written `.currentHostOnly` with this launch's marker and passed to the
+  other subscribers; one line per subscription or stop ("Clipboard: iPad (iPad14,1) shares the
+  clipboard."), none per copy, never contents; `clip.sent`/`clip.recv`. `HostConfig.shareClipboard`
+  (on): Settings › General's `ClipboardSection`, "Share clipboard with devices" (`shareClipboard`),
+  and while macOS asks or denies, why and "Allow in System Settings…" (Paste from Other Apps,
+  `Privacy_Pasteboard`; one read on that click first while macOS has not asked about Sill, so it is
+  listed); the CLI's `--no-clipboard`; the Mac's alone, applied at once by `setTarget`. A synthetic
+  host shares a pasteboard of its own (TEST ONLY `SILL_TEST_PASTEBOARD`, `SILL_TEST_CLIPBOARD_LOG=1`,
+  `SILL_TEST_CLIPBOARD_ACCESS`), never this Mac's clipboard.
 - Device: `StreamClient+Clipboard` (subscription, `stop`, the Mac's text written `.localOnly` with a
   10-minute expiration, the handled change count `Sill.clipboardHandled`) and `ClipboardChip`: when
   Sill becomes active (or a session starts within 15 s after) with new text on the clipboard
   (`changeCount`, `hasStrings`: no prompt), "Paste on ‹Mac›" / "Then press ⌘V there." with the
-  system's Paste control (`PasteButton`, UIPasteControl) and Dismiss, 20 s at most; under the bar
-  sideways (bottom corner while the link's line shows), above the window bar or row 1 upright.
-  Settings › This iPad: Share Clipboard (`Sill.shareClipboard`, on) and Paste on ‹Mac›, while the Mac
-  says it. Harness: `-SillClipboardChip 1`, `-SillClipboardNote sent|long`.
-- Verified (the plan's Results): `Tests/checks/clipboard` 197 checks and 50 of 50 mutants (in CI's
-  matrix); `protocol` 24 of 24, `compatibility` 22 of 22, `pointer-control` 33 of 33,
-  `away-quality` 19 of 19; `Tests/checks/run-all.sh` all 41; CI's "Build and check" on PR #78;
-  `swift build -c release` (only the CaptureProbe warning); the iOS app Debug and Release for the simulator and Debug for a device (only
-  the StreamClient capture warning); H2 against origin/main (idle identical masked and sorted; with a
-  client that never subscribes, no new line); live on loopback (a copy arrives, every marker and
-  Universal Clipboard's not sent, a device's text set and never echoed, two devices, stop, the rate,
-  the cap, `--no-clipboard`, the bare app's switch off and on live); a private iPad simulator: harness
-  photos (unchanged screens pixel for pixel main's), the Mac's text on the device, a real tap on the
-  chip's Paste by XCUITest setting the host's pasteboard, Dismiss, the device's switch live,
-  VoiceOver's labels. This Mac's own clipboard was never touched (its change count read before and
-  after).
+  system's Paste control (`PasteButton`, UIPasteControl) and Dismiss; its 20 s run only while it
+  shows with Sill active, never under VoiceOver, which is told when it first shows (`chipCounts`);
+  under the bar sideways (bottom corner while the link's line shows), above the window bar or row 1
+  upright. A Paste is "Sent to ‹Mac›’s clipboard" only once a ping sent after the text comes back (a
+  16-byte random payload, the receipt; none in max(4 s, 4 × the worst round trip): "Didn’t reach
+  ‹Mac›. Try Paste again." and the chip again). Settings › This iPad: Share Clipboard
+  (`Sill.shareClipboard`, on) and Paste on ‹Mac›, while the Mac says it. Harness:
+  `-SillClipboardChip 1`, `-SillClipboardNote sent|long|notsent`; live, `-SillSettingsScript '<t> paste
+  TEXT'` and `-SillSettingsCloseAt <s>`.
+- The review (2026-10-14, eight findings, all taken; the plan's "The review"): the stop lost to the rate
+  and macOS's paste privacy (the two should-fixes), the floor's image rule, "Sent" before the Mac had it,
+  the chip unannounced and running out unseen, the Mac's footnote and the support page's sentence, the
+  site's words marked `<!-- Clipboard` for the release (docs/release-checklist.md part 1 §3 cuts them
+  for a republish before it), and on-by-default's effect on the device's clipboard left to Noah (open
+  question 1).
+- Verified (the plan's Results): `Tests/checks/clipboard` 259 checks and 72 of 72 mutants (in CI's matrix);
+  `Tests/checks/run-all.sh` all 41; `swift build -c release` from `git archive` (only the CaptureProbe
+  warning); the iOS app Debug and Release for the simulator and Debug for a device (only the
+  StreamClient capture warning); H2 against origin/main (idle identical masked and sorted; a client that
+  never subscribes, no new line); live on loopback (the review's stop sequence: the copy went to the
+  client against 7e6468a, not against this build; the rate on texts; macOS's four answers through a
+  file, copies made while it asked or denied never sent, one made after reads came back sent); on a
+  private iPad simulator, the receipt and its absence through a relay that stops forwarding, the chip
+  waiting under the Settings panel, through an app switch and under VoiceOver's stand-in, harness photos
+  byte for byte the reviewed build's but the new note. Earlier (7e6468a): the XCUITest tap on the
+  chip's Paste, two devices, every marker, the bare app's switch. This Mac's own clipboard was never
+  read or written.
 - **Untested, for Noah:** on the iPad and iPhone with this Sill.app, at home and through Tailscale:
   copy in TextEdit, paste on the device; copy in Notes, back to Sill, Paste on the chip, ⌘V on the
   Mac; a password copied in 1Password and in the Passwords app never arrives (and Sill.log has no
   line for it); Universal Clipboard on (same Apple Account): the chip may come once for the Mac's own
   copy (known), an iPhone copy is not passed on; Settings › General's switch live; VoiceOver on the
-  chip; Split View (the chip waits for Sill's next activation; the panel's Paste works).
+  chip (its announcement, no time limit); Split View (the chip waits for Sill's next activation; the
+  panel's Paste works). From the review: macOS's paste alert through `defaults write
+  me.saffer.sill.mac EnablePasteboardPrivacyDeveloperPreview -bool yes` (the plan's step 9: the
+  orange line, Allow in System Settings…, Allow and Deny, then `defaults delete` it); Paste right
+  after 10 s away from Sill ("Sent" only when ⌘V pastes it); on by default replacing a photo on the
+  device's clipboard, and that clipboard empty 10 minutes later (say whether either should change).
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
@@ -4486,9 +4507,11 @@ good.
   is 1 or more. `Clipboard.swift` — `Clipboard` (kind 32, both ways: `text`,
   `image` reserved for a later generation, a device's `stop`) and its 256 KB
   cap; `ClipboardPolicy.swift` — the clipboard's rules for both ends (what a
-  device's message asks of the host, which change of the Mac's pasteboard the
-  host sends and to whom, the device's subscription, which text from the Mac
-  it writes, the chip, every word; pure, `Tests/checks/clipboard`).
+  device's message asks of the host and the rate, which a stop never meets;
+  which change of the Mac's pasteboard the host sends and to whom, and only
+  while macOS allows every read (`MacAccess`); the device's subscription,
+  which text from the Mac it writes, a Paste's receipt, the chip and its time,
+  every word; pure, `Tests/checks/clipboard`).
 - `Sources/SillHost/` — the `SillHostCore` library. `StreamCoordinator` (main
   actor; owns the pipeline, switches sources on client request, raises the
   picked window in regular mode (never on the virtual display), applies
@@ -4509,10 +4532,12 @@ good.
   shareClipboard; `standard` is the CLI's values and the app's defaults;
   `effective(away:)`), `HostClipboard` (the clipboard's host side: who
   subscribed, the look at the pasteboard's change count four times a second
-  while one has, a device's text written `.currentHostOnly` with this launch's
-  marker and passed to the others, one line a subscription and none per copy;
-  a synthetic host's own pasteboard, the TEST ONLY SILL_TEST_PASTEBOARD and
-  SILL_TEST_CLIPBOARD_LOG),
+  while one has and macOS allows every read, a device's text written
+  `.currentHostOnly` with this launch's marker and passed to the others, one
+  line a subscription and none per copy; a synthetic host's own pasteboard,
+  the TEST ONLY SILL_TEST_PASTEBOARD, SILL_TEST_CLIPBOARD_LOG and
+  SILL_TEST_CLIPBOARD_ACCESS; `MacClipboard`, macOS's paste privacy for the
+  look and for Settings › General's `ClipboardSection`),
   `AwayPolicy` (who counts as away, when the away quality is the target, its
   two lines; pure, `Tests/checks/away-quality`), `LinkJudge` (each device's
   link judged once a second from the sweep: fine, behind, stalled, the carried
@@ -4956,7 +4981,8 @@ good.
   `StreamClient+Clipboard` (the subscription at the first window list that
   says `clipboard` and on a move's new connection, `stop` when the switch goes
   off, the Mac's text written `.localOnly` for 10 minutes, the chip's look when
-  Sill becomes active, Paste's send; pbxproj AC64/FC64) and `ClipboardChip`
+  Sill becomes active and its time while it shows, Paste's send and its
+  receipt, a ping whose pong says the Mac read it; pbxproj AC64/FC64) and `ClipboardChip`
   (the chip and `ClipboardPasteButton`, the system's Paste control;
   AD64/FD64); StreamScreen places the chip, the Settings panel's This iPad
   group has Share Clipboard and Paste on ‹Mac›. The
@@ -5347,9 +5373,11 @@ pairingrequired` and settings cases `paired|pairedoff|openpair`,
 `-SillPointer mac@X,Y|device@X,Y|hidden|pencil@X,Y` (the pointer sprite in one
 of docs/pointer-visibility-plan.md's states over the mock's frame, which it
 draws as a dim rectangle; `-SillPencilPointer 1` is Q2's flip),
-`-SillClipboardChip 1` and `-SillClipboardNote sent|long` (the clipboard's chip
-and a Paste's note on the mock's stream, docs/clipboard-plan.md; the mock Mac
-shares its clipboard in every settings case but `legacy`), and in
+`-SillClipboardChip 1` and `-SillClipboardNote sent|long|notsent` (the clipboard's
+chip and a Paste's note on the mock's stream, docs/clipboard-plan.md; the mock Mac
+shares its clipboard in every settings case but `legacy`; live, `-SillSettingsScript
+'<t> paste TEXT'` sends TEXT as the Paste control hands it over, and
+`-SillSettingsCloseAt <s>` closes the panel `-SillSettings 1` opened), and in
 the normal app and under `-SillLive 1` `-SillPairURL '<sill://pair…>'` (pair
 at launch, no confirmation, at the link's own addresses only: a confirmed link
 tries the home rows first, which `-SillTapRow` and `-SillHomeLink` below reach),

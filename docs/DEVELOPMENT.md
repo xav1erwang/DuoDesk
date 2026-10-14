@@ -366,22 +366,49 @@ near the bar offers "Paste on ‹Mac›" with the system's Paste control
 (UIPasteControl), whose tap reads it without asking; the Settings group has the
 same button. The Mac writes it for this Mac only (`.currentHostOnly`), marked
 with its launch ID so it never sends it back, and passes it to its other
-subscribers; the person presses ⌘V. Text is capped at 256 KB. The log says
-"Clipboard: iPad (iPad14,1) shares the clipboard." and "… stopped sharing the
-clipboard." and nothing per copy, never what was copied; the stats line has
-`clip.sent` and `clip.recv` in seconds they happen.
+subscribers; the person presses ⌘V. The device says "Sent to ‹Mac›’s
+clipboard" only once the Mac has read it: a ping with a 16-byte random payload
+goes after the text through the same door, and its pong is the receipt (the Mac
+echoes a ping only after reading all before it); none within max(4 s, 4 × the
+worst round trip) says "Didn’t reach ‹Mac›. Try Paste again." and offers the
+chip again. The chip's 20 s run only while it is on screen with Sill active,
+never under VoiceOver, and VoiceOver is told when it first shows. Text is capped
+at 256 KB. A device's subscriptions and texts are limited to four a second; its
+stop never is. The log says "Clipboard: iPad (iPad14,1) shares the clipboard."
+and "… stopped sharing the clipboard." and nothing per copy, never what was
+copied; the stats line has `clip.sent` and `clip.recv` in seconds they happen.
+
+macOS 15.4 and later can ask before an app reads the clipboard on its own
+(NSPasteboard's `accessBehavior`; System Settings › Privacy & Security › Paste
+from Other Apps). Sill for Mac reads the pasteboard only while macOS allows
+every read: while it would ask (its alert at every copy) or denies, the look
+reads nothing, what is copied meanwhile is never sent, the log says so once,
+and Settings › General says why under the switch, with "Allow in System
+Settings…" (which, while macOS has not asked about Sill yet, makes one read on
+that click so macOS asks and lists Sill there). A device's text is still
+written. To try it with Sill.app: `defaults write me.saffer.sill.mac
+EnablePasteboardPrivacyDeveloperPreview -bool yes`, relaunch Sill, and
+`defaults delete me.saffer.sill.mac EnablePasteboardPrivacyDeveloperPreview`
+after.
 
 A synthetic host never touches this Mac's clipboard: it shares a pasteboard of
 its own, `me.saffer.sill.test.<pid>`, or the one TEST ONLY
 `SILL_TEST_PASTEBOARD=<name>` names, which a test writes and reads with
 `NSPasteboard(name:)`; `SILL_TEST_CLIPBOARD_LOG=1` prints each decision ("change
-4 not sent (marked)") with sizes, never text. `sillclient.py --clipboard`
+4 not sent (marked)") with sizes, never text; `SILL_TEST_CLIPBOARD_ACCESS` gives
+its pasteboard macOS's answer (`allowed`, `notAsked`, `asks`, `denied`, or the
+path of a file holding one, read at each look). `sillclient.py --clipboard`
 subscribes and prints each kind 32, `--copy=TEXT@T` (or `--copy-bytes=N@T`)
 sends text as a device's Paste does, `--raw32='{"stop":true}@T'` stops, and
 `--expect=clipboard=TEXT` (or `none`) checks the last one at exit. In the
 harness, `-SillClipboardChip 1` puts the chip on the mock's stream and
-`-SillClipboardNote sent|long` its note; `-Sill.shareClipboard 0` turns the
-device's switch off for one run.
+`-SillClipboardNote sent|long|notsent` its note; `-Sill.shareClipboard 0` turns
+the device's switch off for one run. Live against a synthetic host on loopback,
+`-SillSettingsScript '3 paste TEXT'` sends TEXT as the Paste control hands it
+over (the receipt and its note included; through `sillrelay.py
+--blackhole-after S` it never comes), and `-SillSettings 1 -SillSettingsCloseAt
+<s>` holds the Settings panel over the chip until then; the console's
+"clipboard: …" lines say what happened.
 
 ## The Mac's menus on the device
 
