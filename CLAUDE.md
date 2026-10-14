@@ -17,9 +17,12 @@ nothing on the iOS side, the CLI untouched.
   constraint named `NSViewController.preferredContentSize.height` (the hosting controller's
   preferredContentSize, SwiftUI's whole Form) at priority 501, just over the window's own 500, and
   lays the window out to it, keeping its top-left; the window is not resizable, so nothing shortens
-  it (a 50-row pane made a 2,028 pt window). The constraint follows growth and every tab switch,
-  never shrinking. Sill's window adds 80 pt of title bar and toolbar; Remote Access with the
-  internet switch on is 909 to 983 pt, General 727, so neither fits a 14-inch with the Dock.
+  it (a 50-row pane made a 2,028 pt window). The constraint follows growth and every tab switch; in
+  the probe it did not follow a pane that got shorter, but Sill's Remote Access pane shrank the
+  window with it (909 → 734 pt). Sill's window adds 80 pt of title bar and toolbar. Remote Access
+  with the internet switch on (909 to 983 pt) and rosstex's 951 pt window fit a 14-inch only at More
+  Space (1,800 × 1,169); General (727) fits at the default scaling, Dock or not, but not at the
+  larger-text scalings with the Dock (`Tests/checks/settings-window` has each case).
 - Fix: `SettingsWindowController.heightCap`, the content view's height at most
   `SettingsWindowFit.contentLimit` (the screen's visible frame less the chrome and 12 pt above and
   below, whole points, at least 200) at priority 750; the Forms scroll. Set at show, on every tab
@@ -30,8 +33,9 @@ nothing on the iOS side, the CLI untouched.
   is down (then once all are up, `placeOnRelease`). Sill's virtual display is never the screen
   (`SettingsWindowFit.screenIndex`). Rejected in the probe: an NSHostingController subclass clamping
   preferredContentSize (SwiftUI never calls its setter) and a SwiftUI `.frame(maxHeight:)` on the
-  pane (lowered while a pane showed, the window stayed tall, since the 501 constraint never shrinks).
-- `SettingsWindowFit` (pure, CoreGraphics): `Tests/checks/settings-window`, 307,689 checks (the
+  pane (lowered while a pane showed, it left the window tall: the probe's 501 constraint did not
+  follow it down).
+- `SettingsWindowFit` (pure, CoreGraphics): `Tests/checks/settings-window`, 307,709 checks (the
   issue's screens, an external 4K display, screens above and beside, windows partly off the screen,
   the virtual display, the test height, then 20,000 seeded random cases) and 27 of 27 mutants, in
   CI's mutants matrix.

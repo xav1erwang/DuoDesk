@@ -37,9 +37,13 @@ The Settings window is as tall as the selected pane's whole content, whatever th
 - The screens: this Mac's 14-inch display at its default scaling is 1,512 × 982 pt, 949 pt under
   the menu bar (33 pt on macOS 27, measured; the Dock hidden here). A Dock at the bottom takes
   some 70 pt more. The scalings with larger text make the screen 878, 745 or 665 pt tall before
-  the menu bar and the Dock. So the Remote Access pane with the internet switch on (about 1,060 pt
-  with its window) fits no 14-inch screen, the General pane (807) none with larger text, and
-  rosstex's 951 pt window none with the Dock showing.
+  the menu bar and the Dock, and More Space 1,169. Against the cap below (the visible frame less
+  the chrome and 12 pt above and below): the Remote Access pane with the internet switch on (909 to
+  983 pt, a 989 to 1,063 pt window) fits a 14-inch only at More Space, and at its tallest not there
+  with the Dock; rosstex's 951 pt window fits only at More Space; the General pane (727, an 807 pt
+  window) fits at the default scaling, Dock or not, and at 1,352 × 878 with the Dock hidden, but
+  not at the larger-text scalings with the Dock, nor at 1,147 × 745 or 1,024 × 665 without it.
+  `Tests/checks/settings-window` has each case.
 
 ## The design
 
@@ -63,9 +67,9 @@ No frame on the way was taller than the cap, and AppKit reported no conflict. Tw
 the cap failed in the same probe: an `NSHostingController` subclass clamping `preferredContentSize`
 (SwiftUI never calls its setter: the subclass saw nothing and the window grew as before), and a
 SwiftUI `.frame(maxHeight:)` on the pane (it capped the window at first, but lowered while a pane
-showed it left the window tall, the Form centred in it, because the 501 constraint does not follow
-shrinking). An `NSWindow` subclass clamping `setFrame` would fight Auto Layout, which sets the frame
-from the constraints at every layout pass.
+showed it left the window tall, the Form centred in it, because the probe's 501 constraint did not
+follow it down). An `NSWindow` subclass clamping `setFrame` would fight Auto Layout, which sets the
+frame from the constraints at every layout pass.
 
 The constraint's constant is `SettingsWindowFit.contentLimit`, set by `refit()`:
 - at `show(tab:)` (before and after `WindowPlacement.bringForward`, which may move the window off

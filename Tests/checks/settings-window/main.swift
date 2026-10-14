@@ -70,6 +70,29 @@ check(shown(general, Fit.contentLimit(visible: small, chrome: chrome)) < general
 check(shown(streaming, Fit.contentLimit(visible: small, chrome: chrome)) < streaming, "Streaming capped there too")
 check(shown(permissions, Fit.contentLimit(visible: small, chrome: chrome)) == permissions, "Permissions fits there")
 
+// Which pane fits which 14-inch scaling (the plan's "The problem, measured"): General fits at the
+// default scaling, Dock or not, and at 1,352 × 878 only with the Dock hidden. Remote Access with the
+// internet switch on (909 pt live, 983 at its tallest) and rosstex's 951 pt window fit only at More
+// Space, 1,800 × 1,169 (1,136 under the menu bar), where the tallest Remote Access is capped with
+// the Dock.
+let remoteLive: CGFloat = 909
+let at878 = CGRect(x: 0, y: 0, width: 1352, height: 878 - 33)
+let at878Dock = CGRect(x: 0, y: 70, width: 1352, height: 878 - 33 - 70)
+check(shown(general, Fit.contentLimit(visible: at878, chrome: chrome)) == general, "General fits at 1,352 × 878 with the Dock hidden")
+check(shown(general, Fit.contentLimit(visible: at878Dock, chrome: chrome)) < general, "General capped at 1,352 × 878 with the Dock")
+for v in [mbp, mbpDock, at878, at878Dock] {
+    let limit = Fit.contentLimit(visible: v, chrome: chrome)
+    check(shown(remoteLive, limit) < remoteLive, "Remote Access with the internet switch capped below More Space (\(v.height) pt)")
+    check(shown(rosstexPane, limit) < rosstexPane, "rosstex's window capped below More Space (\(v.height) pt)")
+}
+let moreSpace = Fit.contentLimit(visible: CGRect(x: 0, y: 0, width: 1800, height: 1169 - 33), chrome: chrome)
+let moreSpaceDock = Fit.contentLimit(visible: CGRect(x: 0, y: 70, width: 1800, height: 1169 - 33 - 70), chrome: chrome)
+same(moreSpace, 1032, "More Space, no Dock")
+same(moreSpaceDock, 962, "More Space, Dock")
+for pane in [remoteLive, remoteInternet, rosstexPane, general] { check(shown(pane, moreSpace) == pane, "More Space: a \(pane) pt pane at its natural height") }
+for pane in [remoteLive, rosstexPane, general] { check(shown(pane, moreSpaceDock) == pane, "More Space with the Dock: a \(pane) pt pane at its natural height") }
+check(shown(remoteInternet, moreSpaceDock) < remoteInternet, "More Space with the Dock: the tallest Remote Access capped")
+
 // An external 4K display, as the main screen: looking like 1,920 × 1,080 (a 25-pt menu bar), with and
 // without the Dock, and like 2,560 × 1,440, where every pane has its natural height.
 same(Fit.contentLimit(visible: CGRect(x: 0, y: 0, width: 1920, height: 1055), chrome: chrome), 951, "4K at 1,920 × 1,080")
