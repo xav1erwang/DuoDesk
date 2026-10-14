@@ -1092,9 +1092,10 @@ package final class StreamCoordinator {
     /// Resizes the streamed window to the client's panel at its text scale, if one is set and the
     /// window is not already there. Returns the size the window actually took, or nil if nothing
     /// changed. Mac points throughout: the panel in device points divided by the scale (device
-    /// points per Mac point). Scale nil means leave the window alone. Every resize the app took is a
-    /// fit for `fits`: the window goes back to its own frame when it stops streaming (`restoreFits`,
-    /// issue #57). None once the host is shutting down: nothing would put it back.
+    /// points per Mac point). Scale nil means leave the window alone, and so is a window in full
+    /// screen (WindowRestore.fit). Every resize the app took, or left unanswered (a busy app may take
+    /// it later), is a fit for `fits`: the window goes back to its own frame when it stops streaming
+    /// (`restoreFits`, issue #57). None once the host is shutting down: nothing would put it back.
     private func fitToViewport(_ window: SCWindow) -> CGSize? {
         guard !shuttingDown, let v = viewport, let textScale = v.scale, textScale > 0, v.width > 0, v.height > 0 else { return nil }
         let target = CGSize(width: (v.width / textScale).rounded(), height: (v.height / textScale).rounded())

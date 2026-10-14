@@ -290,7 +290,8 @@ enum WindowRestore {
     static func coversDisplay(_ frame: CGRect, _ displays: [CGRect]) -> Bool {
         displays.contains { d in
             let i = d.intersection(frame)
-            return !i.isNull && d.width > 0 && d.height > 0 && frame.minY <= d.minY + 1 && i.width * i.height >= 0.98 * d.width * d.height
+            guard !i.isNull, d.width > 0, d.height > 0 else { return false }
+            return frame.minY <= d.minY + 1 && i.width * i.height >= 0.98 * d.width * d.height
         }
     }
 
