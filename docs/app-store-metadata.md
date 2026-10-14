@@ -296,7 +296,7 @@ Get started
 Made for touch
 • Tap to click. Touch and hold to right-click. Drag to scroll.
 • Apple Pencil works as a mouse, with hover on iPad models that support it.
-• Hold your device upright for a laptop layout: the picture on top, a trackpad and a row of keys below.
+• Hold your device upright for a laptop layout: the picture on top, a trackpad and a row of keys below. On iPhone, turn on Larger Picture to give the picture more of the screen.
 • On iPhone Duo, open it flat and your Mac fills the inner display. Half open, it’s a laptop: the picture above the fold, a trackpad and keys below. Closed, Sill runs on the cover display.
 • Type with the on-screen keyboard or a hardware keyboard. Shortcuts work too.
 • Swipe and pinch with three fingers for Mission Control, App Exposé, Spaces, Apps and Show Desktop.
@@ -393,6 +393,13 @@ Local-only build (0.5.1's other changes are all away from home's):
 Made for iPhone Duo. Open it flat and your Mac fills the inner display. Half open, it’s a laptop: the picture above the fold, a trackpad and keys below. Closed, Sill runs on the cover display. Nothing you touch sits on the fold.
 
 Sill for iPhone and iPad and Sill for Mac now share one version number: this is 0.5.1, with Sill for Mac 0.5.1 from getsill.app.
+```
+
+At the version after 0.5.1, a line for Larger Picture (issue #58), with whatever else that
+version brings:
+
+```text
+Larger Picture, in Settings on iPhone: held upright, the picture takes the place of the window thumbnails and reaches down to where the keyboard comes up. Set a window’s text size with Aa and your Mac makes it as tall as the picture.
 ```
 
 ## 6. Export compliance (encryption)

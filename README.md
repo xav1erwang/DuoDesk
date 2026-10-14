@@ -65,6 +65,9 @@ Sill has layouts of its own.
   needs Accessibility. Three fingers swipe and pinch as on a Mac's trackpad:
   Mission Control, App Exposé, the Spaces, Apps and Show Desktop, through the
   keyboard shortcuts your Mac has for them.
+- **On iPhone**, held upright, the picture is on top with buttons, keys and a
+  trackpad below. Larger Picture, in the settings panel, gives the picture the
+  room of the window thumbnails, down to where the keyboard comes up.
 - **On iPhone Duo**, Sill follows the hinge: open it flat and your Mac fills
   the inner display; half open, the picture is above the fold with a trackpad
   and keys below; closed, Sill runs on the cover display. Nothing you touch

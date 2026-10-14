@@ -300,12 +300,13 @@ struct PortraitStreamScreen: View {
     /// the landscape bar does; the dim and the tap catcher cover everything else, so a tap outside
     /// closes them and never reaches the Mac.
     ///
-    /// With Larger Picture (`layout.largerPicture`) there is no thumbnails' row: the picture has the
-    /// room down to 10 pt above the key row's place over the keyboard, its pane at the picture's own
-    /// shape at the top of it (`pane(video:)`), the trackpad is the keyboard's footprint, and the
-    /// Menus button joins row 1 after Apps. Windows come from Apps (an open app again shows its next
-    /// window) and from the Mac's Window menu. The viewport is the whole room in both arrangements
-    /// (`layout.picture`), so the Mac fits a window to all of it.
+    /// With Larger Picture (`layout.largerPicture`) there is no thumbnails' row: the picture gets
+    /// every point that keeps the key row 10 pt above the software keyboard, its pane at the
+    /// picture's own shape at the top of that room (`pane(video:)`), the trackpad is the keyboard's
+    /// footprint, and the Menus button joins row 1 after Apps. Windows come from Apps (an open app
+    /// again shows its next window) and from the Mac's Window menu. The viewport is the layout's
+    /// picture in both arrangements (with Larger Picture the whole room), so the Mac fits a window to
+    /// all of it.
     private func phone(_ layout: PhonePortraitLayout, origin: CGPoint) -> some View {
         let span = layout.trackpadSpan(video: client.videoSize)
         return phoneStack(layout, span: span)
