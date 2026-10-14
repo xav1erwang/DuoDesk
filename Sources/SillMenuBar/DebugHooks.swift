@@ -269,7 +269,8 @@ enum DebugHooks {
         let neverChecked = updatePaneSamples()[0].pane
         for tab in SettingsTab.allCases where tab != .remoteAccess && tab != .devices {
             for (name, appearance) in appearances {
-                render(SettingsPane(tab: tab, model: model, previewUpdates: neverChecked).background(Color(nsColor: .windowBackgroundColor)),
+                render(SettingsPane(tab: tab, model: model, previewUpdates: neverChecked, previewClipboardAccess: .allowed)
+                        .background(Color(nsColor: .windowBackgroundColor)),
                        appearance: appearance, to: out.appendingPathComponent("pane-\(tab.rawValue)-\(name).png"))
             }
         }
@@ -281,6 +282,21 @@ enum DebugHooks {
                 .background(Color(nsColor: .windowBackgroundColor))
             for (name, appearance) in appearances {
                 render(pane, appearance: appearance, to: out.appendingPathComponent("pane-devices-\(sample.name)-\(name).png"))
+            }
+        }
+        // General's clipboard section in each of macOS's answers (ClipboardPolicy.MacAccess), and with
+        // the switch off, when it says nothing of them.
+        let clipboardSamples: [(String, Bool, ClipboardPolicy.MacAccess)] = [
+            ("allowed", true, .allowed), ("notasked", true, .notAsked), ("asks", true, .asks), ("denied", true, .denied),
+            ("off-denied", false, .denied),
+        ]
+        for (sampleName, on, access) in clipboardSamples {
+            let section = Form { ClipboardSection(shareClipboard: .constant(on), access: access) }
+                .formStyle(.grouped)
+                .frame(width: 520)
+                .background(Color(nsColor: .windowBackgroundColor))
+            for (name, appearance) in appearances {
+                render(section, appearance: appearance, to: out.appendingPathComponent("pane-clipboard-\(sampleName)-\(name).png"))
             }
         }
         for sample in updatePaneSamples() {

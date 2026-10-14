@@ -15,6 +15,7 @@ func check(_ ok: Bool, _ what: @autoclosure () -> String, line: Int = #line) {
     if !ok { failures += 1; print("FAIL (line \(line)): \(what())") }
 }
 typealias P = ClipboardPolicy
+typealias C = ClipboardPolicy.Copy
 let sorted = JSONEncoder(); sorted.outputFormatting = .sortedKeys
 func json<T: Encodable>(_ x: T) -> String { String(decoding: try! sorted.encode(x), as: UTF8.self) }
 func data(_ s: String) -> Data { Data(s.utf8) }
@@ -134,6 +135,41 @@ check(!P.hostWaits(types: [], firstLook: 10, now: 11), "after a second: decided 
 check(!P.hostWaits(types: plain, firstLook: 10, now: 10), "items there: decided at once")
 check(!P.hostWaits(types: [P.concealedType], firstLook: 10, now: 10), "a marker alone is an item too: decided at once")
 check(P.settleWindow == 1, "the settle window: a second")
+
+// macOS's paste privacy (NSPasteboard.AccessBehavior, macOS 15.4 and later). The review's finding: the
+// host read the clipboard at every copy whatever macOS said; asked, each read would bring macOS's alert.
+check(P.macAccess(raw: nil) == .allowed, "before macOS 15.4 (no such setting): every read allowed")
+check(P.macAccess(raw: 0) == .notAsked && P.macAccess(raw: 1) == .asks && P.macAccess(raw: 2) == .allowed && P.macAccess(raw: 3) == .denied,
+      "0 default (not asked yet), 1 ask, 2 always allow, 3 always deny")
+check(P.macAccess(raw: 4) == .asks && P.macAccess(raw: -1) == .asks, "a value this build does not know: as asking, nothing read in the background")
+check(P.hostLooks(.allowed) && !P.hostLooks(.notAsked) && !P.hostLooks(.asks) && !P.hostLooks(.denied), "the host reads only while every read is allowed")
+for was in [nil, .allowed, .notAsked, .asks, .denied] as [P.MacAccess?] {
+    for now in [.allowed, .notAsked, .asks, .denied] as [P.MacAccess] {
+        let want: P.AccessStep = now != .allowed ? .wait : (was == nil || was == .allowed ? .look : .takeAsSeen)
+        check(P.accessStep(was: was, now: now) == want, "a look after \(was.map(\.rawValue) ?? "none") now \(now.rawValue): \(P.accessStep(was: was, now: now))")
+    }
+}
+check(P.accessLine(was: nil, now: .allowed) == nil && P.accessLine(was: .allowed, now: .allowed) == nil,
+      "no line while macOS allows every read from the start")
+check(P.accessLine(was: nil, now: .denied) == C.macAccessLine(.denied) && P.accessLine(was: .allowed, now: .asks) == C.macAccessLine(.asks),
+      "a line when copies start staying on the Mac")
+check(P.accessLine(was: .asks, now: .allowed) == C.macAccessLine(.allowed) && P.accessLine(was: .denied, now: .allowed) == C.macAccessLine(.allowed),
+      "a line when they go again")
+check(P.accessLine(was: .notAsked, now: .asks) == nil && P.accessLine(was: .asks, now: .notAsked) == nil,
+      "none for a change that keeps the words (asked and not yet asked read the same)")
+check(P.accessLine(was: .asks, now: .denied) == C.macAccessLine(.denied), "a line from asking to denied")
+check(C.macAccessWarning(.allowed) == nil && C.macAccessHint(.allowed) == nil, "Settings says nothing while every read is allowed")
+check(C.macAccessWarning(.notAsked) == "macOS asks before Sill reads the clipboard, so what you copy here stays on this Mac."
+      && C.macAccessWarning(.asks) == C.macAccessWarning(.notAsked), "asked: the warning")
+check(C.macAccessWarning(.denied) == "macOS doesn’t let Sill read the clipboard, so what you copy here stays on this Mac.", "denied: the warning")
+check(C.macAccessHint(.notAsked)!.hasPrefix("Click Allow in System Settings: macOS asks about Sill once")
+      && C.macAccessHint(.asks) == C.macAccessHint(.denied) && C.macAccessHint(.asks)!.contains("Paste from Other Apps"),
+      "the way to allow it: asked once first while macOS has not asked about Sill (it is not listed until then)")
+check(C.macAccessButton == "Allow in System Settings…", "the button")
+check(C.macAccessLine(.allowed).hasPrefix("Clipboard: macOS lets Sill read the clipboard again")
+      && C.macAccessLine(.asks).hasPrefix("Clipboard: macOS asks before Sill reads the clipboard")
+      && C.macAccessLine(.notAsked) == C.macAccessLine(.asks)
+      && C.macAccessLine(.denied).hasPrefix("Clipboard: macOS does not let Sill read the clipboard"), "the host's lines")
 
 // MARK: - The host: a device's message
 
@@ -273,7 +309,6 @@ check(P.chipCorner(landscape: false, linkLineShown: false) == .bottomTrailing &&
 
 // MARK: - Words
 
-typealias C = ClipboardPolicy.Copy
 check(C.cap == "256 KB", "the cap in words: \(C.cap)")
 check(C.chipTitle(mac: "Mac mini") == "Paste on Mac mini", "the chip's title")
 check(C.chipSubtitle == "Then press ⌘V there.", "its subtitle")
@@ -294,7 +329,9 @@ check(C.ignoredLine(rate: 3, tooLong: 1, undecodable: 0) == "Clipboard from devi
 check(C.ignoredLine(rate: 0, tooLong: 0, undecodable: 2) == "Clipboard from devices ignored in a minute: 2 that did not decode.", "…with one count")
 let words = [C.chipTitle(mac: "M"), C.chipSubtitle, C.chipSpoken(mac: "M", device: "iPad"), C.pasteHint(mac: "M", device: "iPad"), C.sent(mac: "M"),
              C.sentSpoken(mac: "M"), C.tooLong(mac: "M"), C.switchTitle, C.rowTitle(mac: "M"), C.footnote(on: true, mac: "M", device: "iPad"),
-             C.footnote(on: false, mac: "M", device: "iPad"), C.sharesLine(device: "d"), C.stoppedLine(device: "d"), C.ignoredLine(rate: 1, tooLong: 1, undecodable: 1)]
+             C.footnote(on: false, mac: "M", device: "iPad"), C.sharesLine(device: "d"), C.stoppedLine(device: "d"), C.ignoredLine(rate: 1, tooLong: 1, undecodable: 1),
+             C.macFootnote, C.macAccessButton]
+    + [P.MacAccess.allowed, .notAsked, .asks, .denied].flatMap { [C.macAccessWarning($0), C.macAccessHint($0), C.macAccessLine($0)].compactMap { $0 } }
 check(words.allSatisfy { !$0.contains("—") && !$0.contains("–") }, "no dashes in the words")
 
 // MARK: - Model 1: the device's subscription against the host's view of it
@@ -381,11 +418,13 @@ check(refusedSubscriptions > 0, "…and the model reached the rate (\(refusedSub
 // MARK: - Model 2: a host with several devices
 
 // Three devices subscribe; the Mac's pasteboard changes (plain copies, password managers' copies, the
-// host's own writes) and devices send text, in random order. The host follows hostDecides, fromDevice
-// and forward, as HostClipboard does. Every subscriber must get every plain Mac copy made while it
-// subscribed and every other device's text, never its own text, never a marked copy, and the host
-// must never send its own write again.
+// host's own writes) and devices send text, and macOS's answer on reads changes, in random order. The
+// host follows hostDecides, fromDevice, forward and accessStep, as HostClipboard does. Every subscriber
+// must get every plain Mac copy made while it subscribed and macOS allowed every read, and every other
+// device's text; never its own text, never a marked copy, never a copy made while macOS asked or
+// denied, and the host must never send its own write again.
 var hostFailures = 0
+var accessWaits = 0
 for run in 0..<2_000 {
     let devices = 3
     var subscribed = Set<Int>()
@@ -394,7 +433,20 @@ for run in 0..<2_000 {
     var count = 100, own: Int? = nil, launch = "launch-\(run)"
     var board: (types: [String], text: String?, marker: String?) = (plain, "before", nil)
     var seen = count
+    var access = P.MacAccess.allowed
+    var lastAccess: P.MacAccess? = .allowed      // the count was taken as seen while macOS allowed it
+    // A copy goes while macOS allows every read and the host has looked since it began to: the first
+    // look after it allows again takes the count as seen, and a copy made in that moment with it
+    // (a quarter of a second at most) stays on the Mac.
+    func goes() -> Bool { access == .allowed && lastAccess.map(P.hostLooks) != false }
     func look() {
+        let step = P.accessStep(was: lastAccess, now: access)
+        lastAccess = access
+        switch step {
+        case .wait: accessWaits += 1; return    // nothing read
+        case .takeAsSeen: seen = count; return  // what was copied meanwhile is never sent
+        case .look: break
+        }
         guard count != seen else { return }
         seen = count
         let b = board
@@ -405,18 +457,18 @@ for run in 0..<2_000 {
         }
     }
     for step in 0..<Int.random(in: 1...40, using: &rng) {
-        switch Int.random(in: 0..<7, using: &rng) {
+        switch Int.random(in: 0..<8, using: &rng) {
         case 0:   // a device subscribes
             let d = Int.random(in: 0..<devices, using: &rng)
             if case .subscribe = P.fromDevice(P.subscription) { subscribed.insert(d) }
         case 1:   // a device stops
             let d = Int.random(in: 0..<devices, using: &rng)
             if case .stop = P.fromDevice(P.stopping) { subscribed.remove(d) }
-        case 2:   // a plain copy on the Mac
+        case 2:   // a plain copy on the Mac: it goes only while macOS allows every read
             count += 1
             let t = "copy \(step)"
             board = (plain, t, nil)
-            for d in subscribed { expected[d].append(t) }
+            if goes() { for d in subscribed { expected[d].append(t) } }
             look()
         case 3:   // a password manager's copy, or one from another device through Universal Clipboard
             count += 1
@@ -441,8 +493,10 @@ for run in 0..<2_000 {
             if !P.hostWaits(types: board.types, firstLook: t0, now: t0) { look() }   // it waits: no look taken
             let t = "slow copy \(step)"
             board = (plain, t, nil)
-            for d in subscribed { expected[d].append(t) }
+            if goes() { for d in subscribed { expected[d].append(t) } }
             look()
+        case 6:   // macOS's answer on reads changes (System Settings, or its first alert)
+            access = [.allowed, .notAsked, .asks, .denied].randomElement(using: &rng)!
         default:  // the host looks (again)
             look()
         }
@@ -453,7 +507,8 @@ for run in 0..<2_000 {
         hostFailures += 1
     }
 }
-check(hostFailures == 0, "2,000 random runs of three devices: each got exactly the Mac's plain copies and the others' text (\(hostFailures) wrong)")
+check(hostFailures == 0, "2,000 random runs of three devices: each got exactly the Mac's plain copies made while macOS allowed reads, and the others' text (\(hostFailures) wrong)")
+check(accessWaits > 0, "…and macOS asked or denied in some (\(accessWaits) looks read nothing)")
 
 print("\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

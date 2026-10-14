@@ -181,6 +181,69 @@ public enum ClipboardPolicy {
         return (true, recent + [now])
     }
 
+    // MARK: The host: macOS's paste privacy
+
+    /// What macOS lets Sill do with the Mac's clipboard: NSPasteboard's `accessBehavior` (macOS 15.4
+    /// and later; AppKit's NSPasteboard.h). macOS can ask before each read an app makes on its own, as
+    /// iOS does, and lists the apps it has asked about in System Settings › Privacy & Security ›
+    /// Paste from Other Apps, where each can be set to ask, allow or deny. Sill reads the clipboard at
+    /// each copy while a device shares it, with no one at the Mac asking it to, so it reads only
+    /// while macOS allows every read (`hostLooks`; found in review: the access was never checked).
+    public enum MacAccess: String, Equatable, Sendable {
+        /// Every read allowed: `.alwaysAllow`, or a macOS before 15.4, which never asks.
+        case allowed
+        /// macOS would ask before each read, and has not asked about Sill yet (`.default`): Sill is
+        /// not listed in System Settings until it has.
+        case notAsked
+        /// macOS asks before each read (`.ask`); Sill is listed in System Settings.
+        case asks
+        /// macOS refuses every read (`.alwaysDeny`).
+        case denied
+    }
+
+    /// `raw`: `NSPasteboard.general.accessBehavior.rawValue` (0 default, 1 ask, 2 always allow,
+    /// 3 always deny), nil before macOS 15.4. A value this build does not know counts as asking:
+    /// nothing is read in the background.
+    public static func macAccess(raw: Int?) -> MacAccess {
+        switch raw {
+        case nil, 2?: return .allowed
+        case 0?: return .notAsked
+        case 3?: return .denied
+        default: return .asks
+        }
+    }
+
+    /// Whether the host reads its pasteboard at all: only while macOS allows every read. While it
+    /// asks, each read would bring macOS's alert, at every copy, and the read would wait for the
+    /// answer; while it denies, a read gets nothing.
+    public static func hostLooks(_ access: MacAccess) -> Bool { access == .allowed }
+
+    public enum AccessStep: Equatable, Sendable {
+        /// Look as usual.
+        case look
+        /// macOS allows every read again: the change count as it stands is taken as seen, so what was
+        /// copied while it did not is never sent.
+        case takeAsSeen
+        /// Read nothing, not even the change count.
+        case wait
+    }
+
+    /// A look's first step, from macOS's answer now and at the look before it (`was`; nil before the
+    /// first, when the count was taken as seen if macOS allowed it).
+    public static func accessStep(was: MacAccess?, now: MacAccess) -> AccessStep {
+        guard hostLooks(now) else { return .wait }
+        return was.map(hostLooks) == false ? .takeAsSeen : .look
+    }
+
+    /// The host's line when macOS's answer changes while a device shares the clipboard (`was` nil
+    /// before the first look): one when copies start staying on the Mac, one when they go again, none
+    /// while macOS allows every read from the start, and none for a change that keeps the words.
+    public static func accessLine(was: MacAccess?, now: MacAccess) -> String? {
+        if was == nil && now == .allowed { return nil }
+        let line = Copy.macAccessLine(now)
+        return was.map(Copy.macAccessLine) == line ? nil : line
+    }
+
     // MARK: The device
 
     /// Whether the Mac's list says it takes and sends the clipboard.
@@ -295,6 +358,38 @@ public enum ClipboardPolicy {
         public static func footnote(on: Bool, mac: String, device: String) -> String {
             on ? "Text you copy on \(mac) is ready to paste on this \(device). To paste on \(mac), copy text here, tap Paste, then press ⌘V there."
                : "Nothing you copy goes between this \(device) and \(mac) while this is off."
+        }
+
+        // Sill for Mac's Settings › General, under Share clipboard with devices.
+        /// Its footnote.
+        public static let macFootnote = "Text you copy here can be pasted on a connected iPhone or iPad, and theirs here. A password manager’s copies stay on this Mac."
+        /// Under it while macOS does not allow every read (MacAccess): why what is copied here stays.
+        public static func macAccessWarning(_ access: MacAccess) -> String? {
+            switch access {
+            case .allowed: return nil
+            case .notAsked, .asks: return "macOS asks before Sill reads the clipboard, so what you copy here stays on this Mac."
+            case .denied: return "macOS doesn’t let Sill read the clipboard, so what you copy here stays on this Mac."
+            }
+        }
+        /// …what to do about it, beside `macAccessButton`.
+        public static func macAccessHint(_ access: MacAccess) -> String? {
+            switch access {
+            case .allowed: return nil
+            case .notAsked: return "Click Allow in System Settings: macOS asks about Sill once, then Privacy & Security opens, where you set Sill to Allow under Paste from Other Apps. Text a device sends with Paste still arrives."
+            case .asks, .denied: return "Set Sill to Allow under Paste from Other Apps in Privacy & Security. Text a device sends with Paste still arrives."
+            }
+        }
+        public static let macAccessButton = "Allow in System Settings…"
+        /// The host's line when macOS's answer changes while a device shares the clipboard (`accessLine`).
+        public static func macAccessLine(_ access: MacAccess) -> String {
+            switch access {
+            case .allowed:
+                return "Clipboard: macOS lets Sill read the clipboard again; what is copied on this Mac from now on goes to devices."
+            case .notAsked, .asks:
+                return "Clipboard: macOS asks before Sill reads the clipboard, so what is copied on this Mac stays here. To send it, allow Sill under Paste from Other Apps in System Settings › Privacy & Security (Sill’s Settings › General has the way there)."
+            case .denied:
+                return "Clipboard: macOS does not let Sill read the clipboard, so what is copied on this Mac stays here. To send it, allow Sill under Paste from Other Apps in System Settings › Privacy & Security."
+            }
         }
 
         // The host's lines: one when a device subscribes or stops, never one per copy, never what
