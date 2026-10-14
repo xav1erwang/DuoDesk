@@ -51,14 +51,26 @@ nothing on the iOS side, the CLI untouched.
   untouched): `swift build -c release` clean from `git archive`, only the CaptureProbe warning;
   `run-all.sh`, all 41; the previews (130 files) identical to 985a733's; every tab at its natural
   height (limit 845) but Remote Access with the internet switch on (909: shows 845, scrolls, 12 pt
-  from both edges); `-SillTestScreenHeight 700`: General (727) and Remote Access (909) capped at 596
-  and scrolling; the screen changing under the tall pane (`height=`, the notification's path): 845,
-  596, 396, 845, the window shrinking and growing; a pane growing past the cap, and a tab switch to
-  it, with the window low: moved up to 12 pt over the bottom; rosstex's 951 pt saved frame restored
-  capped at 925; General and Streaming scrolled to their ends inside a 600 pt screen (231 and 72
-  pt); Sill.app's ignore lines, from the binary in a scratch bundle under `sandbox-exec` with binds
-  denied; CI's "Build and check" on c2339e2. Photos without personal details in
-  `~/Downloads/sill-handoff/settings-window/`.
+  from both edges, Sill having moved it); `-SillTestScreenHeight 700`: General (727) and Remote
+  Access (909) capped at 596 and scrolling; the screen changing under the tall pane (`height=`, the
+  notification's path): 845, 596, 396, 845, the window shrinking and growing; a pane growing past
+  the cap, and a tab switch to it, with the window low: moved up to 12 pt over the bottom; a window
+  opened at rosstex's saved frame (951 pt, its top at the menu bar; a saved frame sets only the
+  top-left) capped at 925, 0 pt under the menu bar and 24 over the bottom, and a 70 and a 140 pt
+  Dock under it, 855 and 785, its top kept; a pane grown while Settings was closed, reopened by
+  AppKit at the screen's bottom, 24 pt under the menu bar; General and Streaming scrolled to their
+  ends inside a 600 pt screen (231 and 72 pt); Sill.app's ignore lines, from the binary in a scratch
+  bundle under `sandbox-exec` with binds denied; CI's "Build and check" on c2339e2. Photos without
+  personal details in `~/Downloads/sill-handoff/settings-window/`.
+- Review (2026-10-14, at bb2451e; it re-ran everything above with the same numbers): three findings,
+  each fixed in a commit of its own (the plan's "The review"). Should fix: the untested lists left
+  out macOS 26, the reporter's, and Sill's virtual display (now U6 and U7). Nits: "the 501
+  constraint never shrinks" and "General does not fit a 14-inch with the Dock" (corrected above,
+  with 20 checks for which pane fits which scaling); U1, U2 and the PR's steps promised 12 pt above
+  and below (now: 12 pt only on a side Sill moved the window away from). Re-run after the fixes:
+  `swift build -c release` clean from `git archive`, only the CaptureProbe warning; `run-all.sh`,
+  all 41; `settings-window` 27 of 27 mutants; where a capped window sits, with a scratch build whose
+  window was invisible and never activated (the screen unlocked, nobody at it).
 - **Untested, for Noah** (the plan's U1 to U8, with Sill.app from this branch on the 14-inch): at
   the scaling at the far left with the Dock showing, every tab fits between the menu bar and the
   Dock (12 pt clear only on a side Sill moved it away from), General scrolls to Quit Sill and Remote

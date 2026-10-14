@@ -193,17 +193,21 @@ Nothing touched Sill.app, its preferences or the keychain; the bare binary's `Si
 was emptied after.
 
 - **Builds.** `swift build -c release` from `git archive` of the branch, clean: 85 s, only the old
-  CaptureProbe warning, as at 985a733. No iOS, host, CLI, protocol or site file changes (`git
+  CaptureProbe warning, as at 985a733; again after the review (5962ad4, whose Swift sources are
+  bb2451e's): 54 s, the same warning alone. No iOS, host, CLI, protocol or site file changes (`git
   diff --stat origin/main...`), so no iOS build was needed.
-- **Checks.** `Tests/checks/settings-window`: 307,689 checks, 27 of 27 mutants caught (42 s).
-  `Tests/checks/run-all.sh`: all 41 passed.
+- **Checks.** `Tests/checks/settings-window`: 307,689 checks, 27 of 27 mutants caught (42 s); after
+  the review 307,709 (20 for which pane fits which 14-inch scaling), 27 of 27 again (60 s).
+  `Tests/checks/run-all.sh`: all 41 passed, and again after the review (372 s).
 - **Previews.** `-SillRenderPreviews` of the branch's binary and of 985a733's, run from the same
   path: 130 files each, identical byte for byte.
 - **Every tab at this screen's height** (limit 845): each at its natural height, nothing capped:
   General 727 (window 807), Devices 281, Streaming 568, Virtual Display 227, Permissions 275,
   Remote Access 327 (off).
 - **The tallest pane** (Remote Access on, with the internet switch, this Mac's addresses: 909):
-  capped at 845, scrolling, the window 925 pt, 12 pt from the visible frame's bottom and top.
+  capped at 845, scrolling, the window 925 pt, 12 pt from the visible frame's bottom and top (Sill
+  moved it there: the switches went on with the window's top at 600, and it ran off the bottom as
+  it grew).
 - **A pane that grows past the cap with the window low.** The window placed by a saved frame with
   its top at 600; Remote Access off (407 pt window), then turned on with the internet switch: the
   window capped at 925 and moved up to 12 pt over the bottom (it would have run 325 pt below the
@@ -216,8 +220,22 @@ was emptied after.
   at their natural heights. Close and reopen: capped again.
 - **Scrolled to the end** at a 600 pt screen: General scrolled 231 pt (727 − 496) and Streaming 72
   (568 − 496), their last rows in view (`~/Downloads/sill-handoff/settings-window/`).
-- **rosstex's window**: a 951 pt frame saved by a version before the fix, restored: capped at 925,
-  Remote Access scrolling.
+- **rosstex's window**: a frame saved by a version before the fix, 951 pt tall with its top at the
+  menu bar. A saved frame sets only this window's top-left (the review's logging build saw it 500
+  × 580 before its first layout), so the run shows a window opened with its top at the menu bar
+  being capped, not a 951 pt frame shortened: 925 pt, Remote Access scrolling, 0 pt under the menu
+  bar and 24 over the bottom, left there since it fits.
+- **Where a capped window sits** (after the review, with the screen unlocked and nobody at it for
+  over half an hour: a scratch build of the branch whose Settings window was invisible, took no
+  click and never activated, `WindowPlacement.bringForward` alone changed and never committed; its
+  own defaults domain, deleted after). rosstex's saved frame again: 925 pt, 0 under the menu bar,
+  24 over the bottom. A Dock of 70 and then 140 pt (`height=879`, `height=809`): 855 and 785 pt,
+  its top kept, 24 over the Dock; the screen's own again: 925; General then 807, its top kept.
+  Remote Access and the internet switch turned on while Settings was closed (its top at 600): the
+  hidden window laid out at 925 pt, its bottom at −325; reopened, AppKit ordered it in at the
+  screen's bottom: 0 pt over the bottom, 24 under the menu bar. Every window fit, and `placed`
+  moved none (each lay inside the visible frame): the 12 pt margin holds only on a side Sill moved
+  the window away from (The move).
 - **A pane that gets shorter**: the internet switch turned off while Remote Access showed: the pane
   909 → 734, the window 925 → 814 (open question 4).
 - **Sill.app ignores the hooks.** The same binary in a scratch bundle (its own bundle ID, so
@@ -241,6 +259,27 @@ Not verified here:
   run with `height=`, not by the Dock itself), a drag between screens or a mouse button held during
   a resize (no input is posted here), VoiceOver in a capped pane, Sill.app itself (the bundle's own
   executable was not run: it would read and write Sill.app's preferences), and macOS 14 and 15.
+
+## The review
+
+An adversarial review of the pull request (2026-10-14, at bb2451e) re-ran the builds, the checks,
+the previews and every live case above with a quiet build of its own (the same numbers), and found
+three things, each fixed in a commit of its own:
+1. **Should fix: the untested lists left out macOS 26 and Sill's virtual display** (5962ad4). The
+   issue is from macOS 26.6.2, everything here ran on 27.0.1, and "Fixes #59" closes the issue on
+   merge; the virtual display was in the implementer's report as not verified live, but not in
+   this plan, the pull request or CLAUDE.md. Both are in "Not verified here" now, with U6 and U7.
+2. **Nit: CLAUDE.md and the pull request said the 501 constraint never shrinks and that General
+   does not fit a 14-inch with the Dock** (7a7efcb). In the probe it did not follow a pane made
+   shorter, but Sill's Remote Access pane shrank the window (Results); General's 807 pt window fits
+   at the default scaling with a 70 pt Dock. Corrected there and in "The problem, measured" (which
+   also had nothing fitting a 14-inch at More Space), with 20 checks for which pane fits which
+   scaling.
+3. **Nit: U1, U2 and the pull request's steps promised 12 pt above and below**, which the design
+   keeps only on a side Sill moved the window away from (99bd169). Reworded there, in "The move",
+   open question 1, CLAUDE.md and docs/DEVELOPMENT.md, and measured (Results, "Where a capped
+   window sits"). Moving a window that fits but lies within 12 pt of an edge was not taken: it
+   would move a window the user put there at every tab click.
 
 ## Untested, for Noah
 
@@ -286,3 +325,7 @@ With Sill.app from this branch (`Scripts/make-app.sh --install --open`) on the 1
   `swift build -c release` of c2339e2 from `git archive`: only the CaptureProbe warning. CI's
   "Build and check" passed on c2339e2 (run 38483417858: the build, all the pure checks, the iOS
   app for the simulator, the CLI).
+- 2026-10-14, after the review (The review): the fit and shrink claims and 20 checks (7a7efcb),
+  the margins (99bd169), macOS 26 and the virtual display among the untested (5962ad4); the
+  re-runs in Results (the build, `run-all.sh`, the check's mutants, where a capped window sits).
+  The pull request's description says the same. Left open for Noah.
