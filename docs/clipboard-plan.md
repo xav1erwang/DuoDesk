@@ -287,5 +287,10 @@ On the iPad mini and the iPhone 15 Pro with this branch's builds and this Sill.a
 ## Progress
 
 - 2026-10-14: plan written (ab3c777); the wire, the rules and their checks (f97a7ec); the host
-  (fde48de) and the test client (edf8fd5); the device (7a36e2a); the Universal Clipboard skip, the
-  single look and the docs (the next commits); verification as in Results.
+  (fde48de) and the test client (edf8fd5); the device (7a36e2a); the Universal Clipboard skip and the
+  single look (44d38c4); the docs (922345d); the pasteboard on its own queue and the wait for an
+  empty pasteboard (317480b); comments (5615d96). Pull request #78.
+- Final, on 5615d96: `Tests/checks/run-all.sh` all 41 passed (422 s); `Tests/checks/clipboard`
+  197 checks and 50 of 50 mutants; a clean `swift build -c release` from `git archive` (50 s, only
+  the CaptureProbe warning); the iOS app three ways (only the StreamClient warning); CI's "Build and
+  check" passed on the pull request (8 min 16 s). The private simulator is deleted.

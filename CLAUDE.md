@@ -44,10 +44,10 @@ first. Wire, host and device; additive.
   sideways (bottom corner while the link's line shows), above the window bar or row 1 upright.
   Settings › This iPad: Share Clipboard (`Sill.shareClipboard`, on) and Paste on ‹Mac›, while the Mac
   says it. Harness: `-SillClipboardChip 1`, `-SillClipboardNote sent|long`.
-- Verified (the plan's Results): `Tests/checks/clipboard` 197 checks and its mutants (in CI's
+- Verified (the plan's Results): `Tests/checks/clipboard` 197 checks and 50 of 50 mutants (in CI's
   matrix); `protocol` 24 of 24, `compatibility` 22 of 22, `pointer-control` 33 of 33,
-  `away-quality` 19 of 19; `Tests/checks/run-all.sh` all; `swift build -c release` (only the
-  CaptureProbe warning); the iOS app Debug and Release for the simulator and Debug for a device (only
+  `away-quality` 19 of 19; `Tests/checks/run-all.sh` all 41; CI's "Build and check" on PR #78;
+  `swift build -c release` (only the CaptureProbe warning); the iOS app Debug and Release for the simulator and Debug for a device (only
   the StreamClient capture warning); H2 against origin/main (idle identical masked and sorted; with a
   client that never subscribes, no new line); live on loopback (a copy arrives, every marker and
   Universal Clipboard's not sent, a device's text set and never echoed, two devices, stop, the rate,
