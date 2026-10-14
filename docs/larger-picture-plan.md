@@ -293,5 +293,5 @@ itself (the dump is the tree's order); the tour on a fresh install on a device; 
 
 - 2026-10-14: the plan (22055ed); the layout and its check (d0343a2); the tour and its check
   (812d7df); the keyboards measured and the estimate corrected (0444d80); the views, Settings and
-  the DEBUG arguments (127f5ec); the docs and these results. Simulators deleted; photos in
-  `~/Downloads/sill-handoff/larger-picture/` (harness and live).
+  the DEBUG arguments (127f5ec); the docs and these results (a251edf). Simulators deleted; photos
+  in `~/Downloads/sill-handoff/larger-picture/` (harness and live). PR #79 opened, left for Noah.

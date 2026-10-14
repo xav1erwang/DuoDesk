@@ -9,7 +9,7 @@ Formerly winstream; the folder still carries the old name.
 ## Current step
 
 **Larger Picture on an iPhone held upright (2026-10-14, branch `larger-picture` from main at 985a733,
-PR #PRNUM; issue #58, promised to rosstex; docs/larger-picture-plan.md has the rule, the numbers, the
+PR #79; issue #58, promised to rosstex; docs/larger-picture-plan.md has the rule, the numbers, the
 open questions with their defaults and the results).** "The menu and touchpad take up more than half
 of the vertical space." Device only: no wire change, nothing on the host.
 - Settings › This iPhone: **Larger Picture** (off by default; `Sill.largerPicture`,
