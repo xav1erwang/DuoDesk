@@ -5489,7 +5489,10 @@ device keeps working with Macs from the first public build on, or each says why
   whose window list says `clipboard` 1 or more (an Int: 1 is text, a later generation with images
   says 2), and from a host only to a connection that sent a kind 32 and no `stop` since: any kind
   32 subscribes, `{"stop":true}` ends it, `text` (at most 256 KB, the JSON at most 1 MiB) becomes
-  the receiver's clipboard, `image` is reserved for that later generation.
+  the receiver's clipboard, `image` is reserved for that later generation; a subscription says what
+  the device takes, `{}` being text alone, so a host sends `image` only to a connection whose
+  subscription carries a later field saying it takes images (`"accepts":2`, say), never to one that
+  sent `{}`.
 - Pairing as 1.0 does it (docs/home-pairing-plan.md §3): the Bonjour TXT keys `r` (the recognition
   tag) and `p` ("1" pairing required, "0" open, no `p` a plain door, any other value read as "1");
   a `sill-pair/1` connection is exactly one kind 19, with no hello (the device gate judges sessions

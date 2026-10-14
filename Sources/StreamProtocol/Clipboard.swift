@@ -8,7 +8,10 @@ import Foundation
 ///   connect while its Share Clipboard is on); `text` also becomes the Mac's clipboard; `stop: true`
 ///   ends the subscription (the device's switch went off) and wins over anything else in it.
 /// - Host → device, only to a connection that subscribed: `text`, copied on the Mac, or sent by
-///   another device.
+///   another device. A subscription says what the device takes, and `{}` is text alone: a host sends
+///   `image` only to a connection whose subscription carries a later field saying it takes images
+///   (for example `"accepts":2`, the generation), never to one that sent `{}`, which drops it
+///   (found in review: #66's host sends an image to every subscriber; as it rebases it follows this).
 ///
 /// HostSettings.swift's rules apply: JSON; every field optional and left out when nil, so `{}` is a
 /// subscription; fields added later are optional. Pull request #66 (a Mac client) uses this number
@@ -17,7 +20,8 @@ public struct Clipboard: Codable, Hashable, Sendable {
     /// The text: at most `maxTextBytes` of UTF-8, never empty when sent.
     public var text: String?
     /// Reserved for a later generation (`clipboard` 2): an image, PNG or JPEG (#66's). A host of this
-    /// generation ignores it, and a device sends none to it.
+    /// generation ignores it, and a device sends none to it; a later host sends it only to a device
+    /// whose subscription said it takes images, never to one that subscribed with `{}`.
     public var image: Data?
     /// Device → host: true, this device's Share Clipboard went off; the host sends it nothing more
     /// until its next kind 32. Never from a host.

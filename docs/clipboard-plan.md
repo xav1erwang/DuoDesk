@@ -44,6 +44,11 @@ own code (#66's host sends password managers' copies and gives the Mac's owner n
   character as six bytes, so 256 KB of text can exceed 1 MiB as JSON; such text is not sent.
 - Kinds 29, 30 and 31 stay free: 29 is the audio plan's (docs/audio-plan.md on the `audio-plan`
   branch), 30 and 31 #66's side streams.
+- **What a subscription takes.** `{}` is text alone: a host sends `image` only to a connection whose
+  subscription carries a later field saying it takes images (`"accepts":2`, the generation, say),
+  never to one that subscribed with `{}`, which drops it (the review's finding: #66's host sends an
+  image to every subscriber, which every iPhone and iPad of this generation would drop, after carrying
+  up to about 3.5 MB of base64 over a 4 Mbps away link). The compatibility floor says so.
 - **#66 and this shape.** Same number, same `text` and `image`. #66's list key is `clipboard: Bool?`
   (`true`), which a decoder of `Int?` refuses (and the whole window list with it), so #66 changes it to
   `Int?` when it rebases; no build with #66's Bool was ever released. #66's host reads a kind 32 with
