@@ -51,9 +51,11 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   ⇧Esc, ⌘Esc and ⌥⌘Esc through both channels; Esc closing Settings and skipping the tour with nothing
   sent; the tour shown with a keyboard attached; a keyboard going and coming; the button's two states on a
   fresh iPhone; wheel notches; the touch rig 72 of 72 against main's. Found there and fixed: a lone wheel
-  notch was never sent; the rule asked with no view in a window. Learned: every simulator's GameController
-  counts its own keyboard, UIKit counts one once keys arrive, iPadOS 27 refuses programmatic turns, and a
-  pan gets no momentum events. CI's Build and check passed on 807c8ef. With the other open pull requests
+  notch was never sent; the rule asked with no view in a window. Learned in the simulator: its GameController
+  always counts its own keyboard, UIKit counts one once keys arrive, iPadOS 27 refuses programmatic turns,
+  and scroll events marked as momentum reached no pan there (no real trackpad's events reached the
+  continuous pan, so a device decides whether iPadOS coasts too). CI's Build and check passed on 807c8ef.
+  With the other open pull requests
   it meets in the docs and, with #79, in StreamScreen.swift's DEBUG hooks (keep both): the plan's
   Progress.
 - **Untested, for Noah (the plan's 1–12, on the iPad with the Magic Keyboard, a Debug build):** which

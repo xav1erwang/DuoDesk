@@ -61,12 +61,11 @@ Sill has layouts of its own.
   so the picture stays current.
 - **Your input** goes back the same way: taps and clicks, scrolls with
   momentum, the on-screen trackpad, keys and typed text, and Apple Pencil as
-  the pointer. A keyboard attached to your device types on your Mac as soon as
-  the picture shows, Esc included, and a trackpad or a mouse scrolls the window
-  under its pointer. Sill for Mac turns it into mouse and keyboard events, which
-  needs Accessibility. Three fingers swipe and pinch as on a Mac's trackpad:
-  Mission Control, App Exposé, the Spaces, Apps and Show Desktop, through the
-  keyboard shortcuts your Mac has for them.
+  the pointer. Sill for Mac turns it into mouse and keyboard events, which
+  needs Accessibility. A keyboard attached to your device types on your Mac as
+  soon as the picture shows. Three fingers swipe and pinch as on a Mac's
+  trackpad: Mission Control, App Exposé, the Spaces, Apps and Show Desktop,
+  through the keyboard shortcuts your Mac has for them.
 - **On iPhone Duo**, Sill follows the hinge: open it flat and your Mac fills
   the inner display; half open, the picture is above the fold with a trackpad
   and keys below; closed, Sill runs on the cover display. Nothing you touch

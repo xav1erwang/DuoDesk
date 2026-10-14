@@ -250,6 +250,31 @@ this branch (the console's `hwkey:` and `keyboard:` lines) against Sill.app buil
     the first window. Then open Settings in both and press Esc in one: only that window's panel closes (the
     console: `escape: … in its window …; 1 in other windows, left alone`).
 
+## Words that wait for a device
+
+No device has shown Esc reaching the Mac (step 1), Esc over Sill's own panels (step 7) or scrolling with a
+trackpad or a mouse (step 9): in the simulator Esc came through `pressesBegan`, which #67's iPad never
+used, and no real trackpad's events reached the continuous pan. So the public words leave them out for now
+(the review's second finding): README's How it works, the support page, the App Store description's
+keyboard bullet and the next What's New say only that a keyboard types on the Mac as soon as the picture
+shows, without the Keyboard button. README.md is public as soon as this merges; the site and the App Store
+text go out with the release. Once the steps pass, these lines take their places (the Esc words with steps
+1 and 7, the scrolling words with step 9):
+
+- README.md, How it works, "Your input": "A keyboard attached to your device types on your Mac as soon as
+  the picture shows, Esc included, and a trackpad or a mouse scrolls the window under its pointer."
+- site/support.html, `#keyboard`: the heading "Using a keyboard or trackpad with your iPhone or iPad";
+  "…what you type goes to your Mac as soon as its picture shows, Esc and shortcuts included."; "…your keys
+  stay with it, so Esc closes the settings or skips the tour."; and a paragraph after it: "Over the
+  picture, two fingers on the trackpad scroll the window under the pointer, and so does a mouse’s scroll
+  wheel."
+- docs/app-store-metadata.md, the description's bullet: "• Type with the on-screen keyboard, or on a
+  hardware keyboard as soon as you connect, with shortcuts and Esc. A trackpad or a mouse scrolls the window
+  under the pointer." (the description 2,963 characters, local-only 2,742)
+- The next What's New: "With a keyboard attached to your iPhone or iPad, what you type goes to your Mac as
+  soon as its picture shows, Esc included, without the Keyboard button. Two fingers on a trackpad, or a
+  mouse's scroll wheel, now scroll the window under the pointer." (247 characters)
+
 ## Results
 
 All on this Mac, 2026-10-14, while other sessions ran their own builds and mutants (load averages up to

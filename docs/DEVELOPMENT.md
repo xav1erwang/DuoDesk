@@ -376,6 +376,11 @@ with the same coast after a flick, and a mouse's wheel scrolls it in plain
 steps. Clicks and drags with the trackpad were already the pointer's. Over the
 portrait layout's on-screen trackpad a hardware trackpad's scroll does nothing.
 
+No device has run these yet: in the simulator Esc came through `pressesBegan`
+and a virtual mouse's scrolls reached only the wheel's pan, so Esc's key
+command and the trackpad's pan wait for a device (the plan's steps 1 and 9),
+and so do the public words for them (the plan, "Words that wait for a device").
+
 ## The Mac's menus on the device
 
 The app a device streams keeps its menu bar on the Mac, and the device shows

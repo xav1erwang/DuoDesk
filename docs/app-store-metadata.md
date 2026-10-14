@@ -298,7 +298,7 @@ Made for touch
 • Apple Pencil works as a mouse, with hover on iPad models that support it.
 • Hold your device upright for a laptop layout: the picture on top, a trackpad and a row of keys below.
 • On iPhone Duo, open it flat and your Mac fills the inner display. Half open, it’s a laptop: the picture above the fold, a trackpad and keys below. Closed, Sill runs on the cover display.
-• Type with the on-screen keyboard, or on a hardware keyboard as soon as you connect, with shortcuts and Esc. A trackpad or a mouse scrolls the window under the pointer.
+• Type with the on-screen keyboard, or on a hardware keyboard as soon as you connect. Shortcuts work too.
 • Swipe and pinch with three fingers for Mission Control, App Exposé, Spaces, Apps and Show Desktop.
 • Use the menus of the app you’re in: tap Menus in the bar, or on iPad with iPadOS 26 or later, use the menu bar at the top of the screen.
 • Switch windows from live thumbnails in the bar. Touch and hold one to close, minimize or go full screen. Drag it to reorder.
@@ -399,8 +399,13 @@ The next version's, a draft: what changed since 0.5.1 (4), as its release notes 
 change (the same in the local-only build).
 
 ```text
-With a keyboard attached to your iPhone or iPad, what you type goes to your Mac as soon as its picture shows, Esc included, without the Keyboard button. Two fingers on a trackpad, or a mouse's scroll wheel, now scroll the window under the pointer.
+With a keyboard attached to your iPhone or iPad, what you type goes to your Mac as soon as its picture shows, without the Keyboard button.
 ```
+
+Esc and scrolling with a trackpad or a mouse are built too (#67, #68), but no device has shown them yet:
+this draft, the description's keyboard bullet, README's How it works and the support page take their
+words only once Noah's device steps 1 and 9 pass. docs/hardware-keyboard-plan.md, "Words that wait for a
+device", has each line as it would read then.
 
 ## 6. Export compliance (encryption)
 
@@ -730,8 +735,10 @@ Safe:
   3,952 bytes (local-only 3,709) of 4,000, all ASCII; the rest unchanged.
 - With a hardware keyboard and trackpad (#67, #68; the bullet that starts
   "Type with the on-screen keyboard" and the next version's What's New), the
-  same way: description 2,963 (local-only 2,742) of 4,000 characters; the next
-  What's New 247 characters; the rest unchanged.
+  same way: description 2,899 (local-only 2,678) of 4,000 characters; the next
+  What's New 138 characters; the rest unchanged. With the words that wait for
+  a device (Esc, and scrolling with a trackpad or a mouse): 2,963 (local-only
+  2,742) and 247.
 - The encryption key, now in `iOSClient/Info.plist`: Release builds of this
   branch for the simulator and for a device each have
   `"ITSAppUsesNonExemptEncryption" => false` in the built Sill.app's
