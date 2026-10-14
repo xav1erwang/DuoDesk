@@ -329,6 +329,16 @@ final class WindowSizer {
 
     // MARK: Staying on screen
 
+    /// The active displays' frames (CG global points, the virtual display's while it exists), for
+    /// telling a full-screen window from its listed frame (WindowRestore.coversDisplay).
+    static func displayFrames() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).map { CGDisplayBounds($0) }
+    }
+
     /// The visible frame (menu bar and Dock excluded) of the display holding most of `rect`, in
     /// CG global coordinates. NSScreen is bottom-left based on the primary display; flip it. Also
     /// the area a moved window's way back is kept in (StreamCoordinator.restoreFits).

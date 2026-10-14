@@ -393,6 +393,38 @@ do {
     eq(WindowRestore.stageHome(1, first, on: &a), nil, "stageHome: no frame: as found")
     eq(a.calls, ["frame"], "stageHome: no frame, nothing more")
 
+    // keepsStreaming: a window off the list on its way into or out of full screen keeps streaming.
+    let laptop = R(0, 0, 1512, 982), external = R(1512, 0, 1920, 1080)
+    a = One(at: nil)
+    eq(WindowRestore.keepsStreaming(nil as Int?, looks: 1, wasFullScreen: true, on: &a), true, "keepsStreaming: full screen when last listed")
+    eq(WindowRestore.keepsStreaming(nil as Int?, looks: 3, wasFullScreen: true, on: &a), true, "keepsStreaming: through the third look")
+    eq(WindowRestore.keepsStreaming(nil as Int?, looks: 4, wasFullScreen: true, on: &a), false, "keepsStreaming: not a fourth")
+    eq(WindowRestore.keepsStreaming(nil as Int?, looks: 1, wasFullScreen: false, on: &a), false, "keepsStreaming: never full screen: it stops")
+    eq(a.calls, [], "keepsStreaming: a window Sill did not fit is not asked")
+    a = One(at: Sf, full: true, listed: false)
+    eq(WindowRestore.keepsStreaming(1, looks: 1, wasFullScreen: false, on: &a), true, "keepsStreaming: fitted, Accessibility says full screen")
+    eq(a.calls, ["frame", "fullScreen"], "keepsStreaming: a frame, then full screen")
+    a = One(at: Sf, full: false, listed: false)
+    eq(WindowRestore.keepsStreaming(1, looks: 1, wasFullScreen: false, on: &a), false, "keepsStreaming: fitted, not full screen, never listed so: it stops")
+    eq(WindowRestore.keepsStreaming(1, looks: 2, wasFullScreen: true, on: &a), true, "keepsStreaming: fitted, full screen when last listed, the flag already down")
+    eq(WindowRestore.keepsStreaming(1, looks: 4, wasFullScreen: true, on: &a), false, "keepsStreaming: fitted, not a fourth look")
+    a = One(at: nil, full: true, listed: false)
+    eq(WindowRestore.keepsStreaming(1, looks: 1, wasFullScreen: true, on: &a), false, "keepsStreaming: fitted and gone (no frame, not listed): it stops")
+    a = One(at: nil, full: true, listed: true)
+    eq(WindowRestore.keepsStreaming(1, looks: 1, wasFullScreen: false, on: &a), true, "keepsStreaming: no frame but listed is not gone")
+    // coversDisplay: a full-screen window's listed frame.
+    eq(WindowRestore.coversDisplay(laptop, [laptop, external]), true, "coversDisplay: the laptop's whole display")
+    eq(WindowRestore.coversDisplay(external, [laptop, external]), true, "coversDisplay: the external display")
+    eq(WindowRestore.coversDisplay(R(0, 25, 1512, 957), [laptop]), false, "coversDisplay: the area under the menu bar is a window's")
+    eq(WindowRestore.coversDisplay(R(0, 1, 1512, 981), [laptop]), true, "coversDisplay: a point short at the top still counts")
+    eq(WindowRestore.coversDisplay(R(0, 2, 1512, 980), [laptop]), false, "coversDisplay: two points short at the top does not")
+    eq(WindowRestore.coversDisplay(R(0, 0, 1482, 982), [laptop]), true, "coversDisplay: 98 % of it")
+    eq(WindowRestore.coversDisplay(R(0, 0, 1481, 982), [laptop]), false, "coversDisplay: under 98 %")
+    eq(WindowRestore.coversDisplay(R(-10, -10, 1600, 1100), [laptop]), true, "coversDisplay: larger than the display")
+    eq(WindowRestore.coversDisplay(R(1000, 0, 1512, 982), [laptop, external]), false, "coversDisplay: across two displays, all of neither")
+    eq(WindowRestore.coversDisplay(laptop, []), false, "coversDisplay: no display")
+    eq(WindowRestore.coversDisplay(laptop, [R(0, 0, 0, 0)]), false, "coversDisplay: an empty display")
+
     // Ledger.restore: every window but the one kept, in window ID order, but the staged one, which is taken out unasked.
     var ledger = WindowRestore.Ledger<Int>()
     ledger.fitted(9, handle: 1, before: O, after: Sf, asked: Sz)
@@ -451,6 +483,11 @@ struct Win {
     var beforeFullScreen: CGRect = .zero
     var pendingSize: CGSize?
     var failNextRead = false
+    /// Entering or leaving full screen: off every list for this many more steps, Accessibility reading
+    /// `transitionFrame` and `transitionFlag` (AXFullScreen) meanwhile, every write refused.
+    var transition = 0
+    var transitionFlag = false
+    var transitionFrame: CGRect = .zero
 }
 
 /// The Mac: two displays, the windows, and Accessibility's view of them, answering the sequences'
@@ -482,10 +519,15 @@ struct Mac: WindowRestore.Access {
         if app.grid > 1 { w = (w / app.grid).rounded(.down) * app.grid; h = (h / app.grid).rounded(.down) * app.grid }
         return S(max(w, app.minSize.width), max(h, app.minSize.height))
     }
-    /// Accessibility's frame: nil for a window gone; a late app's old size until it applies.
+    /// Accessibility's frame: nil for a window gone; a late app's old size until it applies; whatever it
+    /// reads mid-way into or out of full screen.
     func ax(_ id: CGWindowID) -> CGRect? {
         guard let w = wins[id], !w.closed else { return nil }
-        return w.frame
+        return w.transition > 0 ? w.transitionFrame : w.frame
+    }
+    /// A step of time: a window on its way into or out of full screen gets there.
+    mutating func tick() {
+        for id in wins.keys where wins[id]!.transition > 0 { wins[id]!.transition -= 1 }
     }
     mutating func applyLate() {
         for (id, w) in wins where w.pendingSize != nil {
@@ -499,11 +541,15 @@ struct Mac: WindowRestore.Access {
         if wins[id]?.failNextRead == true { wins[id]!.failNextRead = false; readsFailed += 1; return nil }
         return ax(id)
     }
-    mutating func isFullScreen(_ id: CGWindowID) -> Bool { wins[id]?.fullScreen ?? false }
-    mutating func isListed(_ id: CGWindowID) -> Bool { ax(id) != nil }
+    mutating func isFullScreen(_ id: CGWindowID) -> Bool {
+        guard let w = wins[id] else { return false }
+        return w.transition > 0 ? w.transitionFlag : w.fullScreen
+    }
+    mutating func isListed(_ id: CGWindowID) -> Bool { ax(id) != nil && wins[id]!.transition == 0 }
     mutating func visibleArea(around r: CGRect) -> CGRect? { Mac.area(around: r) }
     mutating func setPosition(_ id: CGWindowID, _ p: CGPoint) -> WindowRestore.Write {
         guard let w = wins[id], !w.closed else { return .refused(-25202) }
+        if w.transition > 0 { return .refused(-25200) }
         if w.fullScreen { return fullScreenWritesDone ? .done : .refused(-25200) }
         wins[id]!.frame.origin = p
         touched.insert(id)
@@ -511,6 +557,7 @@ struct Mac: WindowRestore.Access {
     }
     mutating func setSize(_ id: CGWindowID, _ s: CGSize) -> WindowRestore.Write {
         guard let w = wins[id], !w.closed else { return .refused(-25202) }
+        if w.transition > 0 { return .refused(-25200) }
         if w.fullScreen { return fullScreenWritesDone ? .done : .refused(-25200) }
         if w.app.fixed { return .refused(-25200) }
         let took = Self.takes(w.app, s)
@@ -550,6 +597,8 @@ struct Spell {
     var movedSinceFit = false
     var resizesSinceFit = 0
     var fromAnEdgeSinceFit = false
+    /// It left full screen while it streamed (the review's finding 1).
+    var leftFullScreen = false
     /// A move and a resize, or two resizes, between two fits: the rule sees only where they ended, which
     /// a move and a resize from an edge can both explain, so either way back is right from then on.
     var loose = false
@@ -570,6 +619,9 @@ struct Model {
     var staged: (id: CGWindowID, home: CGRect)? = nil
     var encoderSize: CGSize? = nil
     var shuttingDown = false
+    // windowsChanged's: the streamed window was full screen when last listed, and its looks off the list.
+    var listedFullScreen: CGWindowID? = nil
+    var missingLooks = 0
     // The oracle.
     var spells: [CGWindowID: Spell] = [:]
     var expectHome: [CGWindowID: [CGRect]] = [:]    // a staged window's way home
@@ -610,6 +662,7 @@ struct Model {
         guard let current = mac.wins[id], !current.closed else { return }
         if abs(current.frame.width - target.width) <= 2, abs(current.frame.height - target.height) <= 2 { return }
         let readsFailed = mac.readsFailed
+        let axBefore = mac.ax(id)
         defer { if mac.readsFailed > readsFailed { note("read-back failed") } }
         switch WindowRestore.fit(id, to: target, fallback: current.frame, on: &mac) {
         case .fullScreen:
@@ -617,7 +670,7 @@ struct Model {
         case .refused:
             note("fit refused")
             // Refused, with any nudge made for it put back: where it was.
-            check(mac.ax(id) == current.frame, "model seed \(seed): window \(id) moved by a refused fit, from \(current.frame) to \(String(describing: mac.ax(id)))")
+            check(mac.ax(id) == axBefore, "model seed \(seed): window \(id) moved by a refused fit, from \(String(describing: axBefore)) to \(String(describing: mac.ax(id)))")
         case .fitted(let before, let after, let timedOut):
             if timedOut { note("fit: no answer") }
             let had = ledger.record(id) != nil
@@ -651,7 +704,11 @@ struct Model {
     mutating func restoreFits(keeping keep: CGWindowID?, why: String) {
         // What the person expects of each window about to stop, before anything moves.
         var wants: [CGWindowID: [CGRect]] = [:]
-        for id in ledger.entries.keys where id != keep { wants[id] = expected(id) }
+        var midway: Set<CGWindowID> = []
+        for id in ledger.entries.keys where id != keep {
+            wants[id] = expected(id)
+            if (mac.wins[id]?.transition ?? 0) > 0 { midway.insert(id) }
+        }
         if let s = staged?.id, s != keep, ledger.record(s) != nil { note("skipped: staged"); spells[s] = nil }
         let stopped = ledger.restore(keeping: keep, staged: staged?.id, on: &mac)
         mac.applyLate()          // a late app applies the restore's size before anyone looks
@@ -668,6 +725,14 @@ struct Model {
             case .restore(_, whole: false)?: note("decision: moved")
             }
             note(st.decision == .gone ? "stop: gone" : "stop: \(why)")
+            if midway.contains(id) {
+                // The residual: a pick, Disconnect, Quit or a restart within the second a window takes to
+                // enter or leave full screen. Its frame then is no way to judge it; every write is refused.
+                note("stop during a full-screen transition")
+                spells[id] = nil
+                continue
+            }
+            if spells[id]?.leftFullScreen == true, case .restore? = st.decision { note("went back after leaving full screen while it streamed") }
             if case .restore(let f, let whole)? = st.decision, st.done {
                 let name = mac.name(id)
                 eq(st.line, whole ? "Restored \(name) to \(WindowRestore.text(f))" : "Restored \(name) to \(WindowRestore.text(f)), its own size where it was moved",
@@ -682,7 +747,7 @@ struct Model {
 
     // StreamCoordinator.stageHome and VirtualStage.prepare (step 5's placement, then the move).
     mutating func stage(_ id: CGWindowID) -> Bool {
-        guard let w = mac.wins[id], !w.closed, !w.fullScreen, let current = mac.ax(id) else { note("staging failed"); return false }
+        guard let w = mac.wins[id], !w.closed, !w.fullScreen, w.transition == 0, let current = mac.ax(id) else { note("staging failed"); return false }
         var home: CGRect? = nil
         if let r = ledger.record(id) {
             home = WindowRestore.stageHome(id, r, on: &mac)
@@ -720,6 +785,7 @@ struct Model {
     // StreamCoordinator.select, the parts that bear on fitted and staged windows.
     mutating func select(_ source: Source) {
         guard !shuttingDown else { return }
+        if source != active { missingLooks = 0 }
         if vd {
             if case .window(let id) = source { if let s = staged, s.id != id { releaseStage() } } else { releaseStage() }
         }
@@ -735,12 +801,14 @@ struct Model {
             active = .desktop
             encoderSize = nil
         case .window(let id):
-            guard let w = mac.wins[id], !w.closed else {
+            // The catalog's on-screen list (the full list on the virtual display's path).
+            guard let w = mac.wins[id], !w.closed, vd || w.transition == 0 else {
                 if vd { releaseStage() }
                 active = .none
                 restoreFits(keeping: nil, why: "window gone")      // the defer
                 return
             }
+            listedFullScreen = WindowRestore.coversDisplay(w.frame, Mac.displays) ? id : nil
             if vd, staged?.id == id {
                 // A re-place on the same display: the stage keeps its home.
             } else if vd, stage(id) {
@@ -749,13 +817,13 @@ struct Model {
                 fit(id)
             }
             active = .window(id)
-            encoderSize = mac.ax(id)?.size
+            encoderSize = mac.wins[id]!.frame.size
         }
         if active == .none { restoreFits(keeping: nil, why: "nothing streams") }
     }
 
     mutating func personMove(_ id: CGWindowID) {
-        guard var w = mac.wins[id], !w.closed, !w.fullScreen, staged?.id != id else { return }
+        guard var w = mac.wins[id], !w.closed, !w.fullScreen, w.transition == 0, staged?.id != id else { return }
         let a = Mac.visible[rng.int(2)]
         var p = P(a.minX + rng.range(0, Int(max(0, a.width - 200))), a.minY + rng.range(0, Int(max(0, a.height - 150))))
         // Never within a few points of where Sill left it: there a move and none are the same.
@@ -769,7 +837,7 @@ struct Model {
     }
 
     mutating func personResize(_ id: CGWindowID) {
-        guard var w = mac.wins[id], !w.closed, !w.fullScreen, staged?.id != id else { return }
+        guard var w = mac.wins[id], !w.closed, !w.fullScreen, w.transition == 0, staged?.id != id else { return }
         var s = Mac.takes(w.app, S(rng.range(300, 1400), rng.range(200, 900)))
         // A resize the rule can see: off what Sill left and asked for by more than its tolerance.
         if let r = ledger.record(id) {
@@ -798,29 +866,61 @@ struct Model {
     }
 
     mutating func toggleFullScreen(_ id: CGWindowID) {
-        guard var w = mac.wins[id], !w.closed, staged?.id != id, w.pendingSize == nil else { return }
+        guard var w = mac.wins[id], !w.closed, staged?.id != id, w.pendingSize == nil, w.transition == 0 else { return }
+        let from = w.frame
         if w.fullScreen {
             w.fullScreen = false
             w.frame = w.beforeFullScreen
+            if active == .window(id) { spells[id]?.leftFullScreen = true }
         } else {
             w.beforeFullScreen = w.frame
             w.fullScreen = true
             w.frame = Mac.displays[Mac.visible.firstIndex(of: Mac.area(around: w.frame)) ?? 0]
         }
+        // On the way, off every list for a step or two, Accessibility reading the flag already flipped or
+        // not yet, and the frame it came from, the one it goes to, or one between.
+        if side.chance(0.6) {
+            w.transition = 1 + side.int(2)
+            w.transitionFlag = side.chance(0.5)
+            switch side.int(3) {
+            case 0: w.transitionFrame = from
+            case 1: w.transitionFrame = w.frame
+            default: w.transitionFrame = R(((from.minX + w.frame.minX) / 2).rounded(), ((from.minY + w.frame.minY) / 2).rounded(),
+                                           ((from.width + w.frame.width) / 2).rounded(), ((from.height + w.frame.height) / 2).rounded())
+            }
+            note(w.fullScreen ? "entering full screen, off the list" : "leaving full screen, off the list")
+        }
         mac.wins[id] = w
-        log.append("full screen \(id) \(w.fullScreen)")
+        log.append("full screen \(id) \(w.fullScreen)\(w.transition > 0 ? " (off the list \(w.transition), AX \(w.transitionFlag) \(w.transitionFrame))" : "")")
     }
 
     /// The catalog's poll (windowsChanged): a closed streamed window stops; a regular window whose
     /// size left the encoder's restarts, and the restart fits it again.
     mutating func poll() {
-        guard case .window(let id) = active else { return }
-        guard let w = mac.wins[id], !w.closed else { select(.none); return }
+        guard case .window(let id) = active, let w = mac.wins[id] else { return }
+        if w.closed || w.transition > 0 {
+            // Off the list: closed, or on its way into or out of full screen (a staged window cannot be).
+            missingLooks += 1
+            let fitted: CGWindowID? = ledger.record(id) != nil ? id : nil
+            let evidence = listedFullScreen == id || (fitted != nil && mac.isFullScreen(id))
+            let keeps = WindowRestore.keepsStreaming(fitted, looks: missingLooks, wasFullScreen: listedFullScreen == id, on: &mac)
+            // Gone is Accessibility's to say, so only for a window Sill fitted; another closed window's
+            // capture stops (StreamCoordinator's capture.onStopped), which this model leaves out.
+            check(keeps == (missingLooks <= WindowRestore.fullScreenGrace && (fitted != nil ? !w.closed && evidence : listedFullScreen == id)),
+                  "model seed \(seed): window \(id) off the list (closed \(w.closed), look \(missingLooks), evidence \(evidence)) kept streaming: \(keeps); \(log.suffix(6))")
+            if keeps { note("kept streaming off the list"); return }
+            missingLooks = 0
+            select(.none)
+            return
+        }
+        missingLooks = 0
+        listedFullScreen = WindowRestore.coversDisplay(w.frame, Mac.displays) ? id : nil
         if staged?.id == id { return }
         if let e = encoderSize, !WindowRestore.same(e, w.frame.size) { note("poll restart"); select(active) }
     }
 
     mutating func step() {
+        mac.tick()
         mac.applyLate()
         let ids = Array(mac.wins.keys).sorted()
         let id = ids[rng.int(ids.count)]
@@ -852,7 +952,7 @@ struct Model {
             if var w = mac.wins[id], !w.closed { w.closed = true; mac.wins[id] = w }
             poll()
         case 73..<77:
-            toggleFullScreen(id)
+            if case .window(let a) = active, side.chance(0.5) { toggleFullScreen(a) } else { toggleFullScreen(id) }
         case 77..<82:
             log.append("virtual display \(vd ? "off" : "on")")
             if vd {
@@ -897,7 +997,9 @@ for n in 0..<sessions {
 
 // Every transition the issue names, and every outcome, came up.
 let needed = ["first fit", "re-fit", "fit refused", "fit: full screen", "fit: no answer", "read-back failed", "person resized from an edge",
-              "compound changes between fits", "re-fit after a resize from an edge", "stop: switch", "stop: desktop", "stop: none", "stop: quit", "stop: gone", "decision: whole", "decision: moved", "decision: resized", "decision: full screen", "decision: home", "decision: settle",
+              "compound changes between fits", "re-fit after a resize from an edge", "entering full screen, off the list",
+              "leaving full screen, off the list", "kept streaming off the list", "stop during a full-screen transition",
+              "went back after leaving full screen while it streamed", "stop: switch", "stop: desktop", "stop: none", "stop: quit", "stop: gone", "decision: whole", "decision: moved", "decision: resized", "decision: full screen", "decision: home", "decision: settle",
               "staged: with a home", "staged: as found", "stage released", "poll restart"]
 for k in needed { check((globalSeen[k] ?? 0) > 0, "model: never came up: \(k)") }
 print("window-restore: the model, \(sessions) sessions: " + needed.map { "\($0) \(globalSeen[$0] ?? 0)" }.joined(separator: ", "))

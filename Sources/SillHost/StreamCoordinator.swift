@@ -172,6 +172,10 @@ package final class StreamCoordinator {
     /// issue #57): recorded at the first fit (`fitToViewport`), put back when the window stops
     /// streaming (`restoreFits`), handed to the virtual display's stage when it takes the window.
     private var fits = WindowRestore.Ledger<WindowSizer.Placement>()
+    /// The window streaming in regular mode was in full screen when the catalog last listed it (its
+    /// frame covered a display), or when it was picked: off the list, it may be leaving full screen
+    /// (`windowsChanged`, WindowRestore.keepsStreaming).
+    private var listedFullScreen: CGWindowID?
     /// Each connection's kind 17 changes of the last second (applied or refused), and when its
     /// "ignored" line was last printed: `settingsPerSecond` a second, one line a second at most.
     private var settingsArrivals: [ObjectIdentifier: [CFAbsoluteTime]] = [:]
@@ -1183,6 +1187,7 @@ package final class StreamCoordinator {
     func select(_ source: StreamSource, bringForward: Bool = false) async {
         guard !switching, !shuttingDown else { return }
         switching = true
+        if source != active { missingPolls = 0 }    // a window's looks off the list are its own
         restartOf = (source == active && source != .none) ? source : nil
         defer {
             switching = false
@@ -1316,6 +1321,7 @@ package final class StreamCoordinator {
             }
             print("Selecting window \(w.windowID) \(w.owningApplication?.applicationName ?? "?") — \(w.title ?? "") frame \(w.frame) onScreen \(w.isOnScreen) active \(w.isActive)")
             picked = w
+            listedFullScreen = WindowRestore.coversDisplay(w.frame, WindowSizer.displayFrames()) ? id : nil
             title = Self.menuTitle(for: w)
             var size = w.frame.size
             if virtualDisplay, stage.disabledReason == nil {
@@ -1483,7 +1489,9 @@ package final class StreamCoordinator {
     // most, and Accessibility only when the app is not active or a cover is found. An app that
     // lets the activation run into its timeout (a beach ball) gets no further AX calls from
     // either: each would hold the main actor for another second.
-    /// Consecutive catalog polls the staged full-screen window has been missing from every list.
+    /// Consecutive catalog polls the streamed window has been missing from the list while it may be
+    /// entering or leaving full screen: the staged full-screen window, or in regular mode one that was
+    /// full screen when last listed or that Sill fitted (`windowsChanged`).
     private var missingPolls = 0
     private var lastRaiseCheck: CFAbsoluteTime = 0
     private var lastActivationAt: CFAbsoluteTime = 0
@@ -2158,10 +2166,23 @@ package final class StreamCoordinator {
                     missingPolls += 1
                     if missingPolls <= 3 { broadcastList(); return }
                     missingPolls = 0
+                } else if !(virtualDisplay && stage.isStaged) {
+                    // In regular mode too: one that was full screen when last listed, or that Sill fitted
+                    // and Accessibility says is full screen now, keeps streaming through three looks, so a
+                    // fitted window's way back is not decided mid-change (issue #57's review).
+                    missingPolls += 1
+                    var windows = WindowSizer.AXWindows(sizer: sizer)
+                    if WindowRestore.keepsStreaming(fits.entries[id]?.handle, looks: missingPolls, wasFullScreen: listedFullScreen == id, on: &windows) {
+                        broadcastList(); return
+                    }
+                    missingPolls = 0
                 }
                 await select(.none); return
             }
             missingPolls = 0
+            if !(virtualDisplay && stage.isStaged), let scw = catalog.window(id: id) {
+                listedFullScreen = WindowRestore.coversDisplay(scw.frame, WindowSizer.displayFrames()) ? id : nil
+            }
             if virtualDisplay, stage.isStaged {
                 // Full screen: the crop is a band of the display, not the window's frame. Stay put
                 // while the window still covers the display; restart once it has left full screen.

@@ -263,6 +263,37 @@ enum WindowRestore {
         return homeForStage(decide(r, current: current, fullScreen: a.isFullScreen(w), area: a.visibleArea(around: current)))
     }
 
+    // MARK: A window entering or leaving full screen
+
+    /// How many of the catalog's looks a streamed window entering or leaving full screen may be off
+    /// the on-screen list and still stream: the virtual display's three polls for a staged window.
+    static let fullScreenGrace = 3
+
+    /// The window streaming in regular mode is missing from the catalog's on-screen list. A window
+    /// entering or leaving full screen is off every list for a second or two, and stopping it then
+    /// would decide its way back mid-change (still full screen, or at the display's frame: left at
+    /// the device's size for good). So it keeps streaming through `fullScreenGrace` such looks when it
+    /// was full screen when last listed (`wasFullScreen`) or, when Sill fitted it (`w`, its element),
+    /// Accessibility says it is full screen now; unless it is gone (no frame, and the window server no
+    /// longer lists it). Anything else stops at once, as before.
+    static func keepsStreaming<A: Access>(_ w: A.W?, looks: Int, wasFullScreen: Bool, on a: inout A) -> Bool {
+        guard looks <= fullScreenGrace else { return false }
+        guard let w else { return wasFullScreen }
+        if a.frame(w) == nil, !a.isListed(w) { return false }
+        return wasFullScreen || a.isFullScreen(w)
+    }
+
+    /// Whether a listed frame is a full-screen window's: it covers one of `displays` (CG global
+    /// frames), its top at the display's top, 98 % of it or more (a window filling the area under the
+    /// menu bar covers 98 % of a laptop's display and must not count), as VirtualStage.windowCoversDisplay
+    /// has it for a staged window.
+    static func coversDisplay(_ frame: CGRect, _ displays: [CGRect]) -> Bool {
+        displays.contains { d in
+            let i = d.intersection(frame)
+            return !i.isNull && d.width > 0 && d.height > 0 && frame.minY <= d.minY + 1 && i.width * i.height >= 0.98 * d.width * d.height
+        }
+    }
+
     // MARK: The windows Sill sized
 
     /// The records by window ID, each with what the coordinator needs to move the window (`Handle`:
