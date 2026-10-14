@@ -178,6 +178,16 @@ Settings panel already cover the stream for hit-testing.
 9. **The portrait on-screen trackpad.** Default: a hardware trackpad's scroll over it does nothing
    (it scrolls over the picture). Alternative: scroll there too.
 10. **The GameController probe.** Default: DEBUG only, behind `-SillKeyProbe 1`.
+11. **Full Keyboard Access and Switch Control** (the review's fourth finding). With a keyboard attached the
+    stream's input view holds the keyboard whenever nothing is open over the stream, so Tab, Space and the
+    arrows go to the Mac and Esc's commands ask for priority over the focus system; and while a keyboard is
+    attached the Keyboard button never lets go for good (a second press goes back to the hold,
+    `HardwareKeyboardPolicy.toggled()`). Someone who moves through Sill's bar from the keyboard may then
+    not reach Settings or Disconnect while streaming. Default: the hold as for anyone, until step 13 says
+    otherwise. Alternative: no automatic hold while such a technology runs. UIKit can tell Switch Control
+    (`UIAccessibility.isSwitchControlRunning`) but not Full Keyboard Access (the iOS 27.1 SDK's UIKit
+    headers name no such test), so for Full Keyboard Access the alternative is Q1's: the Keyboard button's
+    second press stops keys for the session.
 
 ## Test plan
 
@@ -249,6 +259,13 @@ this branch (the console's `hwkey:` and `keyboard:` lines) against Sill.app buil
     then press Esc in the other. Esc reaches the Mac (`hwkey: … to the Mac`), and Settings stays open in
     the first window. Then open Settings in both and press Esc in one: only that window's panel closes (the
     console: `escape: … in its window …; 1 in other windows, left alone`).
+13. **Full Keyboard Access and Switch Control** (open question 11). Turn on Settings › Accessibility ›
+    Keyboards › Full Keyboard Access with the Magic Keyboard attached and stream a window. Does Tab still
+    move through Sill's bar (Apps, the thumbnails, Aa, Keyboard, Desktop, Settings), does Space press
+    Settings and then its Disconnect, and does Esc still back out of a focus group, or does each go to the
+    Mac? Then Switch Control with a key of the keyboard as its switch: does the switch still move through
+    Sill's controls while the stream holds the keyboard? If either is stuck, say so: the alternative is no
+    automatic hold while one runs.
 
 ## Words that wait for a device
 

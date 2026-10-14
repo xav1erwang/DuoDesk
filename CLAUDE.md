@@ -9,7 +9,7 @@ Formerly winstream; the folder still carries the old name.
 ## Current step
 
 **A hardware keyboard and trackpad on the device (2026-10-14, branch `hardware-keyboard` from main at
-985a733, PR #80; issues #67 and #68; the plan, its ten open questions with the defaults taken, and the
+985a733, PR #80; issues #67 and #68; the plan, its eleven open questions with the defaults taken, and the
 results are in `docs/hardware-keyboard-plan.md`).** Noah: "Work on the keyboard and trackpad change (#67
 and #68 together)". Device only: no wire change, nothing on the Mac changed.
 - Esc (#67: an iPad Pro M4's Magic Keyboard sent none, 22 `in.text` and no `in.key`):
@@ -40,7 +40,9 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   at a time; a pointer scroll's first event and a lone notch are deltas (`scrolled(to:at:)`).
 - Defaults taken: the button keeps its software-keyboard meaning; the drawer and Menus are takers; all
   sixteen Esc combinations; nothing drawn during the hold; the person's keyboard across a rotation and ⌘W
-  with a taker open as before; Sill's own coast for a trackpad; no scrolling over the on-screen trackpad.
+  with a taker open as before; Sill's own coast for a trackpad; no scrolling over the on-screen trackpad;
+  the hold also under Full Keyboard Access and Switch Control until Noah's step 13 says otherwise (UIKit
+  can tell Switch Control, not Full Keyboard Access).
 - Verified (the plan's Results): hardware-keyboard 51 checks, 20,000 random sessions, 31 of 31 mutants (in
   CI's matrix); key-strokes 347 (18 new) and 81 of 81 mutants (9 new); `run-all.sh` all 41; the iOS app
   Debug and Release for the simulator and Debug for a device, and `swift build -c release`, with the known
@@ -58,14 +60,16 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   With the other open pull requests
   it meets in the docs and, with #79, in StreamScreen.swift's DEBUG hooks (keep both): the plan's
   Progress.
-- **Untested, for Noah (the plan's 1–12, on the iPad with the Magic Keyboard, a Debug build):** which
+- **Untested, for Noah (the plan's 1–13, on the iPad with the Magic Keyboard, a Debug build):** which
   channel brings Esc (`hwkey:`; `-SillKeyProbe 1`), Esc in iTerm2's vim, zsh's vi mode and Zed, and
   Control-[; typing right after connecting and after a turn; ⌘W closing the Mac's window, not Sill's;
   nothing drawn, and nothing popping up when the keyboard is taken away; the Keyboard button's two states;
   Esc over Settings, the tour and pairing; the tour on a fresh install with the keyboard attached;
   two-finger scrolling (any double coast) and a mouse's wheel; VoiceOver; an input method's candidates
   (none drawn during the hold: the Keyboard button brings iPadOS's views back); two Sill windows side by
-  side (Settings open in one leaves Esc to the other; Esc closes only its own window's panel).
+  side (Settings open in one leaves Esc to the other; Esc closes only its own window's panel); Full
+  Keyboard Access and Switch Control (Tab, Space and Esc through Sill's bar while the stream holds the
+  keyboard).
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
