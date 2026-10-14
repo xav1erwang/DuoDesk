@@ -22,7 +22,8 @@ enum HEVCDisplayView {
 }
 
 /// The app's EscapeKey (AddMacCard.swift) as InputOverlay.swift asks it since the hardware keyboard's
-/// change (docs/hardware-keyboard-plan.md): the rig shows no tour, pairing overlay or Settings panel.
+/// change (docs/hardware-keyboard-plan.md): the rig shows no tour, pairing overlay or Settings panel in
+/// any window.
 enum EscapeKey {
-    static var onScreen: Bool { false }
+    static func onScreen(in window: UIWindow?) -> Bool { false }
 }

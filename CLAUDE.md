@@ -15,13 +15,14 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
 - Esc (#67: an iPad Pro M4's Magic Keyboard sent none, 22 `in.text` and no `in.key`):
   `InputOverlayView.keyCommands` adds Esc with each of the sixteen ⌃⌥⇧⌘ combinations
   (`wantsPriorityOverSystemBehavior`, no title) while the view is first responder and no `EscapeKey` is on
-  screen (`EscapeKey.onScreen`); the action goes through `ForwardedKeys.commanded` (down and up, the
-  command's modifiers). One key press is sent once whichever channel brings it (`pressed`: a press no
-  later than a command is swallowed with its up; `commanded`: nothing while the press holds it down). The
-  Settings panel gains `EscapeKey(action: close)` (Done keeps `.cancelAction` for ⌘.). DEBUG: an `hwkey:`
-  line for every hardware key and its channel, `escape:` when an EscapeKey takes Esc, `-SillKeyProbe 1`
-  (GameController's view of each key), `-SillEscViaCommand 1`. For the reporter: Control-[ is Esc in a
-  terminal.
+  screen in its window (`EscapeKey.onScreen(in:)`; an EscapeKey's own Esc goes to the newest one in the
+  window it was pressed in, `fire(in:)`: each Sill window is its own); the action goes through
+  `ForwardedKeys.commanded` (down and up, the command's modifiers). One key press is sent once whichever
+  channel brings it (`pressed`: a press no later than a command is swallowed with its up; `commanded`:
+  nothing while the press holds it down). The Settings panel gains `EscapeKey(action: close)` (Done keeps
+  `.cancelAction` for ⌘.). DEBUG: an `hwkey:` line for every hardware key and its channel, `escape:` when
+  an EscapeKey takes Esc, `-SillKeyProbe 1` (GameController's view of each key), `-SillEscViaCommand 1`.
+  For the reporter: Control-[ is Esc in a terminal.
 - Keys without the Keyboard button (#68): `HardwareKeyboardPolicy` (pure, `Tests/checks/hardware-keyboard`),
   owned by `InputOverlayProxy` (one per stream screen; it outlives a rotation). With a hardware keyboard
   (`HardwareKeyboardMonitor`, GameController's coalesced keyboard; DEBUG `-SillHardwareKeyboard 1|0`) the
@@ -55,13 +56,14 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   pan gets no momentum events. CI's Build and check passed on 807c8ef. With the other open pull requests
   it meets in the docs and, with #79, in StreamScreen.swift's DEBUG hooks (keep both): the plan's
   Progress.
-- **Untested, for Noah (the plan's 1–11, on the iPad with the Magic Keyboard, a Debug build):** which
+- **Untested, for Noah (the plan's 1–12, on the iPad with the Magic Keyboard, a Debug build):** which
   channel brings Esc (`hwkey:`; `-SillKeyProbe 1`), Esc in iTerm2's vim, zsh's vi mode and Zed, and
   Control-[; typing right after connecting and after a turn; ⌘W closing the Mac's window, not Sill's;
   nothing drawn, and nothing popping up when the keyboard is taken away; the Keyboard button's two states;
   Esc over Settings, the tour and pairing; the tour on a fresh install with the keyboard attached;
   two-finger scrolling (any double coast) and a mouse's wheel; VoiceOver; an input method's candidates
-  (none drawn during the hold: the Keyboard button brings iPadOS's views back).
+  (none drawn during the hold: the Keyboard button brings iPadOS's views back); two Sill windows side by
+  side (Settings open in one leaves Esc to the other; Esc closes only its own window's panel).
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then

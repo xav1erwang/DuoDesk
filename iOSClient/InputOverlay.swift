@@ -377,7 +377,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     }
 
     /// `esc [MODS]`: Esc as its key command reaches this view, only while it takes Esc (it holds the
-    /// keyboard and no EscapeKey is on screen). False when it does not.
+    /// keyboard and no EscapeKey is on screen in its window). False when it does not.
     func scriptEscape(_ modifiers: UIKeyModifierFlags) -> Bool {
         guard takesEscape, let command = Self.escapeCommands.first(where: { $0.modifierFlags == modifiers }) else { return false }
         escapeKeyCommand(command)
@@ -416,7 +416,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             for flags: UIKeyModifierFlags in [[], .shift] {
                 let name = flags.isEmpty ? "Esc" : "⇧Esc"
                 print("input test: \(name) " + (self.scriptEscape(flags) ? "through the key command"
-                    : "not taken: " + (self.isFirstResponder ? "an EscapeKey is on screen" : "this view does not hold the keyboard")))
+                    : "not taken: " + (self.isFirstResponder ? "an EscapeKey is on screen in its window" : "this view does not hold the keyboard")))
             }
         }
         at(5.0) { [weak self] in
@@ -654,9 +654,11 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     }
 
     /// This view takes Esc: it is first responder (it holds the keyboard), and no EscapeKey is on screen
-    /// (the tour, the pairing overlay, the Settings panel, whose Esc closes them). A leaf view is in the
-    /// responder chain only while it is first responder, so this says again what the chain does.
-    private var takesEscape: Bool { isFirstResponder && !EscapeKey.onScreen }
+    /// in its window (the tour, the pairing overlay, the Settings panel, whose Esc closes them). Only its
+    /// own window's: Settings open in another Sill window, behind this one, never sees a key pressed
+    /// here. A leaf view is in the responder chain only while it is first responder, so this says again
+    /// what the chain does.
+    private var takesEscape: Bool { isFirstResponder && !EscapeKey.onScreen(in: window) }
 
     override var keyCommands: [UIKeyCommand]? {
         guard takesEscape else { return super.keyCommands }

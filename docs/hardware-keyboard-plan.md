@@ -47,11 +47,17 @@ The Mac already takes both kinds of scroll: phased gestures with momentum, and b
 - `InputOverlayView.keyCommands`: Esc (`UIKeyCommand.inputEscape`) with each of the sixteen
   combinations of ⌃, ⌥, ⇧ and ⌘, each with `wantsPriorityOverSystemBehavior = true`, no title (so
   none is listed in iPadOS's shortcut overlay or the menu bar). Only while the view is first
-  responder and no `EscapeKey` is on screen (the tour, the pairing overlay, the Settings panel, the
-  Add a Mac card): then the key goes to that view's own Esc, as before. A leaf view is in the
-  responder chain only while it is first responder, so the commands are out of the way whenever the
-  overlay does not take keys; the two conditions say so again in `keyCommands` and in
+  responder and no `EscapeKey` is on screen in its window (the tour, the pairing overlay, the Settings
+  panel, the Add a Mac card): then the key goes to that view's own Esc, as before. A leaf view is in
+  the responder chain only while it is first responder, so the commands are out of the way whenever
+  the overlay does not take keys; the two conditions say so again in `keyCommands` and in
   `canPerformAction`.
+- **Each Sill window is its own** (the review's first finding). Every window has its own responder
+  chain, so an `EscapeKey`'s command, on its window's view controller, never sees a key pressed in
+  another window: Settings left open in a window behind must not take Esc from the stream in front
+  (`EscapeKey.onScreen(in:)`), and Esc pressed in a window goes to the newest `EscapeKey` in that
+  window only, never to another window's panel (`fire(in:)`, the window of the view controller UIKit
+  hands the command to).
 - The action sends the key down and up through the path a forwarded hardware key takes
   (`ForwardedKeys`), carrying the command's modifiers: down with them, up with the modifier keys down
   on the Mac. A key command gives no key-up, so the up follows the down at once (a tap; holding Esc
@@ -239,6 +245,10 @@ this branch (the console's `hwkey:` and `keyboard:` lines) against Sill.app buil
 11. **An input method** (Japanese or Chinese on the Magic Keyboard, if used): during the hold the input view
     is empty, so iPadOS's candidate bar may not show; the Keyboard button then gives iPadOS's own keyboard
     views back. Note whether typing in one works either way.
+12. **Two Sill windows** side by side (Split View, or Stage Manager), each streaming: open Settings in one,
+    then press Esc in the other. Esc reaches the Mac (`hwkey: … to the Mac`), and Settings stays open in
+    the first window. Then open Settings in both and press Esc in one: only that window's panel closes (the
+    console: `escape: … in its window …; 1 in other windows, left alone`).
 
 ## Results
 

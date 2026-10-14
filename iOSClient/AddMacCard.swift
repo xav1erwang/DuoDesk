@@ -304,10 +304,15 @@ struct ProblemLine: View {
 struct EscapeKey: UIViewRepresentable {
     let action: () -> Void
 
-    /// An EscapeKey is on screen (the tour, the pairing overlay, the Settings panel, the Add a Mac
-    /// card): Esc is its, and the stream's input view leaves Esc alone (InputOverlayView.keyCommands;
-    /// docs/hardware-keyboard-plan.md §1).
-    static var onScreen: Bool { !Anchor.live.isEmpty }
+    /// An EscapeKey is on screen in `window` (the tour, the pairing overlay, the Settings panel, the Add a
+    /// Mac card): Esc pressed there is its, and the stream's input view in that window leaves Esc alone
+    /// (InputOverlayView.keyCommands; docs/hardware-keyboard-plan.md §1). Only that window's: each Sill
+    /// window has its own responder chain, and a key pressed in one never reaches an EscapeKey's command
+    /// in another, so Settings open in a window behind leaves Esc to the stream in front.
+    static func onScreen(in window: UIWindow?) -> Bool {
+        guard let window else { return false }
+        return Anchor.live.contains { $0.window === window }
+    }
 
     func makeUIView(context: Context) -> Anchor { Anchor() }
     func updateUIView(_ anchor: Anchor, context: Context) { anchor.action = action }
@@ -316,7 +321,8 @@ struct EscapeKey: UIViewRepresentable {
     /// A zero-size view that finds its view controller when it joins a window.
     final class Anchor: UIView {
         var action: (() -> Void)?
-        /// The anchors on screen, newest last: the pairing overlay over a card answers first.
+        /// The anchors on screen in every Sill window, newest last: in one window the pairing overlay
+        /// over a card answers first.
         fileprivate static var live: [Anchor] = []
         private weak var host: UIViewController?
         private let command: UIKeyCommand = {
@@ -354,20 +360,31 @@ struct EscapeKey: UIViewRepresentable {
             Self.live.removeAll { $0 === self }
         }
 
-        fileprivate static func fire() {
+        /// Esc pressed in `window`: the newest anchor there answers, never one in another Sill window,
+        /// whose panel the person is not looking at.
+        fileprivate static func fire(in window: UIWindow?) {
+            guard let window, let anchor = live.last(where: { $0.window === window }) else {
+                #if DEBUG
+                print("escape: Esc, and no EscapeKey in its window: nothing")
+                #endif
+                return
+            }
             #if DEBUG
-            print("escape: Esc to what is on screen (its EscapeKey), not to the Mac")
+            let elsewhere = live.filter { $0.window !== window }.count
+            print("escape: Esc to what is on screen in its window (its EscapeKey), not to the Mac"
+                  + (elsewhere == 0 ? "" : "; \(elsewhere) in other windows, left alone"))
             #endif
-            live.last?.action?()
+            anchor.action?()
         }
     }
 }
 
 extension UIViewController {
     /// EscapeKey's command: the chain from whichever responder has the keyboard reaches a view
-    /// controller, which hands the key to the newest anchor on screen.
+    /// controller in the window where the key was pressed, which hands the key to the newest anchor in
+    /// that window.
     @objc fileprivate func sillEscapeKey(_ sender: UIKeyCommand) {
-        EscapeKey.Anchor.fire()
+        EscapeKey.Anchor.fire(in: viewIfLoaded?.window)
     }
 }
 

@@ -603,7 +603,7 @@ struct LayoutHarness: View {
 ///   spread; the console says whether it went ("input script: t=… gesture swipeUp: sent");
 /// * `esc [MODS]` — Esc through the stream's key command, as UIKit hands it the command, with MODS
 ///   (`shift+command` and the like), only while the input view takes Esc (it holds the keyboard and no
-///   EscapeKey is on screen); the console says whether it went;
+///   EscapeKey is on screen in its window); the console says whether it went;
 /// * `scroll DX,DY` — the iPad's trackpad: a two-finger scroll of DX, DY points in five steps, lifted at
 ///   600 pt/s (so it coasts), through the scroll path its recognizer takes;
 /// * `wheel DX,DY` — a mouse's wheel: the same steps as plain deltas, no gesture, no coast;
@@ -769,7 +769,7 @@ enum InputScript {
         case .esc(let names):
             let taken = overlay?.scriptEscape(Step.flags(names) ?? []) ?? false
             print(String(format: "input script: t=%.2f ", at) + "\(step): "
-                  + (taken ? "the stream's key command sent it" : "not the stream's (it does not hold the keyboard, or an EscapeKey is on screen)"))
+                  + (taken ? "the stream's key command sent it" : "not the stream's (it does not hold the keyboard, or an EscapeKey is on screen in its window)"))
             return
         case .scroll(let dx, let dy): if let overlay { overlay.scriptScroll(dx: dx, dy: dy, from: .trackpad) } else { done = false }
         case .wheel(let dx, let dy): if let overlay { overlay.scriptScroll(dx: dx, dy: dy, from: .wheel) } else { done = false }

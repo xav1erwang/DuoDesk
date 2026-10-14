@@ -346,7 +346,9 @@ button: the stream's input view takes the keyboard by itself at a session's
 start, after a rotation or a reconnect, and again when the Settings panel, Pair
 This iPad…, the first-run tour, the Apps list or the Menus pull-down closes.
 While one of those is open its own keys win: Esc closes Settings, skips the tour
-or cancels pairing, and nothing reaches the Mac. When the keyboard goes, the
+or cancels pairing, and nothing reaches the Mac. Each Sill window is its own:
+Settings open in one window leaves Esc to the stream in another, and Esc closes
+only the panel of the window it was pressed in. When the keyboard goes, the
 input view lets go. It draws nothing meanwhile (an empty input view, no
 shortcuts bar), so no on-screen keyboard comes up over the stream even where
 iPadOS and GameController disagree about the keyboard. The Keyboard button
