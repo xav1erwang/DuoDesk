@@ -355,7 +355,10 @@ another app marks `org.nspasteboard.ConcealedType` or
 `org.nspasteboard.TransientType` (or three older markers: ClipboardPolicy's
 `markerTypes`), nor what came from another device through Universal Clipboard
 (`com.apple.is-remote-clipboard`: reading it would fetch it from there), nor
-the Mac's own write. The device writes the Mac's text with
+the Mac's own write; a pasteboard with no items yet is looked at again for up
+to a second (an app clears it, then writes, and only the clear moves the
+count). The host reads and writes the pasteboard on a queue of its own, never
+on the main actor. The device writes the Mac's text with
 `.localOnly` and a 10-minute expiration. The other way, Sill never reads the
 device's clipboard by itself (iOS would ask "Allow Paste?"): when it becomes
 active and the clipboard's change count is new while it holds text, a chip

@@ -23,8 +23,11 @@ first. Wire, host and device; additive.
   three older markers), one from another device through Universal Clipboard
   (`com.apple.is-remote-clipboard`: reading it fetches it from there, found while building), the
   host's own write; types are judged before any data is read.
-- Host: `HostClipboard` (main actor): the look at the pasteboard's change count four times a second
-  while a device subscribes (Task.sleep, not a RunLoop timer); what was on the clipboard when the
+- Host: `HostClipboard` (main actor; the pasteboard read and written on a queue of its own,
+  `Board`, so a slow read never holds up input): the look at the change count four times a second
+  while a device subscribes (Task.sleep, not a RunLoop timer); an empty pasteboard waits up to a
+  second for its contents (`hostWaits`: an app clears, then writes, and only the clear moves the
+  count; found live, 9 of 12 slow copies lost before, none now); what was on the clipboard when the
   first subscribed is never sent; a device's text written `.currentHostOnly` with this launch's
   marker and passed to the other subscribers; 4 kind 32 a second per connection; one line per
   subscription or stop ("Clipboard: iPad (iPad14,1) shares the clipboard."), none per copy, never
@@ -41,7 +44,7 @@ first. Wire, host and device; additive.
   sideways (bottom corner while the link's line shows), above the window bar or row 1 upright.
   Settings › This iPad: Share Clipboard (`Sill.shareClipboard`, on) and Paste on ‹Mac›, while the Mac
   says it. Harness: `-SillClipboardChip 1`, `-SillClipboardNote sent|long`.
-- Verified (the plan's Results): `Tests/checks/clipboard` 192 checks and its mutants (in CI's
+- Verified (the plan's Results): `Tests/checks/clipboard` 197 checks and its mutants (in CI's
   matrix); `protocol` 24 of 24, `compatibility` 22 of 22, `pointer-control` 33 of 33,
   `away-quality` 19 of 19; `Tests/checks/run-all.sh` all; `swift build -c release` (only the
   CaptureProbe warning); the iOS app Debug and Release for the simulator and Debug for a device (only
