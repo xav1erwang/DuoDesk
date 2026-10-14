@@ -70,6 +70,7 @@ MUTANTS = [
     ("W43 take leaves the record", "mutating func take(_ id: CGWindowID) -> Entry? { entries.removeValue(forKey: id) }",
      "mutating func take(_ id: CGWindowID) -> Entry? { entries[id] }"),
     # fit: WindowSizer.resize's sequence.
+    ("F0 a window in full screen fitted", "        if a.isFullScreen(w) { return .fullScreen }\n", ""),
     ("F1 the asked frame never nudged onto its display", "if to != from, a.setPosition(w, to) == .done { nudgedFrom = from }",
      "if false, a.setPosition(w, to) == .done { nudgedFrom = from }"),
     ("F2 a refused size keeps its nudge",

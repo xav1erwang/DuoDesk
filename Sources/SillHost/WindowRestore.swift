@@ -152,6 +152,9 @@ enum WindowRestore {
 
     /// What a fit (`fit`) came to.
     enum FitResult: Equatable {
+        /// Not tried: the window is in a full-screen Space. It may refuse the writes or answer them and
+        /// change nothing; recorded, the display's frame would be taken for the window's own.
+        case fullScreen
         /// The app refused the size (Accessibility's error); a nudge made for it was put back.
         case refused(Int32)
         /// The size went through but its read-back did not: nothing recorded.
@@ -160,12 +163,13 @@ enum WindowRestore {
         case fitted(before: CGRect, after: CGRect)
     }
 
-    /// One fit, as WindowSizer.resize makes it once it has matched the window's element: the frame
-    /// before (`fallback`, the window server's, when Accessibility gives none), a nudge so the asked
-    /// frame stays on its display (an app that clamps its frame to the screen would shrink the window
-    /// instead of letting it move), the size, then the size the app took (a minimum, a grid) and a
-    /// second nudge for that.
+    /// One fit, as WindowSizer.resize makes it once it has matched the window's element: never of a
+    /// window in full screen (nothing written); the frame before (`fallback`, the window server's, when
+    /// Accessibility gives none), a nudge so the asked frame stays on its display (an app that clamps
+    /// its frame to the screen would shrink the window instead of letting it move), the size, then the
+    /// size the app took (a minimum, a grid) and a second nudge for that.
     static func fit<A: Access>(_ w: A.W, to size: CGSize, fallback: CGRect, on a: inout A) -> FitResult {
+        if a.isFullScreen(w) { return .fullScreen }
         let read = a.frame(w)
         let before = read ?? fallback
         let area = a.visibleArea(around: before)

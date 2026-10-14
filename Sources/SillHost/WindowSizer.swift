@@ -32,8 +32,9 @@ final class WindowSizer {
     /// Resizes `window` to `size` in Mac points (top-left anchored), nudging it back onto its
     /// display if the new size would hang off the edge (WindowRestore.fit, the sequence). Returns what
     /// it did (`Fit`: the size the app actually took is `after.size`; apps enforce minimums and some
-    /// snap to a grid), or nil if Accessibility is off, the window cannot be found through AX, or the
-    /// app refused the size; a nudge made for a refused size is put back at once.
+    /// snap to a grid), or nil if Accessibility is off, the window cannot be found through AX, it is
+    /// in full screen (left alone: nothing written, nothing to record), or the app refused the size;
+    /// a nudge made for a refused size is put back at once.
     func resize(window: SCWindow, to size: CGSize) -> Fit? {
         guard AXIsProcessTrusted() else {
             if !warnedUntrusted {
@@ -56,6 +57,9 @@ final class WindowSizer {
                           appName: window.owningApplication?.applicationName ?? "?", title: window.title ?? "")
         var windows = AXWindows(sizer: self)
         switch WindowRestore.fit(p, to: size, fallback: Self.liveBounds(of: window.windowID) ?? window.frame, on: &windows) {
+        case .fullScreen:
+            print("Window sizing: \(windows.name(p)) is full screen; not resizing.")
+            return nil
         case .refused(let code):
             print("Window sizing: AX refused the size (error \(code)).")
             return nil
