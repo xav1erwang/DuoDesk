@@ -1881,25 +1881,19 @@ package final class StreamCoordinator {
 
     // MARK: A window Sill sized goes back (WindowRestore, issue #57)
 
-    /// Puts back every window Sill sized but `keep` (nil: every one) as it stops streaming:
-    /// WindowRestore decides from its frame now (gone, already home, left as it is because it is full
-    /// screen or was resized on the Mac, or restored: its whole original frame, or its own size where
-    /// it was moved), WindowSizer moves it through the element its first fit matched, as the virtual
-    /// display's restore does. One line for each window acted on; none for one gone or already home.
+    /// Puts back every window Sill sized but `keep` (nil: every one) as it stops streaming
+    /// (`WindowRestore.Ledger.restore`, which runs `WindowRestore.stop` for each): WindowRestore decides
+    /// from its frame now (gone, already home, left as it is because it is full screen or was resized on
+    /// the Mac, or restored: its whole original frame, or its own size where it was moved), and it is
+    /// moved through the element its first fit matched, as the virtual display's restore moves a window.
+    /// A window the virtual display holds goes home with the stage, to the frame `stageHome` gave it:
+    /// only when Quit or a signal lands while `select` waits in `prepare`. One line for each window acted
+    /// on; none for one gone or already home.
     private func restoreFits(keeping keep: CGWindowID?) {
-        for (id, entry) in fits.stopping(keeping: keep) {
-            // A window the virtual display holds goes home with the stage, to the frame `stageHome`
-            // gave it: only when Quit or a signal lands while `select` waits in `prepare`.
-            if stage.placement?.windowID == id { continue }
-            let p = entry.handle
-            let name = WindowRestore.name(app: p.appName, title: p.title)
-            guard let (decision, current) = sizer.stopDecision(p, entry.record) else {
-                print(WindowRestore.notAnsweringLine(name: name))   // a beach ball: no writes that would each wait out a second
-                continue
-            }
-            let done = sizer.putBack(p, decision)
-            if case .restore = decision { Stats.shared.bump(done ? "win.restored" : "win.restoreFailed") }
-            if let line = WindowRestore.line(decision, name: name, current: current, done: done) { print(line) }
+        var windows = WindowSizer.AXWindows(sizer: sizer)
+        for s in fits.restore(keeping: keep, staged: stage.placement?.windowID, on: &windows) {
+            if case .restore = s.decision { Stats.shared.bump(s.done ? "win.restored" : "win.restoreFailed") }
+            if let line = s.line { print(line) }
         }
     }
 
@@ -1907,8 +1901,9 @@ package final class StreamCoordinator {
     /// way home when it takes the window (`VirtualStage.prepare(…, home:)`); nil when it has no
     /// record, or would stay as it is.
     private func stageHome(for id: CGWindowID) -> CGRect? {
-        guard let entry = fits.entries[id], let (decision, _) = sizer.stopDecision(entry.handle, entry.record) else { return nil }
-        return WindowRestore.homeForStage(decision)
+        guard let entry = fits.entries[id] else { return nil }
+        var windows = WindowSizer.AXWindows(sizer: sizer)
+        return WindowRestore.stageHome(entry.handle, entry.record, on: &windows)
     }
 
     /// An encoder's watchdog fired. A hardware hang is remembered whichever encoder reports it, as

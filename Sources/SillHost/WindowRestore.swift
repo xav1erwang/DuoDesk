@@ -2,9 +2,11 @@ import Foundation
 import CoreGraphics
 
 /// A window Sill sized for a device goes back when it stops streaming (issue #57;
-/// docs/restore-window-frames-plan.md). Pure: frames in, decisions out. The coordinator reads the
-/// frames and moves the windows (StreamCoordinator's `fitToViewport` and `restoreFits`, through
-/// WindowSizer); `Tests/checks/window-restore` checks this file alone.
+/// docs/restore-window-frames-plan.md). Pure: frames in, decisions out, and the two sequences that
+/// read and move a window (`fit`, `stop`) over `Access`, which WindowSizer implements with
+/// Accessibility (`WindowSizer.AXWindows`) and the check with a stand-in Mac. The coordinator calls
+/// them (StreamCoordinator's `fitToViewport` through `WindowSizer.resize`, `restoreFits`, `stageHome`);
+/// `Tests/checks/window-restore` checks this file alone.
 ///
 /// In regular mode (Virtual Display off) Aa resizes the real window to the device's panel at the
 /// text scale it asks for. The first fit records where the window was; when the window stops
@@ -116,6 +118,114 @@ enum WindowRestore {
     static func same(_ a: CGSize, _ b: CGSize) -> Bool { abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance }
     static func same(_ a: CGRect, _ b: CGRect) -> Bool { same(a.origin, b.origin) && same(a.size, b.size) }
 
+    // MARK: Reading and moving a window
+
+    /// What a write to a window's position or size came to.
+    enum Write: Equatable {
+        case done
+        /// Accessibility's error: the app said no (a window that cannot be resized answers -25200), did
+        /// not answer in time, or the window is gone.
+        case refused(Int32)
+    }
+
+    /// The reads and writes a fit and a window's way back make: Accessibility on the Mac
+    /// (WindowSizer.AXWindows), a stand-in Mac in the check. `W` is one window, as the ledger keeps it.
+    protocol Access {
+        associatedtype W
+        /// Accessibility's frame now; nil when it does not answer, or the window is gone.
+        mutating func frame(_ w: W) -> CGRect?
+        /// In a full-screen Space (AppKit's AXFullScreen).
+        mutating func isFullScreen(_ w: W) -> Bool
+        /// The window server still lists it (a closed window is not listed).
+        mutating func isListed(_ w: W) -> Bool
+        /// The visible frame of the display holding most of `r`; nil with no display.
+        mutating func visibleArea(around r: CGRect) -> CGRect?
+        mutating func setPosition(_ w: W, _ p: CGPoint) -> Write
+        mutating func setSize(_ w: W, _ s: CGSize) -> Write
+        /// Moves and sizes it to `frame` as the virtual display's restore does (position, size,
+        /// position, one more try for a busy app, never left off every display): true when it went
+        /// through, or there is nothing left to move.
+        mutating func put(_ w: W, at frame: CGRect) -> Bool
+        /// "Safari — Apple Developer" (`name(app:title:)`), for the lines.
+        func name(_ w: W) -> String
+    }
+
+    /// What a fit (`fit`) came to.
+    enum FitResult: Equatable {
+        /// The app refused the size (Accessibility's error); a nudge made for it was put back.
+        case refused(Int32)
+        /// The size went through but its read-back did not: nothing recorded.
+        case unread
+        /// Sill resized it from `before` and it took `after` (Accessibility's frame, read back).
+        case fitted(before: CGRect, after: CGRect)
+    }
+
+    /// One fit, as WindowSizer.resize makes it once it has matched the window's element: the frame
+    /// before (`fallback`, the window server's, when Accessibility gives none), a nudge so the asked
+    /// frame stays on its display (an app that clamps its frame to the screen would shrink the window
+    /// instead of letting it move), the size, then the size the app took (a minimum, a grid) and a
+    /// second nudge for that.
+    static func fit<A: Access>(_ w: A.W, to size: CGSize, fallback: CGRect, on a: inout A) -> FitResult {
+        let read = a.frame(w)
+        let before = read ?? fallback
+        let area = a.visibleArea(around: before)
+        var nudgedFrom: CGPoint?
+        if let from = read?.origin, let area {
+            let to = keep(CGRect(origin: from, size: size), in: area)
+            // A window that will not move may still resize.
+            if to != from, a.setPosition(w, to) == .done { nudgedFrom = from }
+        }
+        if case .refused(let code) = a.setSize(w, size) {
+            // The move was for the new size: without it, the window goes back where it was.
+            if let nudgedFrom { _ = a.setPosition(w, nudgedFrom) }
+            return .refused(code)
+        }
+        guard let took = a.frame(w) else { return .unread }
+        if let area {
+            let to = keep(took, in: area)
+            if to != took.origin, a.setPosition(w, to) == .done {
+                return .fitted(before: before, after: a.frame(w) ?? CGRect(origin: to, size: took.size))
+            }
+        }
+        return .fitted(before: before, after: took)
+    }
+
+    /// What became of one window that stopped streaming (`stop`), for the coordinator's line and stats.
+    struct Stopped: Equatable {
+        let id: CGWindowID
+        /// Nil: its app did not answer, and it was left where it is.
+        let decision: Decision?
+        /// Whether the move the decision called for went through.
+        let done: Bool
+        let line: String?
+    }
+
+    /// One window Sill fitted stops streaming: its frame now, the rule (`decide`) and the move that
+    /// calls for, through the element its first fit matched. No frame from a window the window server
+    /// no longer lists: gone. None from one it lists: its app does not answer (a beach ball), and the
+    /// window is left with a line rather than have each write wait out a second.
+    static func stop<A: Access>(_ id: CGWindowID, _ w: A.W, _ r: Record, on a: inout A) -> Stopped {
+        let name = a.name(w)
+        guard let current = a.frame(w) else {
+            if a.isListed(w) { return Stopped(id: id, decision: nil, done: false, line: notAnsweringLine(name: name)) }
+            return Stopped(id: id, decision: .gone, done: false, line: nil)
+        }
+        let d = decide(r, current: current, fullScreen: a.isFullScreen(w), area: a.visibleArea(around: current))
+        var done = false
+        switch d {
+        case .restore(let frame, _), .settle(let frame): done = a.put(w, at: frame)
+        case .gone, .home, .leave: break
+        }
+        return Stopped(id: id, decision: d, done: done, line: line(d, name: name, current: current, done: done))
+    }
+
+    /// Where a window Sill fitted would go back to now (`stop`'s decision; nothing is moved), for the
+    /// virtual display to keep as its way home when it takes the window; nil: as the stage finds it.
+    static func stageHome<A: Access>(_ w: A.W, _ r: Record, on a: inout A) -> CGRect? {
+        guard let current = a.frame(w) else { return nil }
+        return homeForStage(decide(r, current: current, fullScreen: a.isFullScreen(w), area: a.visibleArea(around: current)))
+    }
+
     // MARK: The windows Sill sized
 
     /// The records by window ID, each with what the coordinator needs to move the window (`Handle`:
@@ -151,6 +261,17 @@ enum WindowRestore {
 
         /// Window `id` went onto the virtual display, whose stage now keeps its way home.
         mutating func take(_ id: CGWindowID) -> Entry? { entries.removeValue(forKey: id) }
+
+        /// Every window that stops streaming when `keep` streams next (`stopping`) put back
+        /// (`WindowRestore.stop`), but the one the virtual display holds (`staged`: only when Quit or a
+        /// signal lands while the stage takes it), which goes home with the stage.
+        mutating func restore<A: Access>(keeping keep: CGWindowID?, staged: CGWindowID?, on a: inout A) -> [Stopped] where A.W == Handle {
+            var out: [Stopped] = []
+            for (id, entry) in stopping(keeping: keep) where id != staged {
+                out.append(WindowRestore.stop(id, entry.handle, entry.record, on: &a))
+            }
+            return out
+        }
     }
 
     // MARK: The log

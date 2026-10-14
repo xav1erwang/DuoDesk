@@ -1,7 +1,7 @@
 #!/bin/zsh
 # TEST ONLY. The restore probe (issue #57; docs/restore-window-frames-plan.md): the real
-# WindowSizer.resize and the per-window restore StreamCoordinator.restoreFits runs (WindowSizer's
-# stopDecision and putBack, WindowRestore) against a window of its own, frames before, during and
+# WindowSizer.resize and the per-window restore StreamCoordinator.restoreFits runs (WindowRestore's
+# fit and stop, through WindowSizer.AXWindows) against a window of its own, frames before, during and
 # after: a stop (its whole frame back), a rotation's re-fit, moved on the Mac (its own size where it
 # is), moved then re-fitted, resized on the Mac (left alone), an app's minimum, a window that closes, a
 # fit's nudge undone, a window that cannot be resized (its nudge put back at once), an app that does not

@@ -5,11 +5,12 @@ import ApplicationServices
 
 // TEST ONLY. The restore probe's driver (Scripts/restore-probe/run.sh; issue #57,
 // docs/restore-window-frames-plan.md). It runs `owner`, a window of its own, finds that window through
-// ScreenCaptureKit as the catalog does, fits it with the real WindowSizer.resize as
-// StreamCoordinator.fitToViewport does (into the same WindowRestore.Ledger the coordinator keeps), and
-// puts it back with the real WindowSizer.stopDecision and putBack as restoreFits does, printing each
-// frame. Never another app's window, never input, never a virtual display, never focus: the front
-// app (`lsappinfo front`) is read before and after each step and must not change.
+// ScreenCaptureKit as the catalog does, fits it with the real WindowSizer.resize (WindowRestore.fit
+// through Accessibility) as StreamCoordinator.fitToViewport does, into the same WindowRestore.Ledger
+// the coordinator keeps, and puts it back with the ledger's restore (WindowRestore.stop through
+// WindowSizer.AXWindows) as restoreFits does, printing each frame. Never another app's window, never
+// input, never a virtual display, never focus: the front app (`lsappinfo front`) is read before and
+// after each step and must not change.
 // usage: driver OWNER-EXECUTABLE
 
 let ownerPath = CommandLine.arguments[1]
@@ -97,18 +98,13 @@ final class Probe {
         return "fitted from \(fmt(fit.before)) to \(fmt(fit.after)) (asked \(Int(target.width))×\(Int(target.height)))"
     }
 
-    /// StreamCoordinator.restoreFits, as written (nothing is staged here, so its skip never applies).
+    /// StreamCoordinator.restoreFits, as written (nothing is staged here).
     func stop(keeping: CGWindowID?) -> [String] {
         var out: [String] = []
-        for (_, entry) in ledger.stopping(keeping: keeping) {
-            let p = entry.handle
-            let name = WindowRestore.name(app: p.appName, title: p.title)
-            guard let (decision, current) = sizer.stopDecision(p, entry.record) else {
-                out.append(WindowRestore.notAnsweringLine(name: name)); continue
-            }
-            let done = sizer.putBack(p, decision)
-            out.append("decision \(decision)")
-            if let line = WindowRestore.line(decision, name: name, current: current, done: done) { out.append(line) }
+        var windows = WindowSizer.AXWindows(sizer: sizer)
+        for s in ledger.restore(keeping: keeping, staged: nil, on: &windows) {
+            if let decision = s.decision { out.append("decision \(decision)") }
+            if let line = s.line { out.append(line) }
         }
         return out
     }
@@ -264,8 +260,9 @@ final class Probe {
         if let (o, w) = await open("stagehome", S0) {
             print("  " + fit(w, pad)); await settle()
             o.send("move \(Int(movedTo.x)) \(Int(movedTo.y))")
-            if let e = ledger.entries[w.windowID], let (d, _) = sizer.stopDecision(e.handle, e.record) {
-                expect("home for the stage", WindowRestore.homeForStage(d), movedHome)
+            if let e = ledger.entries[w.windowID] {
+                var windows = WindowSizer.AXWindows(sizer: sizer)
+                expect("home for the stage", WindowRestore.stageHome(e.handle, e.record, on: &windows), movedHome)
             } else { tally(false, "no record") }
             _ = ledger.take(w.windowID)
             o.end()

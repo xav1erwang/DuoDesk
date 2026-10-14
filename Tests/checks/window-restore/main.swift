@@ -3,13 +3,18 @@ import CoreGraphics
 
 // Checks WindowRestore (Sources/SillHost/WindowRestore.swift; docs/restore-window-frames-plan.md,
 // issue #57): a window Sill sized for a device goes back when it stops streaming. First the rule at
-// its edges: `keep`, `fitted`, `decide` for every outcome, `homeForStage`, the ledger and the lines.
-// Then a model of the coordinator's glue (StreamCoordinator's `fitToViewport`, `select`,
-// `restoreFits`, `stageHome`, `shutdownForExit`, and WindowSizer's `resize` and `restore`) against a
-// stand-in Mac: random sessions of picks, viewports, restarts, the catalog's resize check, the person
-// at the Mac moving, resizing, closing and full-screening windows, apps that clamp to a minimum, snap
-// to a grid or apply a size late, the virtual display on and off, the last device leaving and Quit,
-// each window's frame held to where the person expects it.
+// its edges: `keep`, `fitted`, `decide` for every outcome, `homeForStage`, the ledger and the lines;
+// then the two sequences that read and move a window, `fit` (WindowSizer.resize's) and `stop`
+// (each window `restoreFits` puts back), with `stageHome` and `Ledger.restore`, against a stand-in
+// window that logs every call. Then a model: a stand-in Mac (`Mac`, which answers the sequences' reads
+// and writes as `WindowSizer.AXWindows` does Accessibility's) and a copy of the coordinator's glue
+// around them (StreamCoordinator's `fitToViewport`, `select`, `restoreFits`, `stageHome`,
+// `shutdownForExit`; the virtual display's stage): random sessions of picks, viewports, restarts, the
+// catalog's resize check, the person at the Mac moving, resizing, closing and full-screening windows,
+// apps that clamp to a minimum, snap to a grid or apply a size late, the virtual display on and off,
+// the last device leaving and Quit, each window's frame held to where the person expects it. The
+// sequences and the rule are the real ones; the glue is written again here and can drift from the
+// coordinator's.
 //
 // Compiled alone with this file (build.sh): swiftc -O WindowRestore.swift main.swift
 
@@ -189,11 +194,147 @@ eq(WindowRestore.line(.restore(O, whole: true), name: safari, current: Sf, done:
 eq(WindowRestore.notAnsweringLine(name: safari), "Could not restore Safari — Apple Developer: it is not answering Accessibility",
    "line: an app that does not answer")
 
+// MARK: The sequences: fit, stop, stageHome, Ledger.restore
+
+/// A stand-in window for the sequences' cases: its frame and answers, every call logged in order.
+struct One: WindowRestore.Access {
+    var at: CGRect?                       // Accessibility's frame; nil: no answer, or gone
+    var full = false
+    var listed = true
+    var screen: CGRect? = area
+    var positionAnswer: WindowRestore.Write = .done
+    var sizeAnswer: WindowRestore.Write = .done
+    var minimum = CGSize.zero             // the app's minimum: what it takes for a smaller size
+    var putAnswer = true
+    var calls: [String] = []
+    mutating func frame(_ w: Int) -> CGRect? { calls.append("frame"); return at }
+    mutating func isFullScreen(_ w: Int) -> Bool { calls.append("fullScreen"); return full }
+    mutating func isListed(_ w: Int) -> Bool { calls.append("listed"); return listed }
+    mutating func visibleArea(around r: CGRect) -> CGRect? { screen }
+    mutating func setPosition(_ w: Int, _ p: CGPoint) -> WindowRestore.Write {
+        calls.append("position \(Int(p.x)),\(Int(p.y))")
+        if positionAnswer == .done { at?.origin = p }
+        return positionAnswer
+    }
+    mutating func setSize(_ w: Int, _ s: CGSize) -> WindowRestore.Write {
+        calls.append("size \(Int(s.width))×\(Int(s.height))")
+        if sizeAnswer == .done { at?.size = CGSize(width: max(s.width, minimum.width), height: max(s.height, minimum.height)) }
+        return sizeAnswer
+    }
+    mutating func put(_ w: Int, at f: CGRect) -> Bool {
+        calls.append("put \(WindowRestore.text(f))")
+        if putAnswer { at = f }
+        return putAnswer
+    }
+    func name(_ w: Int) -> String { "App — Doc" }
+}
+
+do {
+    // A plain fit: no nudge, the size, the read-back.
+    var a = One(at: O)
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: O, after: Sf), "fit: plain")
+    eq(a.calls, ["frame", "size 800×500", "frame"], "fit: plain, its calls")
+    // Near the right edge: nudged left first so the asked frame stays on the display.
+    a = One(at: R(900, 100, 600, 400))
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(712, 100, 800, 500)),
+       "fit: nudged onto the display")
+    eq(a.calls, ["frame", "position 712,100", "size 800×500", "frame"], "fit: the nudge before the size")
+    // The size refused after the nudge: the nudge put back, nothing recorded.
+    a = One(at: R(900, 100, 600, 400), sizeAnswer: .refused(-25200))
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .refused(-25200), "fit: the size refused")
+    eq(a.calls, ["frame", "position 712,100", "size 800×500", "position 900,100"], "fit: the nudge put back after a refusal")
+    eq(a.at, R(900, 100, 600, 400), "fit: back where it was after a refusal")
+    // Refused without a nudge: nothing to put back.
+    a = One(at: O, sizeAnswer: .refused(-25200))
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .refused(-25200), "fit: refused in place")
+    eq(a.calls, ["frame", "size 800×500"], "fit: refused in place, no move")
+    // A window that will not move still resizes, and the second nudge, refused too, leaves it where it took the size.
+    a = One(at: R(900, 100, 600, 400), positionAnswer: .refused(-25200))
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(900, 100, 800, 500)),
+       "fit: a window that will not move")
+    eq(a.calls, ["frame", "position 712,100", "size 800×500", "frame", "position 712,100"], "fit: both nudges tried")
+    // An app's minimum above the size asked: what it took, kept on the display by a second nudge.
+    a = One(at: R(700, 100, 600, 400), minimum: S(900, 600))
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(700, 100, 600, 400), after: R(612, 100, 900, 600)),
+       "fit: a minimum, nudged after")
+    eq(a.calls, ["frame", "size 800×500", "frame", "position 612,100", "frame"], "fit: the second nudge reads the frame again")
+    // A minimum above the size asked, with room for it: what the app took, where it is.
+    a = One(at: O, minimum: S(900, 600))
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: O, after: R(100, 100, 900, 600)), "fit: a minimum, in place")
+    // No frame from Accessibility: the window server's frame is the one before, and nothing to nudge from.
+    a = One(at: nil)
+    eq(WindowRestore.fit(1, to: Sz, fallback: O, on: &a), .unread, "fit: no frame, before or after")
+    eq(a.calls, ["frame", "size 800×500", "frame"], "fit: no frame, no nudge")
+    // No display: no nudges.
+    a = One(at: R(900, 100, 600, 400), screen: nil)
+    eq(WindowRestore.fit(1, to: Sz, fallback: .zero, on: &a), .fitted(before: R(900, 100, 600, 400), after: R(900, 100, 800, 500)),
+       "fit: no display, no nudge")
+
+    // stop: the rule's decision, and the move it calls for through the window's own element.
+    a = One(at: Sf)
+    eq(WindowRestore.stop(7, 1, first, on: &a), WindowRestore.Stopped(id: 7, decision: .restore(O, whole: true), done: true,
+                                                                        line: "Restored App — Doc to (100,100,1200×800)"), "stop: back whole")
+    eq(a.calls, ["frame", "fullScreen", "put (100,100,1200×800)"], "stop: read, then put")
+    eq(a.at, O, "stop: where it was")
+    a = One(at: Sf, putAnswer: false)
+    eq(WindowRestore.stop(7, 1, first, on: &a).line, "Could not restore App — Doc to (100,100,1200×800)", "stop: a put that failed")
+    eq(WindowRestore.stop(7, 1, first, on: &a).done, false, "stop: a put that failed is not done")
+    a = One(at: nil, listed: true)
+    eq(WindowRestore.stop(7, 1, first, on: &a), WindowRestore.Stopped(id: 7, decision: nil, done: false,
+                                                                        line: "Could not restore App — Doc: it is not answering Accessibility"),
+       "stop: no frame from a listed window: not answering")
+    eq(a.calls, ["frame", "listed"], "stop: not answering, no writes")
+    a = One(at: nil, listed: false)
+    eq(WindowRestore.stop(7, 1, first, on: &a), WindowRestore.Stopped(id: 7, decision: .gone, done: false, line: nil), "stop: gone")
+    eq(a.calls, ["frame", "listed"], "stop: gone, no writes")
+    a = One(at: Sf, full: true)
+    eq(WindowRestore.stop(7, 1, first, on: &a), WindowRestore.Stopped(id: 7, decision: .leave(.fullScreen), done: false,
+                                                                        line: "Left App — Doc as it is: it is full screen"), "stop: full screen")
+    eq(a.calls, ["frame", "fullScreen"], "stop: full screen, no writes")
+    a = One(at: O)
+    eq(WindowRestore.stop(7, 1, first, on: &a), WindowRestore.Stopped(id: 7, decision: .home, done: false, line: nil), "stop: home")
+    eq(a.calls, ["frame", "fullScreen"], "stop: home, no writes")
+    a = One(at: O)
+    eq(WindowRestore.stop(7, 1, lagging, on: &a), WindowRestore.Stopped(id: 7, decision: .settle(O), done: true, line: nil), "stop: settled")
+    eq(a.calls, ["frame", "fullScreen", "put (100,100,1200×800)"], "stop: settled, written again")
+    a = One(at: R(100, 100, 1000, 700))
+    eq(WindowRestore.stop(7, 1, first, on: &a).line, "Left App — Doc at (100,100,1000×700): it was resized on the Mac", "stop: resized")
+    eq(a.calls, ["frame", "fullScreen"], "stop: resized, no writes")
+    a = One(at: R(900, 300, 800, 500))
+    eq(WindowRestore.stop(7, 1, first, on: &a).decision, .restore(R(312, 145, 1200, 800), whole: false), "stop: moved, kept on its display")
+
+    // stageHome: the frame it would go back to, nothing moved.
+    a = One(at: R(900, 300, 800, 500))
+    eq(WindowRestore.stageHome(1, first, on: &a), R(312, 145, 1200, 800), "stageHome: moved")
+    eq(a.calls, ["frame", "fullScreen"], "stageHome: reads only")
+    a = One(at: O)
+    eq(WindowRestore.stageHome(1, first, on: &a), nil, "stageHome: home: as found")
+    a = One(at: Sf, full: true)
+    eq(WindowRestore.stageHome(1, first, on: &a), nil, "stageHome: full screen: as found")
+    a = One(at: nil)
+    eq(WindowRestore.stageHome(1, first, on: &a), nil, "stageHome: no frame: as found")
+    eq(a.calls, ["frame"], "stageHome: no frame, nothing more")
+
+    // Ledger.restore: every window but the one kept, in window ID order, but the staged one, which is taken out unasked.
+    var ledger = WindowRestore.Ledger<Int>()
+    ledger.fitted(9, handle: 1, before: O, after: Sf, asked: Sz)
+    ledger.fitted(4, handle: 1, before: O, after: Sf, asked: Sz)
+    ledger.fitted(6, handle: 1, before: O, after: Sf, asked: Sz)
+    ledger.fitted(2, handle: 1, before: O, after: Sf, asked: Sz)
+    a = One(at: Sf)
+    let stopped = ledger.restore(keeping: 4, staged: 6, on: &a)
+    eq(stopped.map(\.id), [2, 9], "Ledger.restore: in ID order, the kept and the staged left out")
+    eq(stopped.map(\.decision), [.restore(O, whole: true), .home], "Ledger.restore: each decided as it is then")
+    eq(ledger.record(6), nil, "Ledger.restore: the staged window's record taken out")
+    check(ledger.record(4) != nil, "Ledger.restore: the kept window's record stays")
+    eq(ledger.restore(keeping: nil, staged: nil, on: &a).map(\.id), [4], "Ledger.restore: then the one kept")
+}
+
 let unitPasses = passes
 let unitFailures = failures
 print("window-restore: the rule, \(unitPasses + unitFailures) cases, \(unitFailures) failed")
 
-// MARK: The model: the coordinator's glue against a stand-in Mac
+// MARK: The model: a stand-in Mac, and a copy of the coordinator's glue around the real sequences
 
 /// A seeded generator, so a failing session can be run again.
 struct RNG {
@@ -223,12 +364,14 @@ struct Win {
     var pendingSize: CGSize?
 }
 
-/// The Mac: two displays, the windows, and Accessibility's view of them.
-struct Mac {
+/// The Mac: two displays, the windows, and Accessibility's view of them, answering the sequences'
+/// reads and writes as WindowSizer.AXWindows does. Every write it takes marks the window touched.
+struct Mac: WindowRestore.Access {
     static let displays = [R(0, 0, 1512, 982), R(1512, 0, 1920, 1080)]
     static let visible = [R(0, 25, 1512, 920), R(1512, 25, 1920, 1055)]
     static let virtualDisplay = R(6000, 0, 2400, 2400)
     var wins: [CGWindowID: Win] = [:]
+    var touched: Set<CGWindowID> = []
 
     /// WindowSizer.visibleArea: the display holding most of the rect (the first on a tie).
     static func area(around r: CGRect) -> CGRect {
@@ -247,23 +390,39 @@ struct Mac {
         guard let w = wins[id], !w.closed else { return nil }
         return w.frame
     }
-    mutating func setPosition(_ id: CGWindowID, _ p: CGPoint) -> Bool {
-        guard let w = wins[id], !w.closed, !w.fullScreen else { return false }
-        wins[id]!.frame.origin = p
-        return true
-    }
-    mutating func setSize(_ id: CGWindowID, _ s: CGSize) -> Bool {
-        guard let w = wins[id], !w.closed, !w.fullScreen else { return false }
-        let took = Self.takes(w.app, s)
-        if w.app.late { wins[id]!.pendingSize = took } else { wins[id]!.frame.size = took }
-        return true
-    }
     mutating func applyLate() {
         for (id, w) in wins where w.pendingSize != nil {
             if !w.closed { wins[id]!.frame.size = w.pendingSize! }
             wins[id]!.pendingSize = nil
         }
     }
+
+    mutating func frame(_ id: CGWindowID) -> CGRect? { ax(id) }
+    mutating func isFullScreen(_ id: CGWindowID) -> Bool { wins[id]?.fullScreen ?? false }
+    mutating func isListed(_ id: CGWindowID) -> Bool { ax(id) != nil }
+    mutating func visibleArea(around r: CGRect) -> CGRect? { Mac.area(around: r) }
+    mutating func setPosition(_ id: CGWindowID, _ p: CGPoint) -> WindowRestore.Write {
+        guard let w = wins[id], !w.closed else { return .refused(-25202) }
+        if w.fullScreen { return .refused(-25200) }
+        wins[id]!.frame.origin = p
+        touched.insert(id)
+        return .done
+    }
+    mutating func setSize(_ id: CGWindowID, _ s: CGSize) -> WindowRestore.Write {
+        guard let w = wins[id], !w.closed else { return .refused(-25202) }
+        if w.fullScreen { return .refused(-25200) }
+        let took = Self.takes(w.app, s)
+        if w.app.late { wins[id]!.pendingSize = took } else { wins[id]!.frame.size = took }
+        touched.insert(id)
+        return .done
+    }
+    /// WindowSizer.restore: position, size, position; a window gone is nothing to move.
+    mutating func put(_ id: CGWindowID, at f: CGRect) -> Bool {
+        guard ax(id) != nil else { return true }
+        let a = setPosition(id, f.origin), b = setSize(id, f.size), c = setPosition(id, f.origin)
+        return a == .done && b == .done && c == .done
+    }
+    func name(_ id: CGWindowID) -> String { "App\(id) — Doc\(id)" }
 }
 
 enum Source: Equatable { case none, desktop, window(CGWindowID) }
@@ -286,7 +445,6 @@ struct Model {
     // The oracle.
     var spells: [CGWindowID: Spell] = [:]
     var expectHome: [CGWindowID: CGRect] = [:]      // a staged window's way home
-    var everTouched: Set<CGWindowID> = []
     var personFrame: [CGWindowID: CGRect] = [:]     // a window Sill never touched: where the person left it
     var log: [String] = []
     var seen: [String: Int] = [:]
@@ -308,42 +466,20 @@ struct Model {
 
     mutating func note(_ s: String) { seen[s, default: 0] += 1 }
 
-    // WindowSizer.resize, as written: nudge for the asked frame, the size, the read-back, a second nudge.
-    mutating func resize(_ id: CGWindowID, to size: CGSize) -> (before: CGRect, after: CGRect)? {
-        guard let before = mac.ax(id) else { return nil }
-        let a = Mac.area(around: before)
-        var nudgedFrom: CGPoint?
-        let fitted = WindowRestore.keep(CGRect(origin: before.origin, size: size), in: a)
-        if fitted != before.origin, mac.setPosition(id, fitted) { nudgedFrom = before.origin }
-        guard mac.setSize(id, size) else {
-            if let n = nudgedFrom { _ = mac.setPosition(id, n) }
-            return nil
-        }
-        everTouched.insert(id)
-        guard let read = mac.ax(id) else { return nil }
-        let again = WindowRestore.keep(read, in: a)
-        if again != read.origin { _ = mac.setPosition(id, again) }
-        return (before, mac.ax(id)!)
-    }
-
-    // WindowSizer.restore: position, size, position.
-    mutating func move(_ id: CGWindowID, to f: CGRect) -> Bool {
-        guard mac.ax(id) != nil else { return true }
-        let ok1 = mac.setPosition(id, f.origin), ok2 = mac.setSize(id, f.size), ok3 = mac.setPosition(id, f.origin)
-        everTouched.insert(id)
-        return ok1 && ok2 && ok3
-    }
-
-    // StreamCoordinator.fitToViewport.
+    // StreamCoordinator.fitToViewport, around WindowSizer.resize's sequence (WindowRestore.fit).
     mutating func fit(_ id: CGWindowID) {
         guard !shuttingDown, let panel, let scale, scale > 0 else { return }
         let target = S((panel.width / scale).rounded(), (panel.height / scale).rounded())
         guard let current = mac.wins[id], !current.closed else { return }
         if abs(current.frame.width - target.width) <= 2, abs(current.frame.height - target.height) <= 2 { return }
-        guard let r = resize(id, to: target) else { note("fit refused"); return }
-        let had = ledger.record(id) != nil
-        ledger.fitted(id, handle: id, before: r.before, after: r.after, asked: target)
-        if had { spells[id]?.resizedSinceFit = false; note("re-fit") } else { spells[id] = Spell(original: r.before); note("first fit") }
+        switch WindowRestore.fit(id, to: target, fallback: current.frame, on: &mac) {
+        case .refused, .unread:
+            note("fit refused")
+        case .fitted(let before, let after):
+            let had = ledger.record(id) != nil
+            ledger.fitted(id, handle: id, before: before, after: after, asked: target)
+            if had { spells[id]?.resizedSinceFit = false; note("re-fit") } else { spells[id] = Spell(original: before); note("first fit") }
+        }
     }
 
     /// Where the person expects a window of a spell to end when it stops streaming now.
@@ -355,30 +491,34 @@ struct Model {
         return CGRect(origin: WindowRestore.keep(target, in: Mac.area(around: w.frame)), size: Mac.takes(w.app, spell.original.size))
     }
 
-    // StreamCoordinator.restoreFits.
+    // StreamCoordinator.restoreFits: the ledger's restore (WindowRestore.stop for each), then the lines.
     mutating func restoreFits(keeping keep: CGWindowID?, why: String) {
-        for (id, entry) in ledger.stopping(keeping: keep) {
-            eq(entry.handle, id, "model: a record's handle is its window's")
-            if staged?.id == id { note("skipped: staged"); spells[id] = nil; continue }
-            let want = expected(id)
-            guard let current = mac.ax(id) else { note("stop: gone"); spells[id] = nil; continue }
-            let fullScreen = mac.wins[id]!.fullScreen
-            let d = WindowRestore.decide(entry.record, current: current, fullScreen: fullScreen, area: Mac.area(around: current))
-            switch d {
-            case .gone: note("decision: gone")
-            case .home: note("decision: home")
-            case .settle: note("decision: settle")
-            case .leave(.fullScreen): note("decision: full screen")
-            case .leave(.resized): note("decision: resized")
-            case .restore(_, whole: true): note("decision: whole")
-            case .restore(_, whole: false): note("decision: moved")
+        // What the person expects of each window about to stop, before anything moves.
+        var wants: [CGWindowID: CGRect] = [:]
+        for id in ledger.entries.keys where id != keep { wants[id] = expected(id) }
+        if let s = staged?.id, s != keep, ledger.record(s) != nil { note("skipped: staged"); spells[s] = nil }
+        let stopped = ledger.restore(keeping: keep, staged: staged?.id, on: &mac)
+        mac.applyLate()          // a late app applies the restore's size before anyone looks
+        for st in stopped {
+            let id = st.id
+            switch st.decision {
+            case nil: note("decision: not answering")
+            case .gone?: note("decision: gone")
+            case .home?: note("decision: home")
+            case .settle?: note("decision: settle")
+            case .leave(.fullScreen)?: note("decision: full screen")
+            case .leave(.resized)?: note("decision: resized")
+            case .restore(_, whole: true)?: note("decision: whole")
+            case .restore(_, whole: false)?: note("decision: moved")
             }
-            if case .restore(let f, _) = d { _ = move(id, to: f) }
-            if case .settle(let f) = d { _ = move(id, to: f) }
-            mac.applyLate()          // a late app applies the restore's size before anyone looks
-            note("stop: \(why)")
-            if let want, let now = mac.ax(id) {
-                check(WindowRestore.same(now, want), "model seed \(seed): window \(id) stopped (\(why), \(d)) at \(now), the person expects \(want); \(log.suffix(8))")
+            note(st.decision == .gone ? "stop: gone" : "stop: \(why)")
+            if case .restore(let f, let whole)? = st.decision, st.done {
+                let name = mac.name(id)
+                eq(st.line, whole ? "Restored \(name) to \(WindowRestore.text(f))" : "Restored \(name) to \(WindowRestore.text(f)), its own size where it was moved",
+                   "model seed \(seed): window \(id)'s line")
+            }
+            if st.decision != .gone, let want = wants[id] ?? nil, let now = mac.ax(id) {
+                check(WindowRestore.same(now, want), "model seed \(seed): window \(id) stopped (\(why), \(String(describing: st.decision))) at \(now), the person expects \(want); \(log.suffix(8))")
             }
             spells[id] = nil
         }
@@ -389,7 +529,7 @@ struct Model {
         guard let w = mac.wins[id], !w.closed, !w.fullScreen, let current = mac.ax(id) else { note("staging failed"); return false }
         var home: CGRect? = nil
         if let r = ledger.record(id) {
-            home = WindowRestore.homeForStage(WindowRestore.decide(r, current: current, fullScreen: false, area: Mac.area(around: current)))
+            home = WindowRestore.stageHome(id, r, on: &mac)
             note(home == nil ? "staged: as found" : "staged: with a home")
             expectHome[id] = expected(id)
         } else {
@@ -397,7 +537,7 @@ struct Model {
         }
         let placementHome = home ?? current
         let size = S((panel.map { $0.width / (scale ?? 1) } ?? current.width).rounded(), (panel.map { $0.height / (scale ?? 1) } ?? current.height).rounded())
-        _ = move(id, to: CGRect(origin: Mac.virtualDisplay.origin, size: size))
+        _ = mac.put(id, at: CGRect(origin: Mac.virtualDisplay.origin, size: size))
         mac.applyLate()
         staged = (id, placementHome)
         _ = ledger.take(id)
@@ -410,7 +550,7 @@ struct Model {
         guard let s = staged else { return }
         staged = nil
         if mac.ax(s.id) != nil {
-            _ = move(s.id, to: s.home)
+            _ = mac.put(s.id, at: s.home)
             mac.applyLate()
             note("stage released")
             if let want = expectHome[s.id], let now = mac.ax(s.id) {
@@ -420,7 +560,6 @@ struct Model {
         }
         expectHome[s.id] = nil
     }
-
     // StreamCoordinator.select, the parts that bear on fitted and staged windows.
     mutating func select(_ source: Source) {
         guard !shuttingDown else { return }
@@ -468,7 +607,7 @@ struct Model {
         w.frame.origin = p
         mac.wins[id] = w
         if spells[id] != nil { spells[id]!.moved = true }
-        if !everTouched.contains(id) { personFrame[id] = w.frame }
+        if !mac.touched.contains(id) { personFrame[id] = w.frame }
         log.append("person moved \(id) to \(p)")
     }
 
@@ -487,7 +626,7 @@ struct Model {
         w.pendingSize = nil
         mac.wins[id] = w
         if spells[id] != nil { spells[id]!.resizedSinceFit = true }
-        if !everTouched.contains(id) { personFrame[id] = w.frame }
+        if !mac.touched.contains(id) { personFrame[id] = w.frame }
         log.append("person resized \(id) to \(s)")
     }
 
@@ -530,7 +669,7 @@ struct Model {
             scale = scales[rng.int(scales.count)]
             log.append("viewport \(panel!) at \(scale.map { "\($0)" } ?? "nil")")
             if case .window(let a) = active {
-                if vd, staged?.id == a { _ = move(a, to: CGRect(origin: Mac.virtualDisplay.origin, size: S((panel!.width / (scale ?? 1)).rounded(), (panel!.height / (scale ?? 1)).rounded()))) }
+                if vd, staged?.id == a { _ = mac.put(a, at: CGRect(origin: Mac.virtualDisplay.origin, size: S((panel!.width / (scale ?? 1)).rounded(), (panel!.height / (scale ?? 1)).rounded()))) }
                 else { fit(a) }       // the encoder keeps its size: the next poll restarts
             }
         case 34..<38:
@@ -573,7 +712,7 @@ struct Model {
         check(ledger.isEmpty, "model seed \(seed): records left after Quit")
         check(staged == nil, "model seed \(seed): a window left staged after Quit")
         // A window Sill never touched is where the person left it.
-        for (id, w) in mac.wins where !w.closed && !everTouched.contains(id) && !w.fullScreen {
+        for (id, w) in mac.wins where !w.closed && !mac.touched.contains(id) && !w.fullScreen {
             check(w.frame == personFrame[id], "model seed \(seed): window \(id), never sized, moved from \(personFrame[id]!) to \(w.frame)")
         }
     }
