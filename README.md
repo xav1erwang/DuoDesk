@@ -101,8 +101,8 @@ Sill has layouts of its own.
   from the website and not from the Mac App Store.
 
 Good to know: Sill shows one window, or the whole desktop, at a time, and it
-does not play sound from your Mac. Your Mac has to be awake, with Sill open:
-Sill can't wake a sleeping Mac, and after a restart it opens only once someone
+does not play sound from your Mac. Your Mac needs to be awake, with Sill open.
+Sill may not be able to wake it. After a restart Sill opens only once someone
 logs in, with Launch at Login on. Only the iPhones and iPads you paired can
 connect, unless you turn off Require pairing in Settings › Devices; then any
 device on your network can, still encrypted. Pairing at home came with Sill

@@ -728,8 +728,8 @@ enum DiscoveryPolicy {
     /// asleep (`reconnectLine`): about 20 s after the loss.
     static let reconnectQuietAfter = 3
     /// After this many the dials of that listing stop (about 4.6 minutes): each dial through a sleep
-    /// proxy can wake the Mac. The row listed afresh, the app's return from the background, or a tap
-    /// starts again.
+    /// proxy may wake the Mac (Wake on Demand; untested). The row listed afresh, the app's return
+    /// from the background, or a tap starts again.
     static let reconnectDials = 12
 
     /// Whether the automatic reconnect dials its Mac's listed row now, or when to look again, after

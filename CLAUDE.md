@@ -40,8 +40,9 @@ docs; no wire change, nothing on the Mac.
   at once, under the old 10 s spacing (`DiscoveryPolicy.autoDesktop`).
 - DEBUG `-SillBrowserFail N` (each of the first N network browsers reported failed with -65569 half
   a second after it starts) and `-SillConnectCase asleep`. The support page's "Your Mac isn’t listed"
-  gains a sleeping Mac (Sill can't wake it: Energy, or Battery) and a restarted one (Sill opens after
-  a login, with Launch at Login); README's Good to know, the next What's New
+  gains a sleeping Mac (Sill may not be able to wake it, so keep it awake: Energy, or Battery; not
+  "can't", since a dial through a Bonjour Sleep Proxy may wake it, untested) and a restarted one
+  (Sill opens after a login, with Launch at Login); README's Good to know, the next What's New
   (docs/app-store-metadata.md), DEVELOPMENT.md.
 - Verified (the plan's Results): on a private simulator against `SillHost --synthetic --pairing` as
   a `_silltest._tcp` row, the host stopped for 20 s: main's build dialled at +0 and +6.3 s after the

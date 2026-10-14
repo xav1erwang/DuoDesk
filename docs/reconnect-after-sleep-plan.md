@@ -93,7 +93,8 @@ app on my iPad before it would reconnect."
   saying it through the later dials (VoiceOver hears it once). After 12 (`reconnectDials`, about
   4.6 minutes) the dials stop: "Stopped trying to reach ‹Mac›. Tap it to try again.", the remote
   path's words; a new listing or the return to the foreground starts again. Each dial through a
-  sleep proxy can wake the Mac, so the dials are spaced and bounded.
+  sleep proxy may wake the Mac (Wake on Demand; whether it does is Noah's test), so the dials are
+  spaced and bounded.
 - A tap dials at once, as before (`connect(to:)` clears the reconnect).
 - A reconnect dial let go after 5 s now looks again (the comment's intent), and one that ends any
   other way before it connects (waiting, failed, no window list) counts as one dial of the listing
@@ -118,11 +119,17 @@ most every 10 s, as it already was at its next window list. No host change.
 ### 4. The words
 
 - site/support.html, "Your Mac isn’t listed" (outside the Remote Access markers, which stay as they
-  are): a bullet for a sleeping Mac (Sill can’t wake it; keep it awake in System Settings › Energy,
-  Energy Saver on macOS 14, or Battery on a laptop, while you use Sill from another room) and one for
-  a Mac that restarted (Sill opens only once someone logs in, with Launch at Login on: in the Sill
-  menu, or Sill’s Settings › General).
-- README.md's Good to know: one sentence on the same two.
+  are): a bullet for a sleeping Mac (Sill may not be able to wake it; keep it awake in System
+  Settings › Energy, Energy Saver on macOS 14, or Battery on a laptop, while you use Sill from another
+  room) and one for a Mac that restarted (Sill opens only once someone logs in, with Launch at Login
+  on: in the Sill menu, or Sill’s Settings › General). Whether Sill wakes a sleeping Mac is not
+  known: through a Bonjour Sleep Proxy with Wake for network access on, a dial may (Wake on Demand,
+  the reason for the bound above); with none it should not. So the words say only that it may not
+  (the review found the first draft's "Sill can’t wake a sleeping Mac" at odds with that reason).
+  Noah's sleep-proxy test settles them: if a dial wakes the Mac and connects, the bullet can say
+  "With an Apple TV or HomePod at home and Wake for network access on, your Mac can wake when Sill
+  connects; otherwise keep it awake in …".
+- README.md's Good to know: the same two, in a sentence each.
 - docs/app-store-metadata.md: a line for the next version's What's New.
 - docs/DEVELOPMENT.md: the reconnect's behaviour, `-SillBrowserFail`, Known limitations.
 
@@ -136,8 +143,8 @@ most every 10 s, as it already was at its next window list. No host change.
 3. How long the old results stay beside the new browser's: **3 s** (`networkFirst`). Shorter risks a
    Mac answering late leaving the rows for a moment; longer keeps a Mac that went.
 4. The back-off and the bound: **5, 10, 20, then 30 s; 12 dials** (about 4.6 minutes), then "Stopped
-   trying…". A dial through a sleep proxy can wake the Mac (Wake on Demand), so it is never a fast
-   loop, and never in the background.
+   trying…". A dial through a sleep proxy may wake the Mac (Wake on Demand; untested), so it is
+   never a fast loop, and never in the background.
 5. The quiet line after **3** dials. Its words are the plan's; Noah may prefer others.
 6. The return from the background starts the count again (the person is there): **yes**.
 7. The failed browse's "Browse failed: …" line: **gone**; the browser is made again.

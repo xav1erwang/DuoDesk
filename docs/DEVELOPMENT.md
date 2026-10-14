@@ -1004,7 +1004,9 @@ record field by field.
   devices only (with Require pairing off, to any device at home, still
   encrypted); only the command-line host without `--pairing` keeps a plain,
   open home door. The device reconnects by itself when the Mac drops it (The
-  iOS app, above), but Sill can't wake a sleeping Mac.
+  iOS app, above). Whether its dials wake a Mac asleep behind a Bonjour Sleep
+  Proxy (an Apple TV or HomePod, with Wake for network access on) is
+  untested; from away they cannot (Remote access, above).
 - Bonjour at home, your VPN or a port forward away (Remote access above).
   iCloud auto-pairing comes with milestone 5.
 
