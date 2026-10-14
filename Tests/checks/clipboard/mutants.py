@@ -90,6 +90,8 @@ MUTANTS = [
     ("too long said as nothing", P, "guard let data = payload(text: text) else { return .tooLong }", "guard let data = payload(text: text) else { return .nothing }"),
     ("the chip under the link's line", P, "landscape && !linkLineShown ? .topTrailing : .bottomTrailing", "landscape ? .topTrailing : .bottomTrailing"),
     ("the cap in thousands", P, 'public static var cap: String { "\\(Clipboard.maxTextBytes / 1024) KB" }', 'public static var cap: String { "\\(Clipboard.maxTextBytes / 1000) KB" }'),
+    ("the Mac's footnote promises every password manager's copy (the review's copy finding)", P,
+     "Copies a password manager marks as concealed stay on this Mac.\"", "A password manager’s copies stay on this Mac.\""),
     ("the subtitle without the key", P, 'public static let chipSubtitle = "Then press ⌘V there."', 'public static let chipSubtitle = "Then paste there."'),
 ]
 caught = 0
