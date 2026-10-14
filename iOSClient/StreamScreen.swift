@@ -169,6 +169,11 @@ struct StreamScreen: View {
     @Environment(\.duoEnvironment) private var duoEnvironment
     /// This device's Larger Picture switch (the Settings panel's This iPhone; docs/larger-picture-plan.md).
     @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
+    /// The switch as it was when the Settings panel opened, which the arrangement keeps until the panel
+    /// closes; nil while it is closed. The panel hangs under row 1, which the switch moves by the
+    /// picture's growth (157 pt on an 18 Pro Max), so applied at once the switch would jump from under
+    /// the finger that flipped it; it applies as the panel goes, in the same motion.
+    @State private var largerPictureHeld: Bool? = nil
     #if DEBUG
     /// The console says once when a decision starts to wait.
     @State private var tourWaitLogged: Double? = nil
@@ -191,6 +196,8 @@ struct StreamScreen: View {
         // The panel open over the keyboard, as in a session: it took the keyboard down, and closing
         // it puts it back (`-SillSettings 1 -SillKeyboard 1`).
         _keyboardBeforeSettings = State(initialValue: settingsOpen && keyboardShown)
+        // And it holds the Larger Picture it opened with, as `setSettings` does.
+        _largerPictureHeld = State(initialValue: settingsOpen ? UserDefaults.standard.bool(forKey: StreamClient.largerPictureKey) : nil)
         _pairingOverlay = State(initialValue: pairingOverlay)
         self.scannerOverride = scannerOverride
     }
@@ -207,9 +214,11 @@ struct StreamScreen: View {
             let posture = DuoPosture.read(geo, duoEnvironment)
             // Larger Picture on a phone held upright: the software keyboard its rows are kept above;
             // none with the switch off, sideways, on an iPad, on the iPhone Duo (a hinge), and where
-            // the picture would be no larger (Display Zoom at 320 pt wide).
+            // the picture would be no larger (Display Zoom at 320 pt wide). While the Settings panel
+            // is open, the switch as it was when it opened (`largerPictureHeld`).
             let largerKeyboard = layout == .phone
-                ? PhonePortraitLayout.keyboard(for: geo.size, largerPicture: largerPicture, foldable: posture.hinge != .unknown) : nil
+                ? PhonePortraitLayout.keyboard(for: geo.size, largerPicture: largerPictureHeld ?? largerPicture,
+                                               foldable: posture.hinge != .unknown) : nil
             // The Settings panel's switch: on an iPhone without a hinge whose picture Larger Picture
             // makes larger, judged on this screen held upright, whichever way it is held now.
             let offersLarger = DuoLayout.phoneArrangement && posture.hinge == .unknown
@@ -456,7 +465,8 @@ struct StreamScreen: View {
         for time in toggles {
             after(time) {
                 largerPicture.toggle()
-                print("harness: Larger Picture switched " + (largerPicture ? "on" : "off") + " at " + Self.points(CGFloat(time)) + " s")
+                print("harness: Larger Picture switched " + (largerPicture ? "on" : "off") + " at " + Self.points(CGFloat(time)) + " s"
+                      + (largerPictureHeld != nil ? "; the Settings panel is open, so it applies when the panel closes" : ""))
             }
         }
         guard live else { return }
@@ -556,7 +566,8 @@ struct StreamScreen: View {
     /// key reaches the Mac, and Esc (or ⌘.) reaches the panel's Done instead. Closing (Done, a tap
     /// outside, the Settings button, Esc, the VoiceOver escape gesture) puts the keyboard back if
     /// the panel took it down; the Apps and Keyboard buttons close it with `restoreKeyboard: false`
-    /// because they decide about the keyboard themselves.
+    /// because they decide about the keyboard themselves. While it is open the arrangement keeps the
+    /// Larger Picture it opened with (`largerPictureHeld`); a change of the switch applies as it closes.
     private func setSettings(_ open: Bool, restoreKeyboard: Bool = true) {
         guard open != settingsOpen else { return }
         if open {
@@ -567,7 +578,12 @@ struct StreamScreen: View {
             overlay.setKeyboard(shown: false)
         }
         let motion: Animation = open && !reduceMotion ? .spring(duration: 0.25, bounce: 0.15) : .easeOut(duration: 0.18)
-        withAnimation(motion) { settingsOpen = open }
+        withAnimation(motion) {
+            settingsOpen = open
+            // Larger Picture keeps the arrangement the panel opened with while it is open, so the
+            // switch never moves under the finger; a change made there applies as the panel goes.
+            largerPictureHeld = open ? largerPicture : nil
+        }
         if !open {
             if restoreKeyboard, keyboardBeforeSettings { overlay.setKeyboard(shown: true) }
             keyboardBeforeSettings = false

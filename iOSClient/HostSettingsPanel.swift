@@ -495,9 +495,10 @@ struct HostSettingsPanel: View {
     /// The Mac's window list said it takes the gestures (`WindowList.gestures`).
     private var macTakesGestures: Bool { (client.hostGestures ?? 0) >= TrackpadGesture.generation }
 
-    /// Under Larger Picture's switch: what it gives up, where windows come from instead, and that the
-    /// Mac fits a window to the taller picture once Aa sets its text size (or on the virtual display).
-    static let largerPictureFooter = "Held upright, the picture takes the place of the window thumbnails and reaches down to where the keyboard comes up. Switch windows with Apps: tap an open app again for its next window. To fill the taller picture with a window, set its text size with Aa."
+    /// Under Larger Picture's switch: what it gives up, where windows come from instead, that the Mac
+    /// fits a window to the taller picture once Aa sets its text size (or on the virtual display), and
+    /// that the screen changes as the panel closes (StreamScreen's `largerPictureHeld`).
+    static let largerPictureFooter = "Held upright, the picture takes the place of the window thumbnails and reaches down to where the keyboard comes up. Switch windows with Apps: tap an open app again for its next window. To fill the taller picture with a window, set its text size with Aa. The picture changes when you close Settings."
 
     /// What each gesture does on the Mac, and what the row does as an accessibility action: its one
     /// gesture, or, for the Spaces, one action each way (natural direction: a swipe left brings the
