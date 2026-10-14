@@ -235,4 +235,14 @@ stamped as it came) and the host's log; the loss is the device's "connection sil
 - 2026-10-14: the plan (211e98c); the browsers made again, the reconnect kept alive, the Desktop
   asked for again, with `Tests/checks/policy`'s `sleep.swift` and 28 mutants (83f96ba); a failure
   keeps the rows as they are (03ca390); the runs above; the support page, README, the App Store
-  text for the next version, DEVELOPMENT.md and CLAUDE.md.
+  text for the next version, DEVELOPMENT.md and CLAUDE.md; PR #77.
+- Checks on the final files: `Tests/checks/policy` 441 cases (392 and 49 new) and 158 of 158
+  mutants (130 and 28 new); the other checks that compile DiscoveryPolicy.swift, whose mutants'
+  patterns occur as often as on main: `home-device` 182 cases and 124 of 124 mutants, `home-model`
+  62 and 21 of 21, `remote-rules` 123 and 72 of 72; `Tests/checks/run-all.sh`, all 40 passed
+  (493 s).
+- Builds: the iOS app Debug for the generic simulator as CI builds it (`CODE_SIGNING_ALLOWED=NO
+  ARCHS=arm64`), Release for the generic simulator and Debug for a generic device, unsigned: only
+  the known `StreamClient` capture warning (StreamClient.swift:3662, the closure main has at 3430);
+  `swift build -c release`: only the CaptureProbe warning. CI's "Build and check" passed on the PR
+  (run 38486135118, 8 min 39 s).

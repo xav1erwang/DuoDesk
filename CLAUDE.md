@@ -54,8 +54,10 @@ docs; no wire change, nothing on the Mac.
   Desktop: asked for again 10 ms after a stand-in Mac said nothing streams (main: never). Photos of
   `asleep` at the Duo's four sizes and 744×1133, default and accessibility-extra-large; `homerows`
   pixel for pixel main's. `Tests/checks/policy` 441 cases (`sleep.swift`, models of a host stopped,
-  a sleep proxy, a new listing and the background), 158 mutants (28 new); the other DiscoveryPolicy
-  checks; the builds; `run-all.sh` (numbers in the PR).
+  a sleep proxy, a new listing and the background) and 158 of 158 mutants (28 new); `home-device`
+  124 of 124, `home-model` 21 of 21, `remote-rules` 72 of 72; `run-all.sh`, all 40; iOS Debug for the
+  simulator (CI's command), Release for the simulator and Debug for a device, only the known
+  `StreamClient` capture warning; `swift build -c release`, only the CaptureProbe one; CI green.
 - **Untested, for Noah:** the real overnight case on the iPad mini (Sill left streaming or on the
   connect screen for hours, the iPad locked; back: the console's "browser: rebuilt the network
   browser (back from the background)", the Mac's row as it is now, and the session back by itself if
