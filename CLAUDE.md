@@ -49,17 +49,26 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   warnings only; 19 harness photos identical to main's (the Menus pull-down open among them, the hold let
   go under it); live on private simulators against `SillHost --synthetic`, with `Tests/keyrig` (new, TEST
   ONLY: a virtual HID keyboard and mouse inside the simulator, as duorig): keys and ⌘W with no Keyboard
-  button, after two turns too (an iPhone, `-SillTurnAt`); Esc,
-  ⇧Esc, ⌘Esc and ⌥⌘Esc through both channels; Esc closing Settings and skipping the tour with nothing
-  sent; the tour shown with a keyboard attached; a keyboard going and coming; the button's two states on a
-  fresh iPhone; wheel notches; the touch rig 72 of 72 against main's. Found there and fixed: a lone wheel
-  notch was never sent; the rule asked with no view in a window. Learned in the simulator: its GameController
-  always counts its own keyboard, UIKit counts one once keys arrive, iPadOS 27 refuses programmatic turns,
-  and scroll events marked as momentum reached no pan there (no real trackpad's events reached the
-  continuous pan, so a device decides whether iPadOS coasts too). CI's Build and check passed on 807c8ef.
-  With the other open pull requests
-  it meets in the docs and, with #79, in StreamScreen.swift's DEBUG hooks (keep both): the plan's
-  Progress.
+  button, after two turns too (an iPhone, `-SillTurnAt`); Esc, ⇧Esc, ⌘Esc and ⌥⌘Esc through both channels;
+  Esc closing Settings and skipping the tour with nothing sent; the tour shown with a keyboard attached; a
+  keyboard going and coming; the button's two states on a fresh iPhone; wheel notches; the touch rig 72 of
+  72 against main's. Found there and fixed: a lone wheel notch was never sent; the rule asked with no view
+  in a window. Learned in the simulator: its GameController always counts its own keyboard, UIKit counts
+  one once keys arrive, iPadOS 27 refuses programmatic turns, and scroll events marked as momentum reached
+  no pan there (no real trackpad's events reached the continuous pan, so a device decides whether iPadOS
+  coasts too). CI's Build and check passed on 807c8ef. With the other open pull requests it meets in the
+  docs and, with #79, in StreamScreen.swift's DEBUG hooks (keep both): the plan's Progress.
+- The review (2026-10-14; the plan's Results, "The review and its fixes"): four findings, each checked
+  here first and fixed in a commit of its own. Esc's key commands and EscapeKey keep to their own window
+  (`onScreen(in:)`, `fire(in:)`): Settings open in a window behind took the stream's Esc key commands in
+  front (a private simulator, `-SillSecondWindow 1 -SillSettings 1 -SillEscViaCommand 1`: 2fc53ed's build
+  sent no key 53 to the host, this one did), and Esc could close another window's panel. README, the
+  support page, the App Store bullet and the next What's New keep Esc and trackpad scrolling out until
+  Noah's steps 1, 7 and 9 pass (the plan's "Words that wait for a device"); the support page's Keyboard
+  button sentence; Full Keyboard Access and Switch Control (open question 11, step 13). Towards #68, not
+  Fixes. Again on 7fdc902: the three iOS builds and a clean `swift build -c release`, the known warnings
+  only; `run-all.sh` all 41 at the first run; the touch rig 72 of 72; Esc in one window and in two, live; no check
+  compiles a file the review changed, so no mutants again.
 - **Untested, for Noah (the plan's 1–13, on the iPad with the Magic Keyboard, a Debug build):** which
   channel brings Esc (`hwkey:`; `-SillKeyProbe 1`), Esc in iTerm2's vim, zsh's vi mode and Zed, and
   Control-[; typing right after connecting and after a turn; ⌘W closing the Mac's window, not Sill's;

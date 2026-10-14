@@ -386,9 +386,76 @@ scenarios on main's surfaces and on this branch's; `compare.py` 72 of 72 (the ov
 trackpad's one- and two-finger strokes give the same events as before, the gestures as before). It makes
 direct touches only, not scroll events: the wheel's pan ran under the key rig instead.
 
+**The review (2026-10-14) and its fixes.** An adversarial review of 2fc53ed re-ran every claim above and
+found four things, and two claims that did not hold. Each was checked here against the code first, then
+fixed in a commit of its own:
+
+1. **Esc and `EscapeKey` across Sill's windows** (should-fix; bdc121d). `EscapeKey.onScreen` counted the
+   EscapeKeys of every window, so Settings, the tour, the pairing overlay or the Add a Mac card open in one
+   window took the stream's Esc key commands away in every other; on a device that gives Esc only to the
+   key command (#67's), Esc then went nowhere in the window in front. And `fire()` answered with the newest
+   EscapeKey in any window, so Esc in one window could close another's panel. Now `onScreen(in:)` and
+   `fire(in:)` take the window (§1). On a private iPad Pro 13-inch (M5) simulator, iOS 27.0, against
+   loopback `SillHost --synthetic` with keys from the key rig:
+   - `-SillSecondWindow 1 -SillSettings 1 -SillEscViaCommand 1` (Settings open in the first window, behind;
+     the second in front, holding the keyboard), then Esc and "a": 2fc53ed's build handed Esc on with no
+     key-command line, and the host got only the "a" (key 0); this build: `hwkey: usage 41 down via
+     keyCommand (none): to the Mac`, and the host got key 53 down and up, then key 0.
+   - `-SillSecondWindow 1 -SillTour touch -SillTakeTourAt 5` (a tour in each window, then Settings opening
+     in the one behind), Esc in the front window: this build closed the front window's tour (`escape: Esc
+     to what is on screen in its window (its EscapeKey), not to the Mac; 1 in other windows, left alone`;
+     the photo after it shows the front window with no tour). 2fc53ed's build closed the front window's
+     tour too: the Settings panel opened in the window behind never put its EscapeKey on screen while that
+     window stayed behind (2fc53ed's Esc closed a tour, not that panel; this build counted one EscapeKey in
+     the other window, not two), so the newest EscapeKey anywhere was still the front window's. Showing
+     `fire()`'s old mistake needs two windows side by side, or a switch from one to the other, which these
+     runs could not make: Noah's step 12.
+   - One window, as before the fix: with Settings open, Esc closed it through its EscapeKey with nothing at
+     the host, then Esc and "a" reached the host (key 53, key 0); with `-SillTourState fresh` the tour
+     showed 1.10 s after the picture with the keyboard attached, an "a" during it reached nothing, Esc
+     skipped it, then Esc and "c" reached the host; with `-SillEscViaCommand 1`, Esc, ⇧Esc and ⌥⌘Esc came
+     through the key command, each key 53 at the host with its flags and every modifier let go after;
+     `-SillInputTest 1`: Esc and ⇧Esc through the key command, a trackpad's scroll with its coast and a
+     wheel's (104 scroll events at the host); in the harness the Add a Mac card (`-SillLayout 1000x710
+     -SillConnectCase addmac`) closed on Esc.
+2. **Public words beyond what a device has shown** (nit; af9f13c). README.md, public as soon as this
+   merges, said Esc reaches the Mac and a trackpad or a mouse scrolls, and so did the support page, the App
+   Store description's bullet and the next What's New. They now keep to typing without the Keyboard
+   button; "Words that wait for a device" (above) has the fuller lines. CLAUDE.md's "a pan gets no momentum
+   events" is now a simulator observation.
+3. **The support page's Keyboard button** (nit; af9f13c). It said the button "shows the on-screen
+   keyboard"; with a keyboard attached it brings up the keyboard bar first: now "It brings up your
+   device’s keyboard bar, and from there the on-screen keyboard."
+4. **Full Keyboard Access and Switch Control** (nit; 7fdc902). The hold puts Tab, Space and the arrows
+   on the Mac and, with a keyboard attached, the Keyboard button never lets go for good
+   (`HardwareKeyboardPolicy.toggled()` answers `makeAutomatic` while the hold is wanted, read here):
+   open question 11 and step 13.
+
+The claims that did not hold: "Fixes #68" (no real trackpad's events reached the continuous pan, and the
+double coast is untested): the pull request now says Towards #68. And "`run-all.sh`: all 41 pass" held for
+the review only on a second run: `protocol`'s "generate: digits uniform", a p = 0.001 test of
+StreamProtocol's pairing-code generator, which this branch does not touch, failed once (chi² 27.9 against
+a bound of 27.9) and passed alone. Here, on 7fdc902, it passed all 41 at the first run (347 s; `protocol`
+ALL PASS, hardware-keyboard 51 checks, key-strokes 347).
+
+Verified again on 7fdc902 (the code as it stands; what follows it is docs only): the iOS app (Xcode 27.1,
+27A9275), Debug and Release for the generic simulator and Debug for a generic device with
+`CODE_SIGNING_ALLOWED=NO`, from new derived data: each succeeded (22, 38 and 18 s) with only the
+StreamClient.swift:3430 capture warning and appintentsmetadataprocessor's note; the Release binary holds
+none of the DEBUG strings (the new `escape:` lines included) and links GameController. `swift build -c
+release` from `git archive` of 7fdc902: complete in 43.4 s, only the CaptureProbe warning. No pure check
+compiles a file this round changed (AddMacCard.swift, InputOverlay.swift, ContentView.swift), so the
+mutants were not run again: hardware-keyboard's 31 of 31 and key-strokes' 81 of 81 stand (the review's
+runs). The touch rig, whose stub follows `onScreen(in:)`: 72 scenarios on main's surfaces and on this
+branch's, `compare.py` 72 checks, 0 failed. No screen changed, so no harness photos were taken again. The
+private simulators ("Sill hwkeys review-fixes iPad", "Sill review-fixes touchrig") and every host are
+gone.
+
 **Not verified here:** anything on a device (§ Untested); the continuous recognizer with a real trackpad's
 events (the simulator gives a virtual mouse's scrolls to the discrete one), and so the double coast on a
-device; what iPadOS draws for the person's own keyboard with a Magic Keyboard; Control-[ in the terminals.
+device; what iPadOS draws for the person's own keyboard with a Magic Keyboard; Control-[ in the terminals;
+`fire()`'s old cross-window mistake shown live (two windows side by side); Full Keyboard Access and Switch
+Control.
 
 ## Progress
 
@@ -402,3 +469,7 @@ device; what iPadOS draws for the person's own keyboard with a Magic Keyboard; C
   (CLAUDE.md's Current step, ci.yml's mutants matrix, Tests/checks/README.md, docs/DEVELOPMENT.md,
   docs/app-store-metadata.md) and, with #79, in StreamScreen.swift's DEBUG hooks (`-SillTurnAt` beside
   its `-SillAXDump` and `-SillLargerPictureToggle`: keep both), so whichever merges second takes main in.
+- 2026-10-14: the review's findings fixed: Esc's key commands and EscapeKey keep to their own window
+  (bdc121d); the public words keep to what a device has shown, and the support page's Keyboard button
+  sentence (af9f13c); Full Keyboard Access and Switch Control, open question 11 and step 13 (7fdc902).
+  Verified as Results' "The review and its fixes" says; the pull request says Towards #68.
