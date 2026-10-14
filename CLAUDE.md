@@ -10,54 +10,88 @@ Formerly winstream; the folder still carries the old name.
 
 **A window Sill sized goes back (2026-10-14, branch `restore-window-frames` from main at 985a733,
 PR #75; docs/restore-window-frames-plan.md has the rule, the open questions with the defaults taken,
-the results and Noah's steps).** Issue #57 (rosstex): "disconnecting on the iOS app doesn't revert
+the review, the results and Noah's steps).** Issue #57 (rosstex): "disconnecting on the iOS app doesn't revert
 apps back to their original shape/size on Mac". In regular mode (Virtual Display off) Aa resized the
 real window (`StreamCoordinator.fitToViewport`) and nothing put it back, on purpose until now. Host
 only; no wire change, nothing on the device, nothing stored.
 - The rule (`WindowRestore`, pure; `Tests/checks/window-restore`): each fit's record (`original`,
-  the AX frame before Sill first touched it; `set`, the frame read back; `asked`; `moved`, a move
-  noted at a later fit; 2 pt tolerance) and, when the window stops streaming, `decide`: gone
-  (nothing), full screen (left, a line), home (nothing), `settle` (Sill asked another size and the
-  read-back never showed it: an app that applies a size late, stopped first; the original written
-  again, no line), resized on the Mac after Sill's last fit (left entirely, a line), unmoved (the
-  whole original frame), moved (its own size where it is, kept on its display by `keep`, moved here
-  from WindowSizer). Lines in the stage's style: "Restored ‹app› — ‹title› to (x,y,w×h)", "…, its
+  the AX frame before Sill first touched it; `set`, the frame read back; `asked`; `moved`, noted at
+  a later fit by `movedSince`: at Sill's size its top-left corner elsewhere, at another size both
+  edges of an axis gone the same way from where Sill left it, at either of Sill's sizes, so a resize
+  from any edge or corner, or with Option, is no move; 2 pt tolerance) and, when the window stops
+  streaming, `decide`: gone (nothing), full screen (left, a line), home (nothing), `settle` (Sill
+  asked another size and the read-back never showed it: an app that applies a size late, stopped
+  first; the original written again, no line), resized on the Mac after Sill's last fit (left
+  entirely, a line), unmoved (the whole original frame), moved (its own size where it is, kept on its
+  display by `keep`). Lines in the stage's style: "Restored ‹app› — ‹title› to (x,y,w×h)", "…, its
   own size where it was moved", "Left … at (…): it was resized on the Mac", "Left … as it is: it is
   full screen", "Could not restore …", "…: it is not answering Accessibility"; `win.restored` in the
   `[1s]` lines.
-- Where: `fitToViewport` records every resize the app took (`WindowSizer.resize` returns `Fit`: the
-  element and the frames before and after, and puts back its own nudge when the size is refused;
-  no fit once `shuttingDown`); `select` restores every fitted window but the next source's once the
-  old pipeline has stopped (a pick, the Desktop, `.none` when the last device leaves or the stream
-  stops), and its defer every one when nothing streams (a window gone, a failed start);
-  `shutdownForExit` (Quit, the signals under `HostShutdown.install`) and `releaseKeysForExit` (the
-  CLI's default path at a signal) restore every one. The per-window restore is WindowSizer's
-  (`stopDecision`: one AX read first, an app that does not answer left after at most a second;
-  `putBack` through `restore`). Virtual Display turned on while a fitted window streams:
-  `VirtualStage.prepare(…, home:)` keeps the frame it would have gone back to (`stageHome`,
-  `WindowRestore.homeForStage`) and the record is handed over (`Ledger.take`) only once staged;
-  `restoreFits` skips the staged window (Quit mid-`prepare`).
-- Defaults taken (the plan's 14): the CLI's Ctrl-C restores too (a line only when a window was
-  sized, the same exit status); full screen left; resized left, position included; moved keeps its
-  place, also after a re-fit (`moved`); a resize a re-fit undid is forgotten; a failed restore tried
-  once; nothing after a crash or `kill -9` (memory only); the App Store text unchanged.
-- Verified: `swift build -c release` (only the CaptureProbe warning); `Tests/checks/run-all.sh`, all
-  41 (383 s); `window-restore` 41,391 checks (90 cases and a model of the glue, 5,000 random
-  sessions against a stand-in Mac; its first run found the late app's race, now `settle`) and 48 of
-  48 mutants (in CI's matrix); H2 against 985a733 from `git archive`: idle 35 s identical masked and
-  sorted, a Desktop client identical but for the last partial second's `[Ns]` line, as base against
-  base. No iOS file changed.
-- Not verified here: anything live. AX was trusted, but the screen was locked with the display
-  asleep (7.8 h idle): the window server listed a new window at about 0.9 of its frame and
-  Accessibility listed none, so `resize` matched nothing. `Scripts/restore-probe/run.sh` (a window of
-  its own, twelve steps, the real WindowSizer and restore, the front app unchanged) is built and
-  refuses while locked (exit 2).
-- **Untested, for Noah** (the plan's Results): `Scripts/restore-probe/run.sh` unlocked, "0 failed";
-  then Sill.app from this branch with the iPad, Virtual Display off, Aa at 1.5×: pick another window,
-  Disconnect, Quit: the window back each time ("Restored …"); moved on the Mac then disconnect: its
-  size where it is; resized on the Mac then disconnect within 2 s: left; Virtual Display on after an
-  Aa resize, then deselect or Quit: back at its old frame; full screen then disconnect: left;
-  Terminal, an Electron app and System Settings.
+- The sequences (WindowRestore's since the review, generic over `WindowRestore.Access`, which
+  `WindowSizer.AXWindows` answers through Accessibility, an isolated `@MainActor` conformance, and the
+  check's stand-in Mac in the model): `fit`, WindowSizer.resize's (nothing for a window in full
+  screen; the frame before, the nudge, the size; a refusal puts the nudge back and records nothing; a
+  size gone unanswered, `Write.timedOut` from cannotComplete, puts it back and is recorded from where
+  the window was; no read-back: recorded as not yet shown, its old size where Sill put it; the second
+  nudge); `stop`, one window's way back (one read: no frame and listed is not answering, left with a
+  line; not listed, gone; else `decide` and `put` through `WindowSizer.restore`); `stageHome`;
+  `Ledger.restore` (every window that stops but the staged one); `keepsStreaming` and
+  `coversDisplay` (below).
+- Where: `fitToViewport` records every resize the app took or left unanswered (`WindowSizer.resize`
+  returns `Fit`; no fit once `shuttingDown`); `select` restores every fitted window but the next
+  source's once the old pipeline has stopped (a pick, the Desktop, `.none` when the last device
+  leaves or the stream stops), and its defer every one when nothing streams; `shutdownForExit`
+  (Quit, the signals under `HostShutdown.install`) and `releaseKeysForExit` (the CLI's default path
+  at a signal) restore every one. `windowsChanged` (the review): a regular-mode window missing from
+  the on-screen list keeps streaming through three looks, as a staged full-screen one does, when it
+  was full screen when last listed or picked (`listedFullScreen`, `coversDisplay`: the stage's 98 %
+  rule) or, fitted, Accessibility says it is full screen (`keepsStreaming`; `missingPolls` reset when
+  another source is picked), so a window entering or leaving full screen keeps streaming and its way
+  back waits for the real stop; the stream no longer ends there (the device was left on an empty
+  panel). Virtual Display turned on while a fitted window streams: `VirtualStage.prepare(…, home:)`
+  keeps the frame it would have gone back to (`stageHome`) and the record is handed over
+  (`Ledger.take`) only once staged; `restoreFits` skips the staged window (Quit mid-`prepare`).
+- Defaults taken (the plan's 19): the CLI's Ctrl-C restores too (a line only when a window was
+  sized, the same exit status); full screen at the stop left (it keeps Sill's size when it leaves
+  full screen; support.html says so); resized left, position included; moved keeps its place, also
+  after a re-fit; a resize a re-fit undid is forgotten, from any edge or corner; a move and a resize
+  between two fits judged as the edges show them; a failed restore tried once; nothing after a crash
+  or `kill -9` (memory only); a window in full screen never fitted ("… is full screen; not
+  resizing."); an unanswered size and a failed read-back recorded; the App Store text unchanged.
+- The review (2026-10-14: two should-fix, four nits, each checked against the code, fixed in a
+  commit of its own): 1, a window leaving full screen was stopped at the catalog's first miss and its
+  way back decided mid-change (cb3045b); 2, a fit of a full-screen window was recorded if AppKit
+  answered success (65c6645); 3, a resize from the left or top edge counted as a move (4beb02c; the
+  review's simpler rule, no move once the size changed, would forget a move made before a later
+  resize); 4, an unanswered size or a failed read-back went unrecorded (913deef; recorded as not yet
+  shown, not the size asked, which the model showed wrong for late apps); 5, the check's model was a
+  hand-written copy (ecd141a: the sequences are WindowRestore's and the check runs them; the glue
+  around them, select, the poll and the stage, is still a copy, and the docs say so); 6, Noah's list
+  and the public copy (the docs commit).
+- Verified (after the review's fixes; the plan's Results): `swift build -c release` from clean copies of
+  origin/main and of this branch, only the CaptureProbe warning; `Tests/checks/run-all.sh`, all 41
+  (6 min 5 s on the final code); `window-restore` 41,499 checks (208 cases; the model's 5,000 sessions with windows
+  that cannot be resized, full-screen writes answered either way, slow and flaky apps, resizes from
+  every edge, and windows off the list on their way into or out of full screen: 214 looks kept
+  streaming, 36 windows that left full screen while streaming went back) and 95 of 95 mutants
+  (in CI's matrix; the first full run caught 94, F1's pattern gone stale, 299557c); H2 against 985a733: idle identical masked and sorted, a Desktop client identical
+  but for the seconds where it comes and goes, as base against base; the restore probe live, 20 of 20
+  (the screen unlocked, Noah idle, no device on Sill.app): step 13, the app stopped during a fit, its
+  size unanswered then taken late (667×473), put back whole; step 14, the left edge dragged in before
+  a re-fit, back whole. No iOS file changed; no screen changed.
+- Not verified: Sill.app with a device; anything in full screen live (a full-screen Space would
+  take over Noah's screen); the virtual display with a fitted window; the coordinator's glue live (a
+  synthetic host picking a window would capture Noah's windows). Known: a pick, Disconnect or Quit
+  within the second a window takes to enter or leave full screen may still leave it at Aa's size.
+- **Untested, for Noah** (the plan's twelve, with Sill.app from this branch, the iPad, Virtual
+  Display off, Aa at 1.5×): pick another window, Disconnect, Quit: back each time ("Restored …");
+  moved on the Mac then disconnect: its size where it is; resized from the bottom-right then
+  disconnect within 2 s: left; the left or top edge dragged, 2 s, disconnect: back whole at its old
+  place; Virtual Display on, then deselect or Quit: back at its old frame; full screen and out again
+  from the lights (and the green button) while it streams: the stream goes on, then disconnect: back;
+  full screen, disconnect: left in full screen; a window already full screen when picked: never the
+  display's size; two devices: only the last to leave restores; a second display unplugged while it
+  streams; Terminal, an Electron app, System Settings; the probe again after any change.
 
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
@@ -4552,10 +4586,13 @@ good.
   `DroppedInput`, what of input with nowhere to land still goes; pure,
   `Tests/checks/key-strokes`),
   `WindowSizer` (Accessibility resize for the Aa scale, returning what it did,
-  `Fit`; `placement/move/restore` for the virtual display; `stopDecision` and
-  `putBack`, a fitted window's way back), `WindowRestore` (a window Sill sized
-  for a device goes back when it stops streaming: each fit's record, the
-  decision at the stop, the ledger, the lines; pure,
+  `Fit`; `placement/move/restore` for the virtual display; `AXWindows`,
+  WindowRestore's reads and writes through Accessibility), `WindowRestore` (a
+  window Sill sized for a device goes back when it stops streaming: each fit's
+  record and `movedSince`, the decision at the stop, the sequences that fit a
+  window and put it back over `WindowRestore.Access` (`fit`, `stop`,
+  `stageHome`), `keepsStreaming` and `coversDisplay` for a window off the list
+  on its way into or out of full screen, the ledger, the lines; pure,
   `Tests/checks/window-restore`), `VirtualDisplay` (private-API wrapper),
   `VirtualStage` (`--virtual-display`: owns the display and the moved window,
   geometry, prepare/release, emergency restore), `HostShutdown` (signal
@@ -4763,12 +4800,13 @@ good.
   MenuMirror against it with no host and no encoder (safe while Sill.app
   streams; it needs Accessibility for whatever runs it).
   `Scripts/restore-probe/run.sh` (TEST ONLY; issue #57) drives the real
-  `WindowSizer.resize` and a fitted window's way back (`stopDecision`,
-  `putBack`, WindowRestore) against a window of its own (`owner.swift`, built
-  into a bundle that never activates and ordered behind every window), frames
-  before, during and after, twelve steps; the front app must not change. It
-  needs Accessibility, Screen Recording and an unlocked screen, and exits 2
-  saying which is missing. `Scripts/sillrelay.py` is a
+  `WindowSizer.resize` and a fitted window's way back (WindowRestore's `fit`
+  and `stop` through `WindowSizer.AXWindows`) against a window of its own
+  (`owner.swift`, built into a bundle that never activates and ordered behind
+  every window), frames before, during and after, fourteen steps (its app
+  stopped with SIGSTOP at a fit and at a stop among them); the front app must
+  not change. It needs Accessibility, Screen Recording and an unlocked screen,
+  and exits 2 saying which is missing. `Scripts/sillrelay.py` is a
   shaping passthrough relay (`--listen 0 --to HOST:PORT [--delay-ms N]
   [--rate-mbps R] [--blackhole-after S] [--record PREFIX]`; TLS passes
   through). `Scripts/pacing/` is the remote pacing harness
@@ -5048,8 +5086,8 @@ good.
   `pairing-address`, `phone-portrait`, `pointer-control`, `pointer-presence`,
   `pointer-watch`, `policy` (with its `home.swift`), `protocol`,
   `remote-rules` (with its `home.swift`), `tour`, `update-policy`,
-  `window-restore` (WindowRestore, with a model of the coordinator's glue
-  against a stand-in Mac) (the two encoder checks refuse a binary that links
+  `window-restore` (WindowRestore's rule and sequences against a stand-in Mac,
+  with a copy of the coordinator's glue around them) (the two encoder checks refuse a binary that links
   VideoToolbox). `run-all.sh
   [--mutants] [-v] [name…]` runs them and exits
   with the number that failed (a folder whose `run.sh` is not executable
