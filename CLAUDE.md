@@ -60,8 +60,9 @@ nothing on the iOS side, the CLI untouched.
   Dock under it, 855 and 785, its top kept; a pane grown while Settings was closed, reopened by
   AppKit at the screen's bottom, 24 pt under the menu bar; General and Streaming scrolled to their
   ends inside a 600 pt screen (231 and 72 pt); Sill.app's ignore lines, from the binary in a scratch
-  bundle under `sandbox-exec` with binds denied; CI's "Build and check" on c2339e2. Photos without
-  personal details in `~/Downloads/sill-handoff/settings-window/`.
+  bundle under `sandbox-exec` with binds denied; CI's "Build and check" on c2339e2 and, after the
+  review's fixes, 1865ada. Photos without personal details in
+  `~/Downloads/sill-handoff/settings-window/`.
 - Review (2026-10-14, at bb2451e; it re-ran everything above with the same numbers): three findings,
   each fixed in a commit of its own (the plan's "The review"). Should fix: the untested lists left
   out macOS 26, the reporter's, and Sill's virtual display (now U6 and U7). Nits: "the 501

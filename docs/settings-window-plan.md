@@ -329,5 +329,7 @@ With Sill.app from this branch (`Scripts/make-app.sh --install --open`) on the 1
   app for the simulator, the CLI).
 - 2026-10-14, after the review (The review): the fit and shrink claims and 20 checks (7a7efcb),
   the margins (99bd169), macOS 26 and the virtual display among the untested (5962ad4); the
-  re-runs in Results (the build, `run-all.sh`, the check's mutants, where a capped window sits).
-  The pull request's description says the same. Left open for Noah.
+  re-runs in Results (the build, `run-all.sh`, the check's mutants, where a capped window sits);
+  the test plan's margin (1865ada). CI's "Build and check" passed on 1865ada (run 38489891977: the
+  build, all the pure checks, the iOS app for the simulator, the CLI). The pull request's
+  description says the same. Left open for Noah.
