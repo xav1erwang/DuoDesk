@@ -76,7 +76,13 @@ Remote access below), Launch at Login, Permissions, Show Log… and Settings…
 Changes apply at once; a change to a streaming setting restarts the current
 stream for a moment. Opening Sill.app while it runs (Finder,
 Spotlight) shows Settings, which is also where Quit Sill is when the menu bar
-has no room for the icon.
+has no room for the icon. Settings is as tall as its tab needs, up to its
+screen's height between the menu bar and the Dock less 24 pt; a taller tab
+scrolls, and a window Sill's own resizing leaves partly off the screen is
+moved back on, 12 pt clear of the edge it ran past (issue #59,
+docs/settings-window-plan.md: one constraint in `SettingsWindowController`,
+its arithmetic in `SettingsWindowFit`, checked by
+`Tests/checks/settings-window`).
 
 Quality is the stream's bitrate per 60 fps (a 120 fps stream gets twice as
 much): Low 4 Mbps (for a slow link away from home), Efficient 8, Balanced 15
@@ -693,6 +699,31 @@ settings in the defaults domain `SillMenuBar` (delete it after), and takes:
   look.
 - A setting as a launch argument, such as `-maxFPS 60`, for one run. Sill.app
   takes these too.
+- The Settings window on a short screen (issue #59):
+  `-SillSettingsAfter '<s> <tab>[; <s> <tab> …]'` opens Settings on that tab
+  (its name or the start of one: `remote`, `general`, `virtual`) s seconds
+  after launch, as the menu does, and 0.6 s later prints the window's frame,
+  the pane's whole height and how much of it shows ("shows 596 of 909,
+  scrolls"), the visible frame it fits in and the cap. A step can also be
+  `close`, `report` (print the window as it stands), `end` (scroll the pane
+  to its last row) or `height=<points>`
+  (as `-SillTestScreenHeight`, `0` for the screen's own, then the screens'
+  change is posted as the Dock or a display would). `-SillTestScreenHeight
+  <points>` makes the window fit the top `<points>` of the screen's visible
+  frame, as if the screen were that short with the Dock at its bottom, and
+  `-SillSettingsShot <dir>` writes each step's window (title bar, toolbar and
+  pane) to `<dir>/settings-<s>s-<tab>.png`. The window's frame is saved in
+  the `SillMenuBar` domain (`NSWindow Frame SillSettings`); a launch argument
+  of that name places it for one run. For example:
+
+  ```
+  SILL_TEST_LOOPBACK=1 SILL_TEST_SOFTWARE_ENCODER=1 SILL_TEST_NO_ROUTER=1 \
+    .build/release/SillMenuBar --synthetic -SillTestScreenHeight 700 \
+    -SillSettingsAfter '2 general; 4 remote; 6 height=500; 8 height=0' -SillQuitAfter 10
+  ```
+
+Sill.app itself ignores every `-Sill…After` argument, `-SillTestScreenHeight`,
+`-SillSettingsShot` and `-requirePairing`, with one line each.
 
 `--encoder-selftest` and `--virtual-display-selftest` work in the app too.
 
@@ -976,6 +1007,19 @@ no profile yet, so publish from your Mac with `release.sh --publish` and leave
 `SILL_SIGN_IN_CI` off until the workflow gets one. Apple's answers and logs for
 both submissions are the run's artifact `notary-v<version>` for 30 days: when
 the job's log says a notary log lists issues, read them there.
+
+Homebrew: Sill for Mac is also the cask `sill` in Sill's own tap,
+[Saffsanity/homebrew-sill](https://github.com/Saffsanity/homebrew-sill), so
+`brew install --cask saffsanity/sill/sill` installs it (that command taps
+the repository and trusts the one cask, which Homebrew 6 and later need for a
+tap that isn't Homebrew's own). The cask names the release's `Sill.dmg` by
+its version and SHA-256, so each release bumps it once it is published
+(docs/release-checklist.md, part 2), and the tap's `brew test-bot` workflow
+checks every pull request, downloading the image. It moves to Homebrew's main
+repository once it qualifies (docs/release-checklist.md, part 1 §6). On a Mac
+where Sill.app runs from /Applications, try the cask only with `brew install
+--cask --appdir=<a scratch folder>`, and never `brew uninstall --zap`, which
+trashes the running Sill's settings and log.
 
 The iOS app goes to App Store Connect (TestFlight, then the App Store) from
 `Scripts/release-ios.sh`: a Release archive signed by Xcode's automatic
