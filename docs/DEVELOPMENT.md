@@ -221,9 +221,10 @@ docs/reconnect-after-sleep-plan.md has the rules;
 
 The gear at the end of the bar opens Settings: the Mac's streaming settings,
 changed from the device, and Disconnect at the bottom. After the Mac's settings
-come the device's own: This iPad (or iPhone), with Three-Finger Gestures
-(below, Trackpad gestures), on unless turned off and never sent to the Mac,
-and last Take the Tour.
+come the device's own: This iPad (or iPhone), with Larger Picture on an iPhone
+(below; off unless turned on) and Three-Finger Gestures (below, Trackpad
+gestures; on unless turned off), neither ever sent to the Mac, and last Take
+the Tour.
 
 On the iPhone Duo (docs/iphone-duo-plan.md) the layout follows the hinge,
 which iOS 27.1 reports with the fold's place. Open, Sill is on the inner
@@ -250,6 +251,34 @@ Spotlight key there: Spotlight is cmd, then space on the keyboard. The
 trackpad counts a stroke down it as far as the same stroke across a 16:10
 picture, however tall it is. On its side, and on an iPad (a narrow window
 included), everything is as it was.
+
+Larger Picture (Settings › This iPhone, off by default; issue #58,
+docs/larger-picture-plan.md) gives a phone held upright more picture while a
+window streams: the thumbnails go, and the picture gets every point that keeps
+the key row 10 pt above the software keyboard (a room of 424×422 pt on an 18
+Pro Max against 424×265; 377×340 on a 15 Pro). The Desktop keeps the usual
+arrangement, since Aa never resizes it and the extra height could only be black
+under it, and so does the moment nothing streams (Noah's test of 2026-10-15;
+`PhonePortraitLayout.largerPicture(switchOn:streaming:)`, from the window
+list's source), so a switch between the Desktop and a window changes the
+arrangement and sends a new viewport, as a rotation does. The trackpad is then exactly the keyboard's
+footprint, so nothing moves when the keyboard comes up. The picture's frame
+takes the picture's own shape at the top of that room: a 16:10 window looks as
+it did until the Mac fits it to the room (Aa set, or the virtual display),
+since the viewport is the whole room. Windows come from Apps (an open app,
+tapped again, shows its next window) and from the Mac's Window menu, behind
+Menus, which joins row 1 after Apps. The keyboard's height is measured, not
+read: `PhonePortraitLayout.keyboardHeight(for:)` gives it from the stream
+screen's shape and width (233 pt with a Home button; with Face ID 320 from 414
+pt wide, 301 from 390, 310 from 375). The iPhone Duo has no switch: its cover's
+keyboard was never measured, so the cover stays as it is. Nor does an iPhone
+where it would not make the picture larger: Display Zoom makes an SE, a mini or
+a 6.1-inch iPhone 320 pt wide, where the room above the keyboard is shorter
+than today's picture and row 1's six buttons would be under 44 pt
+(`PhonePortraitLayout.largerPictureGains`). The Apps drawer opens above row 1,
+over the picture's room, so neither keyboard covers it, the Mac's or the one
+its search field brings. A change of the switch, or of what streams, shows when
+the Settings panel closes, so the panel never moves under the finger.
 
 The first time a Mac's picture shows on a device, and nothing is touched, sent,
 used (by any means, VoiceOver's double tap included) or opened in the second
@@ -831,6 +860,8 @@ simulator:
 - `-SillConnect 127.0.0.1:PORT`: connect by address, also in the normal app.
   There, and under `-SillLive 1`, `-SillDrawer 1`, `-SillSettings 1` and
   `-SillScaleOpen 1` open theirs 1.5 s after the stream starts.
+  `-SillDrawerSearch <text>` makes the open drawer search for that text with
+  the keyboard up for its field.
 - `-SillKeyboard 1` brings the software keyboard up in a live session (in the
   mock it only lights the button), and `-SillKeyboardToggle 5,8.5` toggles it
   at those seconds as the Keyboard button does. A simulator shows it only
@@ -842,7 +873,25 @@ simulator:
   this Mac: point it only at a synthetic host, or put a relay that drops
   input in front of the host.
 - The console prints `viewport: 386×241 pt, scale none, 60 fps` for each
-  viewport the stream screen sends the Mac.
+  viewport the stream screen sends the Mac, and on a phone held upright
+  `trackpad: 412×389 pt, vertical span 257.5 pt` when the pad or its span
+  changes and `keyboard: up, 320 pt tall, its top at 574 pt in the stream
+  screen; the key row ends 10 pt above it, …` once the keyboard has moved.
+- Larger Picture: `-Sill.largerPicture 1` turns the device's switch on for
+  one run (in the normal app too); it acts while a window streams, which the
+  mock does unless `-SillActive desktop` (or `none`) says otherwise, and the
+  console's `larger picture: the switch on, the Desktop streams: the standard
+  arrangement` says what the rule made of the switch and the source;
+  `-SillVideoSize 848x844` gives the mock's
+  frame another shape, so the harness draws a window the Mac fitted to the
+  picture's room (2800x1800 otherwise); `-SillLargerPictureToggle 4,8`
+  switches it at those seconds as the panel's switch does (leave out
+  `-Sill.largerPicture`, which would hold it).
+- `-SillAXDump <s>`: `s` seconds after the stream screen shows, the console
+  lists its accessibility elements in the order the tree hands them to
+  VoiceOver. SwiftUI builds that tree only for an assistive technology, so on
+  a private simulator first `xcrun simctl spawn UDID defaults write
+  com.apple.Accessibility ApplicationAccessibilityEnabled -bool true`.
 - `-SillIdiom pad`: a screen taller than wide and narrower than 600 pt is
   drawn as an iPad draws such a window (the compact halves), not as a phone
   does, so an iPhone simulator can photograph it; `phone` the other way
