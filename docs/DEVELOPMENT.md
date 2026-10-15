@@ -203,6 +203,22 @@ with the rate (the knob is per 60 fps, 1–200 Mbps).
    the cable. A session from away (Remote access, below) keeps its way in until
    it ends.
 
+When a session ends by itself, the device reconnects: the Mac's row at once,
+then, while that row stays listed and nothing answers (a sleeping Mac whose
+record an Apple TV or HomePod keeps up as a Bonjour Sleep Proxy, or a Mac whose
+Sill is stuck), again 5, 10, 20 and every 30 s after, 12 times at most and only
+while Sill is in front. After the third the status line says the Mac may be
+asleep, and after the twelfth that it stopped trying. The row listed afresh
+(the Mac's Sill relaunched), Sill back from the background, or a tap starts
+again. Back from the background the device also makes its Bonjour browser again
+(and the nearby one, if it runs), since iOS cuts a suspended app's connection
+to mDNSResponder and a browser made before then lists what it saw then; the
+rows it had stay up for the new browser's first 3 s, so a Mac that stays listed
+never blinks. A Desktop stream that the Mac stops (its capture stopped) is
+asked for again by itself, at most once every 10 s.
+docs/reconnect-after-sleep-plan.md has the rules;
+`iOSClient/DiscoveryPolicy.swift` is them, checked in `Tests/checks/policy`.
+
 The gear at the end of the bar opens Settings: the Mac's streaming settings,
 changed from the device, and Disconnect at the bottom. After the Mac's settings
 come the device's own: This iPad (or iPhone), with Three-Finger Gestures
@@ -802,6 +818,16 @@ simulator:
   settings of the mock Mac) and `-SillConnectCase …`: the drawer, the Settings
   panel or the connect screen in a given state.
 - `-SillHUD 1`: fps, frame age, round trip and frame size over the stream.
+- `-SillBrowserFail N` (the normal app and `-SillLive 1`): each of the first N
+  network browsers is reported failed as iOS reports a suspended app's
+  (-65569), so the device makes it again after 1, 2, 4… s; the simulator's
+  browsers use this Mac's own mDNSResponder, which never cuts them. Sending the
+  app to the background and back (`xcrun simctl launch <udid>
+  com.apple.Preferences`, then `xcrun simctl launch <udid> me.saffer.sill`)
+  makes the network browser again, and the nearby one if it runs. The console
+  says "browser: …", and the automatic reconnect's dials "reconnect: …".
+  `-SillConnectCase asleep` shows the connect screen's line after three dials
+  that did not connect.
 - `-SillConnect 127.0.0.1:PORT`: connect by address, also in the normal app.
   There, and under `-SillLive 1`, `-SillDrawer 1`, `-SillSettings 1` and
   `-SillScaleOpen 1` open theirs 1.5 s after the stream starts.
@@ -1080,7 +1106,10 @@ record field by field.
 - Single window at a time. Every connection runs over TLS 1.3 to paired
   devices only (with Require pairing off, to any device at home, still
   encrypted); only the command-line host without `--pairing` keeps a plain,
-  open home door. The device reconnects on a timer when the Mac drops it.
+  open home door. The device reconnects by itself when the Mac drops it (The
+  iOS app, above). Whether its dials wake a Mac asleep behind a Bonjour Sleep
+  Proxy (an Apple TV or HomePod, with Wake for network access on) is
+  untested; from away they cannot (Remote access, above).
 - Bonjour at home, your VPN or a port forward away (Remote access above).
   iCloud auto-pairing comes with milestone 5.
 
