@@ -63,8 +63,9 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   (`onScreen(in:)`, `fire(in:)`): Settings open in a window behind took the stream's Esc key commands in
   front (a private simulator, `-SillSecondWindow 1 -SillSettings 1 -SillEscViaCommand 1`: 2fc53ed's build
   sent no key 53 to the host, this one did), and Esc could close another window's panel. README, the
-  support page, the App Store bullet and the next What's New keep Esc and trackpad scrolling out until
-  Noah's steps 1, 7 and 9 pass (the plan's "Words that wait for a device"); the support page's Keyboard
+  support page, the App Store bullet and the next What's New kept Esc and trackpad scrolling out until
+  Noah's steps 1, 7 and 9 passed, through Universal Control on 2026-10-15 (the plan's "Words that wait
+  for a device", and the Results' "Noah's test through Universal Control"), and then took them; the support page's Keyboard
   button sentence; Full Keyboard Access and Switch Control (open question 11, step 13). Towards #68, not
   Fixes. Again on 7fdc902: the three iOS builds and a clean `swift build -c release`, the known warnings
   only; `run-all.sh` all 41 at the first run; the touch rig 72 of 72; Esc in one window and in two, live; no check

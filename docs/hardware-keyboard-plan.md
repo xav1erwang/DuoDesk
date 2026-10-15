@@ -269,6 +269,10 @@ this branch (the console's `hwkey:` and `keyboard:` lines) against Sill.app buil
 
 ## Words that wait for a device
 
+Done on 2026-10-15: steps 1, 7 and 9 passed on the iPad through Universal Control (the Results'
+"Noah's test through Universal Control"), and on Noah's word the four lines below went into README,
+the support page and the App Store text, as written here.
+
 No device has shown Esc reaching the Mac (step 1), Esc over Sill's own panels (step 7) or scrolling with a
 trackpad or a mouse (step 9): in the simulator Esc came through `pressesBegan`, which #67's iPad never
 used, and no real trackpad's events reached the continuous pan. So the public words leave them out for now
