@@ -98,6 +98,12 @@ Sill has layouts of its own.
 - **When the link can't keep up**, Sill for Mac notices that it is holding
   frames back and tells your device, which says so over the picture and, in
   its Settings, offers a quality the link can carry.
+- **Text size**: Aa on your device resizes the window you stream on your Mac,
+  through Accessibility, so its text shows at the size you pick, and keeps it
+  at that size while it streams. The window goes back to its own size and
+  place when Sill stops showing it: you pick another window or the Desktop,
+  your last device disconnects, or you quit Sill. If you moved it on your Mac
+  meanwhile, it keeps its new place.
 - **The virtual display** (off by default) moves a window you stream onto a
   display of its own on your Mac, so it keeps updating when other windows
   cover it. It uses a private macOS API, which is one reason Sill for Mac comes
