@@ -395,11 +395,13 @@ Made for iPhone Duo. Open it flat and your Mac fills the inner display. Half ope
 Sill for iPhone and iPad and Sill for Mac now share one version number: this is 0.5.1, with Sill for Mac 0.5.1 from getsill.app.
 ```
 
-The next version's, a draft: what changed since 0.5.1 (4), as its release notes say it, a paragraph a
-change (the same in the local-only build).
+The next version's, a draft: what changed on the device since 0.5.1 (4), as its release notes say it,
+a paragraph a change (the same in the local-only build).
 
 ```text
 With a keyboard attached to your iPhone or iPad, what you type goes to your Mac as soon as its picture shows, without the Keyboard button.
+
+Fixed: after Sill sat in the background for hours, it could stop finding your Mac until you closed and reopened it. Sill now looks again when you come back, keeps trying for a few minutes while your Mac doesn’t answer (when it’s asleep, say), and connects when it does.
 ```
 
 Esc and scrolling with a trackpad or a mouse are built too (#67, #68), but no device has shown them yet:

@@ -76,7 +76,13 @@ Remote access below), Launch at Login, Permissions, Show Log… and Settings…
 Changes apply at once; a change to a streaming setting restarts the current
 stream for a moment. Opening Sill.app while it runs (Finder,
 Spotlight) shows Settings, which is also where Quit Sill is when the menu bar
-has no room for the icon.
+has no room for the icon. Settings is as tall as its tab needs, up to its
+screen's height between the menu bar and the Dock less 24 pt; a taller tab
+scrolls, and a window Sill's own resizing leaves partly off the screen is
+moved back on, 12 pt clear of the edge it ran past (issue #59,
+docs/settings-window-plan.md: one constraint in `SettingsWindowController`,
+its arithmetic in `SettingsWindowFit`, checked by
+`Tests/checks/settings-window`).
 
 Quality is the stream's bitrate per 60 fps (a 120 fps stream gets twice as
 much): Low 4 Mbps (for a slow link away from home), Efficient 8, Balanced 15
@@ -196,6 +202,22 @@ with the rate (the knob is per 60 fps, 1–200 Mbps).
    the cable stays in (Sill away in the background, say), it reconnects over
    the cable. A session from away (Remote access, below) keeps its way in until
    it ends.
+
+When a session ends by itself, the device reconnects: the Mac's row at once,
+then, while that row stays listed and nothing answers (a sleeping Mac whose
+record an Apple TV or HomePod keeps up as a Bonjour Sleep Proxy, or a Mac whose
+Sill is stuck), again 5, 10, 20 and every 30 s after, 12 times at most and only
+while Sill is in front. After the third the status line says the Mac may be
+asleep, and after the twelfth that it stopped trying. The row listed afresh
+(the Mac's Sill relaunched), Sill back from the background, or a tap starts
+again. Back from the background the device also makes its Bonjour browser again
+(and the nearby one, if it runs), since iOS cuts a suspended app's connection
+to mDNSResponder and a browser made before then lists what it saw then; the
+rows it had stay up for the new browser's first 3 s, so a Mac that stays listed
+never blinks. A Desktop stream that the Mac stops (its capture stopped) is
+asked for again by itself, at most once every 10 s.
+docs/reconnect-after-sleep-plan.md has the rules;
+`iOSClient/DiscoveryPolicy.swift` is them, checked in `Tests/checks/policy`.
 
 The gear at the end of the bar opens Settings: the Mac's streaming settings,
 changed from the device, and Disconnect at the bottom. After the Mac's settings
@@ -721,6 +743,31 @@ settings in the defaults domain `SillMenuBar` (delete it after), and takes:
   look.
 - A setting as a launch argument, such as `-maxFPS 60`, for one run. Sill.app
   takes these too.
+- The Settings window on a short screen (issue #59):
+  `-SillSettingsAfter '<s> <tab>[; <s> <tab> …]'` opens Settings on that tab
+  (its name or the start of one: `remote`, `general`, `virtual`) s seconds
+  after launch, as the menu does, and 0.6 s later prints the window's frame,
+  the pane's whole height and how much of it shows ("shows 596 of 909,
+  scrolls"), the visible frame it fits in and the cap. A step can also be
+  `close`, `report` (print the window as it stands), `end` (scroll the pane
+  to its last row) or `height=<points>`
+  (as `-SillTestScreenHeight`, `0` for the screen's own, then the screens'
+  change is posted as the Dock or a display would). `-SillTestScreenHeight
+  <points>` makes the window fit the top `<points>` of the screen's visible
+  frame, as if the screen were that short with the Dock at its bottom, and
+  `-SillSettingsShot <dir>` writes each step's window (title bar, toolbar and
+  pane) to `<dir>/settings-<s>s-<tab>.png`. The window's frame is saved in
+  the `SillMenuBar` domain (`NSWindow Frame SillSettings`); a launch argument
+  of that name places it for one run. For example:
+
+  ```
+  SILL_TEST_LOOPBACK=1 SILL_TEST_SOFTWARE_ENCODER=1 SILL_TEST_NO_ROUTER=1 \
+    .build/release/SillMenuBar --synthetic -SillTestScreenHeight 700 \
+    -SillSettingsAfter '2 general; 4 remote; 6 height=500; 8 height=0' -SillQuitAfter 10
+  ```
+
+Sill.app itself ignores every `-Sill…After` argument, `-SillTestScreenHeight`,
+`-SillSettingsShot` and `-requirePairing`, with one line each.
 
 `--encoder-selftest` and `--virtual-display-selftest` work in the app too.
 
@@ -759,6 +806,16 @@ simulator:
   settings of the mock Mac) and `-SillConnectCase …`: the drawer, the Settings
   panel or the connect screen in a given state.
 - `-SillHUD 1`: fps, frame age, round trip and frame size over the stream.
+- `-SillBrowserFail N` (the normal app and `-SillLive 1`): each of the first N
+  network browsers is reported failed as iOS reports a suspended app's
+  (-65569), so the device makes it again after 1, 2, 4… s; the simulator's
+  browsers use this Mac's own mDNSResponder, which never cuts them. Sending the
+  app to the background and back (`xcrun simctl launch <udid>
+  com.apple.Preferences`, then `xcrun simctl launch <udid> me.saffer.sill`)
+  makes the network browser again, and the nearby one if it runs. The console
+  says "browser: …", and the automatic reconnect's dials "reconnect: …".
+  `-SillConnectCase asleep` shows the connect screen's line after three dials
+  that did not connect.
 - `-SillConnect 127.0.0.1:PORT`: connect by address, also in the normal app.
   There, and under `-SillLive 1`, `-SillDrawer 1`, `-SillSettings 1` and
   `-SillScaleOpen 1` open theirs 1.5 s after the stream starts.
@@ -1021,6 +1078,19 @@ no profile yet, so publish from your Mac with `release.sh --publish` and leave
 both submissions are the run's artifact `notary-v<version>` for 30 days: when
 the job's log says a notary log lists issues, read them there.
 
+Homebrew: Sill for Mac is also the cask `sill` in Sill's own tap,
+[Saffsanity/homebrew-sill](https://github.com/Saffsanity/homebrew-sill), so
+`brew install --cask saffsanity/sill/sill` installs it (that command taps
+the repository and trusts the one cask, which Homebrew 6 and later need for a
+tap that isn't Homebrew's own). The cask names the release's `Sill.dmg` by
+its version and SHA-256, so each release bumps it once it is published
+(docs/release-checklist.md, part 2), and the tap's `brew test-bot` workflow
+checks every pull request, downloading the image. It moves to Homebrew's main
+repository once it qualifies (docs/release-checklist.md, part 1 §6). On a Mac
+where Sill.app runs from /Applications, try the cask only with `brew install
+--cask --appdir=<a scratch folder>`, and never `brew uninstall --zap`, which
+trashes the running Sill's settings and log.
+
 The iOS app goes to App Store Connect (TestFlight, then the App Store) from
 `Scripts/release-ios.sh`: a Release archive signed by Xcode's automatic
 signing on team 9B2KKVM937, exported as `.build/ios/export/Sill.ipa` and
@@ -1048,7 +1118,10 @@ record field by field.
 - Single window at a time. Every connection runs over TLS 1.3 to paired
   devices only (with Require pairing off, to any device at home, still
   encrypted); only the command-line host without `--pairing` keeps a plain,
-  open home door. The device reconnects on a timer when the Mac drops it.
+  open home door. The device reconnects by itself when the Mac drops it (The
+  iOS app, above). Whether its dials wake a Mac asleep behind a Bonjour Sleep
+  Proxy (an Apple TV or HomePod, with Wake for network access on) is
+  untested; from away they cannot (Remote access, above).
 - Bonjour at home, your VPN or a port forward away (Remote access above).
   iCloud auto-pairing comes with milestone 5.
 

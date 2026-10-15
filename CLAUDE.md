@@ -80,6 +80,164 @@ and #68 together)". Device only: no wire change, nothing on the Mac changed.
   Keyboard Access and Switch Control (Tab, Space and Esc through Sill's bar while the stream holds the
   keyboard).
 
+**Finding the Mac again after hours idle (2026-10-14, branch `reconnect-after-sleep` from main at
+985a733, PR #77, issue #69; the plan, the causes with line numbers, the decisions, the results and the
+review's fixes are in `docs/reconnect-after-sleep-plan.md`).** The report: after a few hours dormant
+nothing reconnected until the Mac was logged in to and Sill relaunched on the iPad. Device code, the
+support page and the docs; no wire change, nothing on the Mac.
+- The browsers: iOS makes a suspended app's connection to mDNSResponder defunct (-65569), and the
+  Bonjour browser was made once (`startBrowsing`), so after hours in the background the rows were
+  what it saw then, and a failed browse only said "Browse failed: …". Now the network browser, and
+  the nearby one if it runs, is made again on the return from the background
+  (`StreamClient.cameForward`: willEnterForeground after didEnterBackground) and after a failure, 1,
+  2, 4, 8, 16, then 30 s later and in the foreground only (`DiscoveryPolicy.rebuildBrowser`,
+  `browserFailures`: one that ran 30 s is the first again). The old results stay beside the new
+  browser's for 3 s (`browserResults`, `rebuildSettle` = `networkFirst`), and a failed browser's rows
+  stay as they are until it is made again, so a Mac that stays listed keeps its sightings by name.
+  Its interfaces are the new browser's; the return stamps the session's pong as it resets liveness
+  (`resetLiveness`), so a cable session whose new browser first lists the Mac on Wi-Fi alone stays
+  on the cable. No line for a failed browse.
+- The reconnect: a listed row was dialled at once, a dial not ready in 5 s was let go and nothing
+  looked again (`tearDown` never does, whatever the comment said), and the retry chain ended at its
+  first dial: two dials, then "Reconnecting…" for good, also under a Bonjour Sleep Proxy's record of
+  a sleeping Mac. A dial that waited or failed began a new `Reconnect` and dialled at once (every 5 s
+  for good to a stale row). Now `reconnectIfListed` dials a listing of the row at once, then 5, 10,
+  20 and every 30 s after the last started, 12 at most, in the foreground only
+  (`DiscoveryPolicy.redialRow`; `Reconnect.rowListing`, `rowDials`, `lastRowDialAt`); the row listed
+  afresh, the return from the background, or a tap starts again. The line (`reconnectLine`):
+  "Reconnecting to ‹Mac›…", after 3 "‹Mac› isn’t answering. It may be asleep. Sill keeps trying, or
+  tap it to try now.", after 12 "Stopped trying to reach ‹Mac›. Tap it to try again.". The let-go
+  looks again; a reconnect dial that ends without a goodbye before it connects is one dial
+  (`sessionEnded`); "Waiting for ‹Mac›…" is a tap's line only; the retry chain lives while a
+  reconnect is wanted, one at a time.
+- A Desktop the Mac stopped (its capture stopped, so the host selects nothing) is asked for again
+  at once, under the old 10 s spacing (`DiscoveryPolicy.autoDesktop`); 0.5.1 asks only with the
+  Mac's next window list, sent when a window opens, closes or changes.
+- DEBUG `-SillBrowserFail N` (each of the first N network browsers reported failed with -65569 half
+  a second after it starts) and `-SillConnectCase asleep`. The support page's "Your Mac isn’t listed"
+  gains a sleeping Mac (Sill may not be able to wake it, so keep it awake: Energy, or Battery) and a
+  restarted one (Sill opens after a login, with Launch at Login); README's Good to know, the next
+  What's New (docs/app-store-metadata.md), DEVELOPMENT.md.
+- The review (2026-10-14, after 1c4b921), four findings, each fixed in a commit of its own: the
+  home-side words said Sill can't wake a sleeping Mac, at odds with the bound's own reason (a dial
+  through a sleep proxy may wake it) and neither verified: now "may not be able to" (1798232); a
+  rebuild keeps a Mac by name, not by interface, so a working cable session back from a short trip
+  could move to Wi-Fi and back on its pong from before the trip: the stamp above, a model in
+  `sleep.swift` (f39b875); "0.5.1 never does" ask for a stopped Desktop: it does, with the Mac's
+  next window list (37ed3de); "both browsers" made again: the nearby one only while it runs
+  (0e8a098). Its own runs agreed with the ones below and ran `sessionEnded`'s new branch live (a
+  TLS stand-in that never sends a window list: dials at +0, 7.2, 17.2, 37.3, 67.4 s; main's build
+  dialled about every 6 s).
+- Verified (the plan's Results): on a private simulator against `SillHost --synthetic --pairing` as a
+  `_silltest._tcp` row, the host stopped for 20 s: main's build dialled at +0 and +6.3 s after the
+  loss and then nothing for the minute after the host came back; this branch dialled at +0, 5.3, 15.3
+  and 35.3 s and the session came back without a tap. Stopped for 300 s: 12 dials at the rule's times,
+  the quiet line at +20.5 s, "Stopped trying…" at +281.8 s and no dial after it; back from the
+  background, a dial at once and the session in 40 ms. `-SillBrowserFail 3`: made again 1.05, 2.12 and
+  4.21 s after each failure, the row listed throughout. The Desktop: asked for again 10 ms after a
+  stand-in Mac said nothing streams. Photos of `asleep` at the Duo's four sizes and 744×1133, default
+  and accessibility-extra-large; `homerows` pixel for pixel main's. After the review's fixes: four
+  trips to the background (2.3, 2.3, 2.3, 15 s) on a private simulator, the browser made again each
+  time, settled 3.05 to 3.13 s later, one host connection throughout; `Tests/checks/policy` 446 cases
+  (models of a host stopped, a sleep proxy, a new listing, the background and a cable session across a
+  rebuild) and 158 of 158 mutants (28 new); `home-device` 182, `home-model` 62, `remote-rules` 123,
+  their mutant patterns as on main; `run-all.sh`, all 40; iOS Debug for the simulator (CI's command),
+  Release for the simulator and Debug for a device, only the known `StreamClient` capture warning;
+  `swift build -c release`, only the CaptureProbe one; CI green on 0e8a098.
+- **Untested, for Noah:** the real overnight case on the iPad mini (Sill left streaming or on the
+  connect screen for hours, the iPad locked; back: the console's "browser: rebuilt the network
+  browser (back from the background)", the Mac's row as it is now, and the session back by itself if
+  the Mac is awake with Sill open); a Mac asleep behind an Apple TV or HomePod (`dns-sd -B
+  _sleep-proxy._udp` lists one; the Mac's "Wake for network access" on): the row stays, dials every
+  5, 10, 20, 30 s, the quiet line, and whether a dial wakes the Mac and connects, which settles the
+  support page's words (the plan's §4 has them for a yes); R6, whether macOS stops a capture when the
+  display sleeps or the Mac locks (Sill.app streaming the Desktop, then `pmset displaysleepnow` or
+  ⌃⌘Q: whether Sill.log says "Capture stopped: …", and whether the picture comes back by itself once
+  the Mac is woken and unlocked: this build asks at once, 0.5.1 with the Mac's next window list); the
+  nearby browser made again (Direct Wireless on, the iPad on the iPhone's hotspot, Sill sent to the
+  background and back: the console's "browser: rebuilt the nearby browser (back from the
+  background)", the Direct row kept), which no headless run here could do without turning on this
+  Mac's AWDL; a session over the USB cable across a short trip to the background (streaming over the
+  cable, Sill sent away for 2 s and back: no "path: the cable went away" on the console, no second
+  "Client connected" in Sill.log), which no test host on loopback can show.
+
+**The Settings window on a small screen (2026-10-14, branch `settings-window-height` from main at
+985a733, PR #74; issue #59; the probe, the plan and the results are in
+`docs/settings-window-plan.md`).** rosstex, a 14-inch MacBook Pro on macOS 26.6.2 with Sill 0.5.1:
+"The Remote Access settings on Mac are too tall and cannot be resized." Mac app only: no wire change,
+nothing on the iOS side, the CLI untouched.
+- Cause (a scratch probe of the same setup on macOS 27.0.1): AppKit gives the selected pane's view a
+  constraint named `NSViewController.preferredContentSize.height` (the hosting controller's
+  preferredContentSize, SwiftUI's whole Form) at priority 501, just over the window's own 500, and
+  lays the window out to it, keeping its top-left; the window is not resizable, so nothing shortens
+  it (a 50-row pane made a 2,028 pt window). The constraint follows growth and every tab switch; in
+  the probe it did not follow a pane that got shorter, but Sill's Remote Access pane shrank the
+  window with it (909 → 734 pt). Sill's window adds 80 pt of title bar and toolbar. Remote Access
+  with the internet switch on (909 to 983 pt) and rosstex's 951 pt window fit a 14-inch only at More
+  Space (1,800 × 1,169); General (727) fits at the default scaling, Dock or not, but not at the
+  larger-text scalings with the Dock (`Tests/checks/settings-window` has each case).
+- Fix: `SettingsWindowController.heightCap`, the content view's height at most
+  `SettingsWindowFit.contentLimit` (the screen's visible frame less the chrome and 12 pt above and
+  below, whole points, at least 200) at priority 750; the Forms scroll. Set at show, on every tab
+  switch (`SettingsTabController.onSelect`), on `NSApplication.didChangeScreenParametersNotification`
+  and `windowDidChangeScreen`; a new cap lays a window on screen out at once. `place()` (after
+  `windowDidResize` and `refit`) moves the window back inside the visible frame, 12 pt clear of the
+  edge it ran past, when Sill's own changes leave it partly outside; never sideways, never while a
+  mouse button is down (then once all are up, `placeOnRelease`), and never a window that fits where
+  it is: a saved frame sets only the window's top-left, and AppKit orders a window that ran off the
+  bottom while hidden back in at the screen's bottom, so a capped window can sit flush with the menu
+  bar or the screen's bottom, the 24 pt on the other side. Sill's virtual display is never the screen
+  (`SettingsWindowFit.screenIndex`). Rejected in the probe: an NSHostingController subclass clamping
+  preferredContentSize (SwiftUI never calls its setter) and a SwiftUI `.frame(maxHeight:)` on the
+  pane (lowered while a pane showed, it left the window tall: the probe's 501 constraint did not
+  follow it down).
+- `SettingsWindowFit` (pure, CoreGraphics): `Tests/checks/settings-window`, 307,709 checks (the
+  issue's screens, an external 4K display, screens above and beside, windows partly off the screen,
+  the virtual display, the test height, then 20,000 seeded random cases) and 27 of 27 mutants, in
+  CI's mutants matrix.
+- TEST ONLY, the bare binary; Sill.app ignores each with one line: `-SillSettingsAfter '<s>
+  <tab>|close|report|end|height=<points>; …'` (opens Settings as the menu does and prints the window's
+  frame, the pane's whole height and how much shows), `-SillTestScreenHeight <points>`,
+  `-SillSettingsShot <dir>` (docs/DEVELOPMENT.md).
+- Verified (the plan's Results; this Mac, a 14-inch at its default scaling, 949 pt under the menu
+  bar; the bare binary on `--synthetic` on loopback, only while no device was connected, Sill.app
+  untouched): `swift build -c release` clean from `git archive`, only the CaptureProbe warning;
+  `run-all.sh`, all 41; the previews (130 files) identical to 985a733's; every tab at its natural
+  height (limit 845) but Remote Access with the internet switch on (909: shows 845, scrolls, 12 pt
+  from both edges, Sill having moved it); `-SillTestScreenHeight 700`: General (727) and Remote
+  Access (909) capped at 596 and scrolling; the screen changing under the tall pane (`height=`, the
+  notification's path): 845, 596, 396, 845, the window shrinking and growing; a pane growing past
+  the cap, and a tab switch to it, with the window low: moved up to 12 pt over the bottom; a window
+  opened at rosstex's saved frame (951 pt, its top at the menu bar; a saved frame sets only the
+  top-left) capped at 925, 0 pt under the menu bar and 24 over the bottom, and a 70 and a 140 pt
+  Dock under it, 855 and 785, its top kept; a pane grown while Settings was closed, reopened by
+  AppKit at the screen's bottom, 24 pt under the menu bar; General and Streaming scrolled to their
+  ends inside a 600 pt screen (231 and 72 pt); Sill.app's ignore lines, from the binary in a scratch
+  bundle under `sandbox-exec` with binds denied; CI's "Build and check" on c2339e2 and, after the
+  review's fixes, 1865ada. Photos without personal details in
+  `~/Downloads/sill-handoff/settings-window/`.
+- Review (2026-10-14, at bb2451e; it re-ran everything above with the same numbers): three findings,
+  each fixed in a commit of its own (the plan's "The review"). Should fix: the untested lists left
+  out macOS 26, the reporter's, and Sill's virtual display (now U6 and U7). Nits: "the 501
+  constraint never shrinks" and "General does not fit a 14-inch with the Dock" (corrected above,
+  with 20 checks for which pane fits which scaling); U1, U2 and the PR's steps promised 12 pt above
+  and below (now: 12 pt only on a side Sill moved the window away from). Re-run after the fixes:
+  `swift build -c release` clean from `git archive`, only the CaptureProbe warning; `run-all.sh`,
+  all 41; `settings-window` 27 of 27 mutants; where a capped window sits, with a scratch build whose
+  window was invisible and never activated (the screen unlocked, nobody at it).
+- **Untested, for Noah** (the plan's U1 to U8, with Sill.app from this branch on the 14-inch): at
+  the scaling at the far left with the Dock showing, every tab fits between the menu bar and the
+  Dock (12 pt clear only on a side Sill moved it away from), General scrolls to Quit Sill and Remote
+  Access (Remote Access and "Allow connections from the internet" on) to Sleep; with Settings open,
+  change the scaling and the Dock's size and hiding: it follows each time (note a Dock change that
+  shows only at the next tab click); drag it to a smaller external display and let go low: it moves
+  up once the button is up, and grows back on the larger one; a held click on a tab never moves it;
+  VoiceOver reaches Quit Sill in a capped General; macOS 26, the reporter's (everything was
+  measured on 27.0.1, and merging closes #59): U1 on a Mac with 26, or a build for rosstex; with
+  Sill's virtual display there (Virtual Display on, a window streaming), every tab shows on the
+  built-in display and fits it, also once Virtual Display is turned off with Settings open; macOS 14
+  or 15 if at hand.
+
 **Release 0.5.1 (2026-10-09, branch `release-0.5.1` from main at 05f2bb8, main merged in again
 at e3ce043 after PR #47; PR #48; Noah's go the same day: "When #47 passes the CI, merge it, then
 once that is merged do #48. Then run the release procedure").** Noah: "I want the release in the GitHub to line up with the app version, I want
@@ -4659,8 +4817,11 @@ good.
   (owns the coordinator, presentation, App Nap guard, onboarding),
   `HostSettings` (UserDefaults; the presets are StreamProtocol's
   `QualityPreset`), `StatusItemController` (+ `MenuBuilder`), `StatusText`
-  (all status copy), `StatusCard`, `StatusGlyph`, `SettingsWindow` +
-  `SettingsPanes`, `Permissions`, `LoginItem`, `LogWindow`, `MainMenu` (key
+  (all status copy), `StatusCard`, `StatusGlyph`, `SettingsWindow` (its
+  height capped to the screen, issue #59) + `SettingsPanes`,
+  `SettingsWindowFit` (how tall Settings may be on its screen and where it
+  goes; pure, `Tests/checks/settings-window`), `Permissions`, `LoginItem`,
+  `LogWindow`, `MainMenu` (key
   equivalents), `DebugHooks`, `AppLog` (its print shadow), `DevicesPane`
   (Settings › Devices: Require pairing, the paired devices, Remove and
   rename), `RemoteAccessPane` (Settings › Remote Access), `PairDeviceWindow`
@@ -4832,8 +4993,9 @@ good.
 - `Sources/VirtualDisplayProbe/` — CLI experiment for milestone 3; run it from
   Terminal (needs Screen Recording + Accessibility): `.build/release/VirtualDisplayProbe "Activity Monitor" --seconds 20`.
 - `iOSClient/` — `Sill.xcodeproj` and its sources: `StreamClient` (Bonjour: a
-  network browser and, when `DiscoveryPolicy` says, a nearby peer-to-peer one;
-  `FoundMac` rows; connection, parsing, reconnect, the move of a session over
+  network browser and, when `DiscoveryPolicy` says, a nearby peer-to-peer one,
+  each made again after the background and after a failure (`cameForward`,
+  `rebuildBrowser`); `FoundMac` rows; connection, parsing, reconnect, the move of a session over
   AWDL to the network, a live session following the best path
   (`followBestPath`: to the cable, to Wi-Fi, made again over either), a remote
   session's move home (`moveHomeIfListed`, `MoveKind.fromRemote`), ping,
@@ -4856,7 +5018,11 @@ good.
   refused by row: `moveHomeRow`, `HomeRows`, its kind 18 held to the floor taken
   as the move starts: `HomeMoveInfo`), the memory of Macs with
   Direct Wireless on, the Remote rows and when a lost saved Mac is dialed away
-  from home; pairing at home's rows and words, a tap's dial, the device's
+  from home; when a browser is made again and what the rows show meanwhile
+  (`rebuildBrowser`, `browserFailures`, `browserResults`), when the automatic
+  reconnect dials a row that stays listed and its line (`redialRow`,
+  `reconnectLine`), and when the device asks for the Desktop by itself
+  (`autoDesktop`; issue #69); pairing at home's rows and words, a tap's dial, the device's
   cable check and how a session at home ends: `rowWord`, `homeDial`,
   `onCable`, `rowMac`, `reconnectEnd`, `macInfoNamesSession`,
   `removalRevokes`; pure, checked with swiftc), `StreamScreen`
@@ -5063,7 +5229,8 @@ good.
   MenuPolicy, and MacMenu.swift's JSON), `message-reader`, `origin`,
   `pairing-address`, `phone-portrait`, `pointer-control`, `pointer-presence`,
   `pointer-watch`, `policy` (with its `home.swift`), `protocol`,
-  `remote-rules` (with its `home.swift`), `tour`, `update-policy` (the two
+  `remote-rules` (with its `home.swift`), `settings-window` (Sill.app's
+  `SettingsWindowFit`), `tour`, `update-policy` (the two
   encoder checks refuse a binary that links VideoToolbox). `run-all.sh
   [--mutants] [-v] [name…]` runs them and exits
   with the number that failed (a folder whose `run.sh` is not executable
@@ -5154,7 +5321,11 @@ defaults domain `SillMenuBar`; delete it after): `--synthetic` (test pattern,
 off Bonjour; the port is in the "Status: Test Pattern Mode" line),
 `-SillLogFile <path>`, `-SillSetAfter '<s> key=value[,key=value][; <s> …]'`,
 `-SillQuitAfter <s>`, `-SillRenderPreviews <dir>` (panes, cards, glyphs,
-menu.txt; no permission needed). The update check, in the bare binary (which
+menu.txt; no permission needed), and for the Settings window's height
+`-SillSettingsAfter '<s> <tab>|close|report|end|height=<points>[; …]'` (opens it,
+then prints its frame, the pane's whole height and how much shows),
+`-SillTestScreenHeight <points>` and `-SillSettingsShot <dir>`
+(docs/DEVELOPMENT.md, Test arguments for the bare app). The update check, in the bare binary (which
 has no version and never checks without these) and the app: `-SillUpdateFeed
 http://127.0.0.1:P/latest` (a feed on this Mac only: 127.0.0.1, ::1 or
 localhost; `Scripts/sillfeed.py P` serves one; test pattern mode checks only
@@ -5357,7 +5528,13 @@ iPad…'s overlay; `-SillOverlayLine asking|shown|openonmac|locked|noanswer` the
 line its ask's answer sets; under `-SillLive 1` it opens over the live session
 and asks), pairing at home's connect cases `homerows|homeasking|homecard|homecode|
 homecodeerror|homelocked|homeopenonmac|homerevoked|homecabledone|homeolder|
-pairingrequired` and settings cases `paired|pairedoff|openpair`,
+pairingrequired` and settings cases `paired|pairedoff|openpair`, the connect
+case `asleep` (issue #69: a saved Mac's row listed, the reconnect's line after
+three dials of it that did not connect), `-SillBrowserFail N` (the normal app
+and `-SillLive 1`: each of the first N network browsers is reported failed with
+-65569, as iOS reports a suspended app's, half a second after it starts, so it
+is made again after 1, 2, 4… s; the console's "browser: …" lines, and the
+reconnect's "reconnect: …"),
 `-SillPointer mac@X,Y|device@X,Y|hidden|pencil@X,Y` (the pointer sprite in one
 of docs/pointer-visibility-plan.md's states over the mock's frame, which it
 draws as a dim rectangle; `-SillPencilPointer 1` is Q2's flip), and in
