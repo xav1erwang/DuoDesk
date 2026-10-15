@@ -457,6 +457,36 @@ device; what iPadOS draws for the person's own keyboard with a Magic Keyboard; C
 `fire()`'s old cross-window mistake shown live (two windows side by side); Full Keyboard Access and Switch
 Control.
 
+### Noah's test through Universal Control (2026-10-15)
+
+On the iPad mini with the merged build (b1bb177, Debug, its console attached through devicectl),
+against a loopback synthetic host on the software encoder reached over the USB cable through a
+relay (the host's input log on, a scripted pointer so its Desktop has somewhere for input to land),
+with the Mac's own keyboard and trackpad reaching the iPad through Universal Control. Synthetic
+input on the Mac never crosses Universal Control's edge (four edges tried, its log silent), so the
+hands were Noah's; the logs are the evidence.
+
+- GameController counted Universal Control's keyboard as attached, and the input view took the
+  keyboard by itself (`keyboard: took the keyboard: none → automatic`); no Keyboard button.
+- Typed letters reached the host as text (`hwkey: … via pressesBegan: the text system's`, the host's
+  text events), before any button was touched.
+- Esc reached the host (`hwkey: usage 41 down via pressesBegan (none): to the Mac`; the host's key
+  53 down and up). The key-command channel was not needed on this keyboard.
+- ⌘W reached the host (key 55's flags, key 13 down and up with command, the flags cleared, the
+  tripwire armed) and Sill's window stayed.
+- Two-finger scrolling over the picture gave the host 38 scroll events with phases
+  (`in.scrollPhase`), the continuous pan's.
+- Settings open: the hold let go (`automatic → none`), Esc closed the panel and nothing reached the
+  host (`escape: Esc to what is on screen in its window (its EscapeKey), not to the Mac`), then the
+  hold came back and a typed letter reached the host again.
+- The Keyboard button: `automatic → own` and a letter reached the host; again, `own → automatic`
+  and another did.
+
+So steps 1, 3, 4, 6, 7 and 9 of "Untested, for Noah" pass on Universal Control's keyboard and
+trackpad. Not a physical Magic Keyboard: which channel brings Esc there, the on-screen keyboard
+staying away when it is folded, an input method's candidates, VoiceOver, Full Keyboard Access and
+two windows (steps 2, 5, 8, 10 to 13) are still Noah's.
+
 ## Progress
 
 - 2026-10-14: the plan (c641950); the rule, Esc's key command, the scroll pans and their checks, with the
