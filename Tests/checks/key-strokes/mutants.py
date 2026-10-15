@@ -141,6 +141,9 @@ MUTANTS = [
     ("the right-hand keys hold nothing on the device", CHORDS,
      "private var held: UInt64 { down.reduce(0) { $0 | (KeyModifiers.flag(forKey: $1)?.rawValue ?? 0) } }",
      "private var held: UInt64 { down.reduce(0) { $0 | ($1 < 0xE4 ? KeyModifiers.flag(forKey: $1)?.rawValue ?? 0 : 0) } }"),
+    # Shifted return and tab
+    ("shifted return and tab to the text system (the shift lost)", CHORDS, "            || (shiftedKeyUsages.contains(usage) && modifiers & KeyModifiers.shift.rawValue != 0)\n", ""),
+    ("return and tab as keys whatever is held", CHORDS, "(shiftedKeyUsages.contains(usage) && modifiers & KeyModifiers.shift.rawValue != 0)", "shiftedKeyUsages.contains(usage)"),
 ]
 caught = 0
 for name, rel, old, new in MUTANTS:
