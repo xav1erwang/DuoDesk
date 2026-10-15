@@ -467,10 +467,11 @@ with the same coast after a flick, and a mouse's wheel scrolls it in plain
 steps. Clicks and drags with the trackpad were already the pointer's. Over the
 portrait layout's on-screen trackpad a hardware trackpad's scroll does nothing.
 
-No device has run these yet: in the simulator Esc came through `pressesBegan`
-and a virtual mouse's scrolls reached only the wheel's pan, so Esc's key
-command and the trackpad's pan wait for a device (the plan's steps 1 and 9),
-and so do the public words for them (the plan, "Words that wait for a device").
+On a device so far: the iPad mini with the Mac's keyboard and trackpad reaching
+it through Universal Control (2026-10-15, the plan's Results): the automatic
+hold, letters, Esc (through `pressesBegan`), ⌘W and two-finger scrolling all
+reached the Mac, and Esc closed Settings without reaching it. A Magic Keyboard
+itself, and which channel brings its Esc, are still untested.
 
 ## The clipboard
 
