@@ -201,10 +201,11 @@ struct TourOverlay: View {
     let copy: TourCopy
     let layout: TourLayout
     let targets: [TourTarget: CGRect]
-    /// False for a phone with Larger Picture, whose thumbnails are hidden (TourPolicy.targets).
+    /// False for a phone with Larger Picture in effect (a window streaming with the switch on), whose
+    /// thumbnails are hidden (TourPolicy.targets).
     var thumbnails = true
-    /// With Larger Picture, the picture's whole room, which the cards upright are placed against
-    /// (TourPolicy.place); nil elsewhere.
+    /// With Larger Picture in effect, the picture's whole room, which the cards upright are placed
+    /// against (TourPolicy.place); nil elsewhere.
     var room: CGRect? = nil
     /// The stream screen's size, and the home indicator's inset its frame runs under.
     let screen: CGSize

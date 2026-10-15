@@ -245,12 +245,15 @@ let anchorRule = Rule("the panel's anchor is its top-trailing corner")
 let dimRule = Rule("the dim covers everything but row 1's buttons, in two pieces")
 let menusRule = Rule("row 2 with the Mac's menus: the Menus button under Settings and as wide, 50 tall, centred in the strip's 62; the strip from 6 to 8 before it, a whole 80 pt thumbnail and its 8 pt ends in it")
 let gainsRule = Rule("Larger Picture applies (its keyboard the estimate, the switch offered) exactly where its room above the estimated keyboard is taller than today's picture and row 1's six buttons are 44 pt or more; never with the switch off or a hinge")
-let rules = [inside, ordered, gaps, pictureRule, buttonsRule, capsRule, alignRule, spanRule, rulerRule, panelsRule, anchorRule, dimRule, menusRule, gainsRule]
+let sourceRule = Rule("Larger Picture only while a window streams: with the switch on a window gets that keyboard, the Desktop and nothing streaming none (the standard arrangement); the switch off none, and a hinge none, whatever streams")
+let rules = [inside, ordered, gaps, pictureRule, buttonsRule, capsRule, alignRule, spanRule, rulerRule, panelsRule, anchorRule, dimRule, menusRule, gainsRule, sourceRule]
 
 func within(_ r: CGRect, _ size: CGSize) -> Bool {
     r.minX >= -0.001 && r.minY >= -0.001 && r.maxX <= size.width + 0.001 && r.maxY <= size.height + 0.001 && r.width >= 0 && r.height >= 0
 }
 
+/// What can stream (`StreamClient.active`'s three cases, as Larger Picture's rule reads them).
+let streamings: [L.Streaming] = [.nothing, .desktop, .window]
 var gridSizes = 0
 for w in 300...599 {
     for h in (w + 1)...1400 {
@@ -327,6 +330,14 @@ for w in 300...599 {
                          && L.keyboard(for: size, largerPicture: false, foldable: false) == nil
                          && L.keyboard(for: size, largerPicture: true, foldable: true) == nil, size,
                          "estimate \(estimate), given \(String(describing: given)), applies \(applies)")
+
+        // What StreamScreen hands the layout: the rule's answer for the switch and what streams, placed.
+        func placed(_ on: Bool, _ streaming: L.Streaming, hinge: Bool = false) -> CGFloat? {
+            L.keyboard(for: size, largerPicture: L.largerPicture(switchOn: on, streaming: streaming), foldable: hinge)
+        }
+        sourceRule.expect(placed(true, .window) == given && placed(true, .desktop) == nil && placed(true, .nothing) == nil
+                          && streamings.allSatisfy { placed(false, $0) == nil && placed(true, $0, hinge: true) == nil }, size,
+                          "window \(String(describing: placed(true, .window))), Desktop \(String(describing: placed(true, .desktop))), nothing \(String(describing: placed(true, .nothing)))")
     }
 }
 for rule in rules {
@@ -362,7 +373,9 @@ check("the size is all it depends on", L(size: pro.container) == L(size: pro.con
 
 // MARK: - Larger Picture (docs/larger-picture-plan.md)
 //
-// With the switch on and the keyboard's height known, the thumbnails' row goes and the picture's
+// With the switch on while a window streams (the Desktop and nothing streaming keep today's
+// arrangement: `largerPicture(switchOn:streaming:)`, below the plan's table) and the keyboard's
+// height known, the thumbnails' row goes and the picture's
 // room is every point that keeps the key row 10 pt above the software keyboard: the container less
 // the keyboard less 152 pt; the trackpad is the keyboard's footprint; row 1 gets the Menus button
 // after Apps while the Mac sent menus; the frame takes the picture's own shape inside the room, from
@@ -427,7 +440,8 @@ check("the switch on, a phone without a hinge: its estimate, but where Display Z
           L.keyboard(for: e.container, largerPicture: true, foldable: false) == (zoomed320.contains(e.name) ? nil : e.keyboard) })
 
 // The plan's table, phone by phone: the room (and today's picture), row 1, the key row, the trackpad
-// (its top the keyboard's), the panels' room, the Desktop's frame (a 14-inch MacBook Pro, 3024×1964).
+// (its top the keyboard's), the panels' room, and the frame of a window of a 14-inch MacBook Pro's
+// Desktop's shape (3024×1964, 1.54:1; the Desktop itself keeps the standard arrangement, below).
 struct Larger {
     let phone: Phone
     let room: CGSize, today: CGFloat
@@ -495,7 +509,7 @@ for row in largerTable {
           l.drawer == CGRect(x: 14, y: 8, width: size.width - 28, height: row.row1.0 - 16) && l.drawer.height == row.room.height + 16)
     check("\(n): the whole drawer clear of the keyboard, by \(Int(size.height - k - l.drawer.maxY)) pt (a candidate bar's 44 more too)",
           l.drawer.maxY == size.height - k - 128 && l.drawer.maxY < size.height - k - 44)
-    check("\(n): the Desktop's frame \(Int(row.desktop.width))×\(Int(row.desktop.height))",
+    check("\(n): a window of the Desktop's shape: its frame \(Int(row.desktop.width))×\(Int(row.desktop.height))",
           l.pane(video: macBookDesktop).size == row.desktop)
     check("\(n): the dim is above and below row 1's buttons",
           l.dim == [CGRect(x: 0, y: 0, width: size.width, height: row.row1.0),
@@ -518,7 +532,7 @@ for (p, today, drawer) in [(proMax, CGFloat(219), CGFloat(438)), (fifteenPro, 16
 check("Larger Picture is larger on every phone it applies to (all but those Display Zoom makes 320 pt wide)",
       largerTable.allSatisfy { r in r.room.height > r.today && L.largerPictureGains(r.phone.container, keyboard: r.phone.keyboard!) })
 // Display Zoom at 320 pt wide (the review of 2026-10-14): the keyboard rule would make the picture
-// smaller, a 6.1-inch iPhone's 304×173 against today's 304×190 (the Desktop 266×173 against 304×190)
+// smaller, a 6.1-inch iPhone's 304×173 against today's 304×190 (a picture of the Desktop's shape 266×173)
 // and the zoomed SE's 304×163 against 304×188, with six buttons of 42 pt; so no keyboard, today's
 // arrangement, and the switch not offered, upright or on its side.
 for (p, room, today) in [(sixOneZoom, CGFloat(173), CGFloat(190)), (seZoom, 163, 188)] {
@@ -564,6 +578,64 @@ check("the triage's numbers: the 15 Pro 377×235 → 377×340, the 18 Pro Max 42
 check("the keyboard and the switch are inputs: another keyboard, another layout",
       L(size: pro.container, keyboard: 301) != L(size: pro.container) && L(size: pro.container, keyboard: 301) != L(size: pro.container, keyboard: 320))
 
+// Larger Picture only while a window streams (Noah, 2026-10-15, on his iPhone 15 Pro: "when in Desktop
+// mode, there is negative space on the bottom, seemingly because of the Mac aspect ratio"). Aa never
+// resizes the Desktop, so the room's extra height could only be black under it: on the 18 Pro Max its
+// 424×275 frame left 147 pt of the 424×422 room black, on the 15 Pro 96 of 340. The Desktop and
+// nothing streaming (connecting; a window closed or off the Mac's list for a moment; a pick that
+// failed) keep the standard arrangement with the switch on: every rect, the viewport (the picture),
+// the frame and the span are the switch off's. A window keeps Larger Picture as before. The rule,
+// then what StreamScreen does with it: `keyboard(for:largerPicture:foldable:)` given its answer.
+check("the rule: Larger Picture in effect with the switch on while a window streams, and only then",
+      L.largerPicture(switchOn: true, streaming: .window) && !L.largerPicture(switchOn: true, streaming: .desktop)
+        && !L.largerPicture(switchOn: true, streaming: .nothing) && streamings.allSatisfy { !L.largerPicture(switchOn: false, streaming: $0) })
+/// The arrangement StreamScreen draws on a phone held upright for the switch and what streams.
+func arrangement(_ size: CGSize, switchOn: Bool, streaming: L.Streaming, hinge: Bool = false) -> L {
+    L(size: size, keyboard: L.keyboard(for: size, largerPicture: L.largerPicture(switchOn: switchOn, streaming: streaming), foldable: hinge))
+}
+let pictureShapes = [CGSize.zero, macBookDesktop, CGSize(width: 1512, height: 949), CGSize(width: 2560, height: 1080),
+                     CGSize(width: 848, height: 844), CGSize(width: 1000, height: 2000)]
+for row in largerTable {
+    let c = row.phone.container
+    let off = L(size: c), larger = L(size: c, keyboard: row.phone.keyboard!)
+    let n = "\(row.phone.name) (\(Int(c.width))×\(Int(c.height)))"
+    for source in [L.Streaming.desktop, .nothing] {
+        let on = arrangement(c, switchOn: true, streaming: source)
+        let what = source == .desktop ? "the Desktop" : "nothing"
+        check("\(n), the switch on while \(what) streams: the switch off's arrangement, every rect (the picture \(Int(off.picture.width))×\(Int(off.picture.height)), the thumbnails, the trackpad \(Int(off.trackpad.height)) pt)",
+              on == off && on == arrangement(c, switchOn: false, streaming: source) && on.keyboard == nil && !on.largerPicture
+                && on.strip.height == 62 && on.buttonsBesideMenus == off.buttons && on.drawer == off.drawer)
+        check("\(n), the switch on while \(what) streams: the viewport the 16:10 pane, the frame the pane and the span the width ÷ 1.6, whatever the picture's shape",
+              on.picture.size == off.picture.size && pictureShapes.allSatisfy { on.pane(video: $0) == off.picture && on.trackpadSpan(video: $0) == off.trackpadSpan })
+    }
+    let window = arrangement(c, switchOn: true, streaming: .window)
+    check("\(n), the switch on while a window streams: Larger Picture as before, the viewport its room (\(Int(row.room.width))×\(Int(row.room.height))), every rect, frame and span the same",
+          window == larger && window.picture.size == row.room
+            && pictureShapes.allSatisfy { window.pane(video: $0) == larger.pane(video: $0) && window.trackpadSpan(video: $0) == larger.trackpadSpan(video: $0) })
+    check("\(n), the switch off while a window streams: the standard arrangement", arrangement(c, switchOn: false, streaming: .window) == off)
+    // A switch between the Desktop and a window changes the arrangement, and with it the viewport (the
+    // picture's size): one new viewport each way, as a rotation sends.
+    check("\(n): the viewport \(Int(off.picture.width))×\(Int(off.picture.height)) with the Desktop, \(Int(row.room.width))×\(Int(row.room.height)) with a window",
+          arrangement(c, switchOn: true, streaming: .desktop).picture.size == off.picture.size && window.picture.size != off.picture.size)
+}
+do {
+    // Noah's finding, in numbers: the branch's Larger Picture drew a 14-inch MacBook Pro's Desktop
+    // (3024×1964) at the room's width, from its top, with black under it in the room.
+    for (p, frame, room, black) in [(fifteenPro, CGSize(width: 377, height: 244), CGSize(width: 377, height: 340), CGFloat(96)),
+                                    (proMax, CGSize(width: 424, height: 275), CGSize(width: 424, height: 422), CGFloat(147))] {
+        let c = p.container, before = L(size: c, keyboard: p.keyboard!), now = arrangement(c, switchOn: true, streaming: .desktop)
+        check("\(p.name): before, the Desktop \(Int(frame.width))×\(Int(frame.height)) at the top of a \(Int(room.width))×\(Int(room.height)) room, \(Int(black)) pt of black under it; now the 16:10 pane, \(Int(now.picture.width))×\(Int(now.picture.height)), with the thumbnails",
+              before.pane(video: macBookDesktop).size == frame && before.picture.size == room && room.height - frame.height == black
+                && now == L(size: c) && now.pane(video: macBookDesktop) == L(size: c).picture && now.strip.height == 62)
+    }
+}
+check("the iPhone Duo's cover as the branch left it: the switch on gives it no keyboard whatever streams (a hinge), the standard arrangement",
+      streamings.allSatisfy { arrangement(duoCover.container, switchOn: true, streaming: $0, hinge: true) == L(size: duoCover.container)
+                                && arrangement(proMax.container, switchOn: true, streaming: $0, hinge: true) == L(size: proMax.container) })
+check("the switch is offered whatever streams: it is judged as for a window (the 18 Pro Max and the 15 Pro offer it, Display Zoom's 320 pt does not)",
+      L.offersLargerPicture(screen: proMax.container) && L.offersLargerPicture(screen: fifteenPro.container)
+        && !L.offersLargerPicture(screen: sixOneZoom.container))
+
 // Row 1 beside the Mac's menus: six equal buttons, Menus after Apps (the landscape bar's order with
 // the strip gone); the ruler on that row's Aa, 36 a detent on every phone.
 do {
@@ -598,7 +670,7 @@ do {
     check("…with the window fitted to the room: 412 × 422 ÷ 424 (410.06), as far down as across",
           near(l.trackpadSpan(video: CGSize(width: 848, height: 844)), 412.0 * 422 / 424))
     check("…with a window twice as tall as wide: 824", near(l.trackpadSpan(video: CGSize(width: 1000, height: 2000)), 824))
-    check("…with the Desktop (424×275): 267.2", near(l.trackpadSpan(video: macBookDesktop), 412.0 * 275 / 424))
+    check("…with a window of the Desktop's shape (424×275): 267.2", near(l.trackpadSpan(video: macBookDesktop), 412.0 * 275 / 424))
 }
 
 // Fractions and edges: the room in whole points, the trackpad from the keyboard's exact top; a keyboard

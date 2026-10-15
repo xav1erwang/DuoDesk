@@ -378,12 +378,14 @@ func largerModel(_ w: CGFloat, _ h: CGFloat, keyboard: CGFloat, video: CGSize = 
         .settings: row[PhonePortraitLayout.Button.settings.rawValue],
         .keys: l.keys, .trackpad: l.trackpad], room: l.picture, thumbnails: false)
 }
+/// A picture of a 14-inch MacBook Pro's Desktop's shape (3024×1964, 1.54:1): with Larger Picture, a
+/// window of that shape (the Desktop itself keeps the standard arrangement since 2026-10-15, below).
 let macBook = CGSize(width: 3024, height: 1964)
-let largerDesktop = largerModel(440, 894, keyboard: 320, video: macBook), largerFitted = largerModel(440, 894, keyboard: 320, video: CGSize(width: 848, height: 844))
+let largerMacShape = largerModel(440, 894, keyboard: 320, video: macBook), largerFitted = largerModel(440, 894, keyboard: 320, video: CGSize(width: 848, height: 844))
 let largerSE = largerModel(375, 647, keyboard: 233, video: macBook), largerFive = largerModel(440, 894, keyboard: 320, video: macBook, menus: false)
-check(largerDesktop.stream == CGRect(x: 8, y: 8, width: 424, height: 275) && largerDesktop.room == CGRect(x: 8, y: 8, width: 424, height: 422)
-      && largerDesktop.union(.bar)! == CGRect(x: 14, y: 454, width: 272, height: 50) && largerDesktop.targets[.keys]!.minY == 520
-      && largerDesktop.targets[.trackpad]! == CGRect(x: 14, y: 574, width: 412, height: 304), "the 18 Pro Max with Larger Picture and the Desktop: \(largerDesktop.targets)")
+check(largerMacShape.stream == CGRect(x: 8, y: 8, width: 424, height: 275) && largerMacShape.room == CGRect(x: 8, y: 8, width: 424, height: 422)
+      && largerMacShape.union(.bar)! == CGRect(x: 14, y: 454, width: 272, height: 50) && largerMacShape.targets[.keys]!.minY == 520
+      && largerMacShape.targets[.trackpad]! == CGRect(x: 14, y: 574, width: 412, height: 304), "the 18 Pro Max with Larger Picture and a window of the Desktop's shape: \(largerMacShape.targets)")
 check(largerFitted.stream == largerFitted.room!, "a window fitted to the room: the picture is the room")
 check(largerFive.union(.bar)! == CGRect(x: 14, y: 454, width: 244, height: 50), "before the Mac's menus come: Apps, Aa and Keyboard of five")
 
@@ -523,19 +525,19 @@ check(TourPolicy.place(card: CGSize(width: 360, height: 300), targets: CGRect(x:
       == TourPlacement(card: CGRect(x: 70, y: 212, width: 360, height: 300), tail: TourTail(edge: .up, x: 250)), "a phone there: under its targets")
 pinned(duoPhone, .bar, 273, CGRect(x: 70, y: 25, width: 360, height: 273), tail: TourTail(edge: .down, x: 250))
 // Larger Picture on the 18 Pro Max (the room 424×422 from 8): the picture's card centred on the
-// picture itself, the Desktop's 424×275, and free to grow into the room under it; every other card
+// picture itself, a window of the Desktop's shape at 424×275, and free to grow into the room under it; every other card
 // against the room, so the bar's and Settings' stand in the black under a short picture with their
 // tails at row 1 (from 418, 36 pt over it); the laptop card too (its keys 102 pt under it: no tail).
-pinned(largerDesktop, .touch, 230, CGRect(x: 40, y: 30.5, width: 360, height: 230), tail: nil)
-pinned(largerDesktop, .touch, 380, CGRect(x: 40, y: 16, width: 360, height: 380), tail: nil)
-pinned(largerDesktop, .bar, 230, CGRect(x: 16, y: 188, width: 360, height: 230), tail: TourTail(edge: .down, x: 150))
-pinned(largerDesktop, .settings, 200, CGRect(x: 64, y: 218, width: 360, height: 200), tail: TourTail(edge: .down, x: 395))
-pinned(largerDesktop, .laptop, 290, CGRect(x: 40, y: 128, width: 360, height: 290), tail: nil)
+pinned(largerMacShape, .touch, 230, CGRect(x: 40, y: 30.5, width: 360, height: 230), tail: nil)
+pinned(largerMacShape, .touch, 380, CGRect(x: 40, y: 16, width: 360, height: 380), tail: nil)
+pinned(largerMacShape, .bar, 230, CGRect(x: 16, y: 188, width: 360, height: 230), tail: TourTail(edge: .down, x: 150))
+pinned(largerMacShape, .settings, 200, CGRect(x: 64, y: 218, width: 360, height: 200), tail: TourTail(edge: .down, x: 395))
+pinned(largerMacShape, .laptop, 290, CGRect(x: 40, y: 128, width: 360, height: 290), tail: nil)
 pinned(largerFitted, .bar, 230, CGRect(x: 16, y: 188, width: 360, height: 230), tail: TourTail(edge: .down, x: 150))
 pinned(largerFitted, .touch, 230, CGRect(x: 40, y: 104, width: 360, height: 230), tail: nil)
 // Without the room, the same cards stay in the short picture with no tail at row 1, 183 pt below.
-check(TourPolicy.place(card: CGSize(width: 360, height: 230), targets: largerDesktop.union(.bar), isStream: false, screen: largerDesktop.size, layout: F,
-                       stream: largerDesktop.stream, bottomInset: 0) == TourPlacement(card: CGRect(x: 16, y: 41, width: 360, height: 230), tail: nil),
+check(TourPolicy.place(card: CGSize(width: 360, height: 230), targets: largerMacShape.union(.bar), isStream: false, screen: largerMacShape.size, layout: F,
+                       stream: largerMacShape.stream, bottomInset: 0) == TourPlacement(card: CGRect(x: 16, y: 41, width: 360, height: 230), tail: nil),
       "without the room: in the short picture, no tail")
 // The SE with Larger Picture (the room 359×262 above its 233 pt keyboard): the bar card in the room,
 // its tail at row 1 (294).
@@ -953,6 +955,77 @@ for layout in [L, P, F] {
         }
     }
 }
+// MARK: - Larger Picture only while a window streams (Noah, 2026-10-15)
+//
+// "When in Desktop mode, there is negative space on the bottom": the Desktop, which Aa never resizes,
+// and nothing streaming keep the standard arrangement with the switch on. The tour sees what
+// StreamScreen hands it: Larger Picture's rule (PhonePortraitLayout.largerPicture(switchOn:streaming:))
+// placed by keyboard(for:largerPicture:foldable:), the targets, the room and the thumbnails from that.
+// With the switch on, the Desktop's and nothing's tour is the switch off's (the strip lit, its words,
+// every card where it was); a window's is Larger Picture's (Apps lit, the room).
+func streamScreen(_ w: CGFloat, _ h: CGFloat, switchOn: Bool, streaming: PhonePortraitLayout.Streaming, video: CGSize = macBook,
+                  hinge: Bool = false) -> Screen {
+    let size = CGSize(width: w, height: h)
+    let keyboard = PhonePortraitLayout.keyboard(for: size, largerPicture: PhonePortraitLayout.largerPicture(switchOn: switchOn, streaming: streaming),
+                                                foldable: hinge)
+    return keyboard.map { largerModel(w, h, keyboard: $0, video: video) } ?? phoneModel(w, h)
+}
+func same(_ a: Screen, _ b: Screen) -> Bool {
+    a.size == b.size && a.layout == b.layout && a.stream == b.stream && a.targets == b.targets && a.room == b.room && a.thumbnails == b.thumbnails
+}
+/// Every card of the layout, by its words and its place at a few heights, as the tour shows them on `s`.
+func tourOf(_ s: Screen, voiceOver: Bool = false) -> [String] {
+    let w = TourPolicy.width(screen: s.size, layout: s.layout, accessibilityText: false)
+    return TourPolicy.steps(s.layout, voiceOver: voiceOver).flatMap { topic -> [String] in
+        let copy = words(topic, s.layout, device: "iPhone", voiceOver: voiceOver, first: true, thumbnails: s.thumbnails)
+        let lit = TourPolicy.targets(topic, s.layout, thumbnails: s.thumbnails).compactMap { s.targets[$0] }.map { "\($0)" }
+        let places = [CGFloat(120), 230, 380].map { "\(place(s, topic, height: $0, width: w))" }
+        return ["\(topic)", copy.title, copy.hint, copy.subtitle ?? ""] + texts(copy) + lit + places
+    }
+}
+let uprightPhones: [(String, CGFloat, CGFloat)] = [("18 Pro Max", 440, 894), ("15 Pro", 393, 793), ("18 Pro", 402, 812),
+                                                   ("17e", 390, 797), ("13 mini", 375, 762), ("SE", 375, 647)]
+for (name, w, h) in uprightPhones {
+    let off = phoneModel(w, h)
+    for streaming in [PhonePortraitLayout.Streaming.desktop, .nothing] {
+        let what = streaming == .desktop ? "the Desktop" : "nothing"
+        for video in [macBook, CGSize.zero, CGSize(width: 1512, height: 949)] {
+            let on = streamScreen(w, h, switchOn: true, streaming: streaming, video: video)
+            check(same(on, off) && on.thumbnails && on.room == nil && on.stream == off.stream,
+                  "\(name) (\(Int(w))×\(Int(h))), the switch on while \(what) streams (a \(Int(video.width))×\(Int(video.height)) picture): the switch off's screen, the strip and no room")
+            check(tourOf(on) == tourOf(off) && tourOf(on, voiceOver: true) == tourOf(off, voiceOver: true),
+                  "\(name), the switch on while \(what) streams: the tour is the switch off's, every card's words, lights and places (under VoiceOver too)")
+        }
+        check(TourPolicy.targets(.bar, F, thumbnails: streamScreen(w, h, switchOn: true, streaming: streaming).thumbnails) == [.strip, .textSize, .keyboard],
+              "\(name), the switch on while \(what) streams: the bar card lights the thumbnails, Aa and Keyboard")
+    }
+    let keyboard = PhonePortraitLayout.keyboardHeight(for: CGSize(width: w, height: h))
+    for video in [macBook, CGSize(width: 848, height: 844)] {
+        let window = streamScreen(w, h, switchOn: true, streaming: .window, video: video)
+        let larger = largerModel(w, h, keyboard: keyboard, video: video)
+        check(same(window, larger) && !window.thumbnails && window.room != nil && tourOf(window) == tourOf(larger),
+              "\(name), the switch on while a window streams: Larger Picture's tour as before (Apps lit, the cards against the room)")
+    }
+    check(TourPolicy.targets(.bar, F, thumbnails: streamScreen(w, h, switchOn: true, streaming: .window).thumbnails) == [.apps, .textSize, .keyboard]
+            && tourOf(streamScreen(w, h, switchOn: true, streaming: .window)) != tourOf(off),
+          "\(name), a window: the bar card lights Apps, Aa and Keyboard, so the tour differs from the Desktop's")
+    check(PhonePortraitLayout.Streaming.allCases.allSatisfy { same(streamScreen(w, h, switchOn: false, streaming: $0), off) },
+          "\(name), the switch off: the standard tour whatever streams")
+}
+check(PhonePortraitLayout.Streaming.allCases.allSatisfy { same(streamScreen(382, 678, switchOn: true, streaming: $0, hinge: true), phoneModel(382, 678)) },
+      "the iPhone Duo's cover (a hinge): the standard tour whatever streams, the switch on or off")
+// Noah's 15 Pro with the Desktop: the branch's bar card stood in the black under the Desktop's
+// 377×244 with its tail at row 1; now it is the standard arrangement's, its tail on the thumbnails.
+do {
+    let branch = largerModel(393, 793, keyboard: 301, video: macBook), now = streamScreen(393, 793, switchOn: true, streaming: .desktop)
+    let w = TourPolicy.width(screen: now.size, layout: F, accessibilityText: false)
+    check(branch.stream.size == CGSize(width: 377, height: 244) && branch.room!.size == CGSize(width: 377, height: 340)
+            && now.stream.size == CGSize(width: 377, height: 235) && now.room == nil
+            && place(now, .bar, height: 230, width: w) == place(phoneModel(393, 793), .bar, height: 230, width: w)
+            && place(now, .bar, height: 230, width: w) != place(branch, .bar, height: 230, width: w),
+          "the 15 Pro with the Desktop: the 16:10 pane (377×235), the bar card the switch off's, not in the black under a 377×244 Desktop")
+}
+
 check(TourPolicy.spokenTitle(barL, index: 1, count: 3) == "Windows and Text Size, step 2 of 3", "VoiceOver hears the count")
 check(TourPolicy.spokenTitle(laptopFirst, index: 0, count: 1) == "Keys and Trackpad", "a one-card run has no count")
 check(TourPolicy.skipTitle == "Skip" && TourPolicy.nextTitle == "Next" && TourPolicy.doneTitle == "Done", "the buttons")

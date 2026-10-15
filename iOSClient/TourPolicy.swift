@@ -23,9 +23,10 @@ enum TourTopic: String, CaseIterable, Comparable {
 /// inner display, an iPad, an iPad window narrower than 600 pt), the window bar and the keys under
 /// the picture's half; and a phone held upright (`PhonePortraitLayout`: the picture in a 16:10 pane
 /// at the top, then row 1 with Apps, Aa, Keyboard, Desktop and Settings, the thumbnails, six keys
-/// and the trackpad; the Duo's outer display upright too). A phone with Larger Picture (no
-/// thumbnails, a taller picture) is still `.phone` to the rule, so switching it is no turn; only its
-/// bar card's targets and words differ (`thumbnails`).
+/// and the trackpad; the Duo's outer display upright too). A phone with Larger Picture in effect (the
+/// switch on while a window streams: no thumbnails, a taller picture) is still `.phone` to the rule,
+/// so switching it, or a switch between the Desktop and a window that brings it or takes it away, is
+/// no turn; only its bar card's targets and words differ (`thumbnails`).
 enum TourLayout: String, Hashable {
     case landscape, portrait, phone
 
@@ -195,8 +196,10 @@ enum TourPolicy {
 
     /// What each step lights. Sideways and on a phone upright the Keyboard button is in the bar (a
     /// phone's row 1, over the thumbnails); in the halves the keyboard is a cap in the key row, part
-    /// of `keys`. `thumbnails`: false for a phone with Larger Picture, whose thumbnails are hidden:
-    /// its bar card lights Apps, Aa and Keyboard in row 1 (and the Menus button between them).
+    /// of `keys`. `thumbnails`: false for a phone with Larger Picture in effect (a window streaming
+    /// with the switch on: PhonePortraitLayout.largerPicture(switchOn:streaming:)), whose thumbnails
+    /// are hidden: its bar card lights Apps, Aa and Keyboard in row 1 (and the Menus button between
+    /// them). With the Desktop streaming the switch changes nothing, and the thumbnails show.
     static func targets(_ topic: TourTopic, _ layout: TourLayout, thumbnails: Bool = true) -> [TourTarget] {
         switch topic {
         case .touch: return [.stream]
@@ -505,7 +508,8 @@ enum TourPolicy {
     /// and the trackpad's rows go (the trackpad is no accessibility element). `keysOnItsSide`: the
     /// iPhone Duo open (its inner display), which shows the keys and the trackpad with the device
     /// turned on its side, so its words say so where an iPhone's say upright. `thumbnails`: false for
-    /// a phone with Larger Picture, whose bar card is about Apps where the thumbnails were.
+    /// a phone with Larger Picture in effect (a window streaming with the switch on), whose bar card
+    /// is about Apps where the thumbnails were.
     static func copy(_ t: TourTopic, _ layout: TourLayout, mac: String, device: String,
                      voiceOver: Bool, firstOfRun: Bool, keysOnItsSide: Bool = false, thumbnails: Bool = true) -> TourCopy {
         let mac = mac.isEmpty ? "your Mac" : mac

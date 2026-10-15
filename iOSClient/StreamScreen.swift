@@ -168,11 +168,14 @@ struct StreamScreen: View {
     /// The Duo's hinge (iOS 27.1, DuoPostureReader): with the fold, the book and laptop poses.
     @Environment(\.duoEnvironment) private var duoEnvironment
     /// This device's Larger Picture switch (the Settings panel's This iPhone; docs/larger-picture-plan.md).
+    /// It acts only while a window streams (`largerPictureNow`).
     @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
-    /// The switch as it was when the Settings panel opened, which the arrangement keeps until the panel
-    /// closes; nil while it is closed. The panel hangs under row 1, which the switch moves by the
-    /// picture's growth (157 pt on an 18 Pro Max), so applied at once the switch would jump from under
-    /// the finger that flipped it; it applies as the panel goes, in the same motion.
+    /// Larger Picture as it was in effect when the Settings panel opened (`largerPictureNow`), which
+    /// the arrangement keeps until the panel closes; nil while it is closed. The panel hangs under row
+    /// 1, which the arrangement moves by the picture's growth (157 pt on an 18 Pro Max), so a change
+    /// applied at once would move the panel under the finger: the switch flipped there, or what
+    /// streams changing meanwhile (a window closed on the Mac, another device's pick). It applies as
+    /// the panel goes, in the same motion.
     @State private var largerPictureHeld: Bool? = nil
     #if DEBUG
     /// The console says once when a decision starts to wait.
@@ -197,7 +200,10 @@ struct StreamScreen: View {
         // it puts it back (`-SillSettings 1 -SillKeyboard 1`).
         _keyboardBeforeSettings = State(initialValue: settingsOpen && keyboardShown)
         // And it holds the Larger Picture it opened with, as `setSettings` does.
-        _largerPictureHeld = State(initialValue: settingsOpen ? UserDefaults.standard.bool(forKey: StreamClient.largerPictureKey) : nil)
+        _largerPictureHeld = State(initialValue: settingsOpen
+            ? PhonePortraitLayout.largerPicture(switchOn: UserDefaults.standard.bool(forKey: StreamClient.largerPictureKey),
+                                                streaming: .init(client.active))
+            : nil)
         _pairingOverlay = State(initialValue: pairingOverlay)
         self.scannerOverride = scannerOverride
     }
@@ -213,11 +219,13 @@ struct StreamScreen: View {
             // The fold across this screen, in its own space (iOS 27.1 on the Duo; else as before).
             let posture = DuoPosture.read(geo, duoEnvironment)
             // Larger Picture on a phone held upright: the software keyboard its rows are kept above;
-            // none with the switch off, sideways, on an iPad, on the iPhone Duo (a hinge), and where
-            // the picture would be no larger (Display Zoom at 320 pt wide). While the Settings panel
-            // is open, the switch as it was when it opened (`largerPictureHeld`).
+            // none with the switch off, while the Desktop or nothing streams (`largerPictureNow`),
+            // sideways, on an iPad, on the iPhone Duo (a hinge), and where the picture would be no
+            // larger (Display Zoom at 320 pt wide). While the Settings panel is open, Larger Picture
+            // as it was in effect when it opened (`largerPictureHeld`). The arrangement, its viewport
+            // (PortraitStreamScreen's picture) and the tour's targets and words all follow from this.
             let largerKeyboard = layout == .phone
-                ? PhonePortraitLayout.keyboard(for: geo.size, largerPicture: largerPictureHeld ?? largerPicture,
+                ? PhonePortraitLayout.keyboard(for: geo.size, largerPicture: largerPictureHeld ?? largerPictureNow,
                                                foldable: posture.hinge != .unknown) : nil
             // The Settings panel's switch: on an iPhone without a hinge whose picture Larger Picture
             // makes larger, judged on this screen held upright, whichever way it is held now.
@@ -269,12 +277,28 @@ struct StreamScreen: View {
             .coordinateSpace(.named(TourSpace.name))
             .onPreferenceChange(TourTargetsKey.self) { tourTargets = $0 }
             .onChange(of: layout, initial: true) { _, now in layoutChanged(to: now) }
+            // A thumbnail's lights hang from the strip, which Larger Picture's arrangement has none
+            // of: when the arrangement changes under them (what streams changed, or a turn), they
+            // close rather than wait, unseen, to come back with the strip.
+            .onChange(of: largerKeyboard != nil) { _, _ in
+                #if DEBUG
+                if windowMenu != nil { print("lights: closed, the phone's arrangement changed under them") }
+                #endif
+                closeWindowMenu()
+            }
             .background(TouchWatcher(watch: touches))
             // The layouts and the overlays share this screen's space, and so its fold; the inner
             // display gives the picture the status bar's strip in every pose.
             .duoFold(posture, size: geo.size, screen: "stream screen")
             .duoStatusBar(posture, size: geo.size)
             .environment(\.largerPictureOffered, offersLarger)
+            #if DEBUG
+            // The console's line for the gates: what Larger Picture's rule made of the switch and of
+            // what streams, on a phone held upright, each time one of them or the outcome changes.
+            .onChange(of: layout == .phone ? largerPictureLine(largerKeyboard) : "", initial: true) { _, line in
+                if !line.isEmpty { print(line) }
+            }
+            #endif
         }
         .background(Color.black)
         .overlayPreferenceValue(WindowMenuAnchorKey.self) { anchor in
@@ -422,6 +446,24 @@ struct StreamScreen: View {
         abs(value - value.rounded()) < 0.01 ? "\(Int(value.rounded()))" : String(format: "%.1f", value)
     }
 
+    /// `larger picture: the switch on, the Desktop streams: the standard arrangement`, or `…, a window
+    /// streams: Larger Picture above a 301 pt keyboard`, with `(held … while Settings is open)` while
+    /// the panel holds it; nothing while the switch is off and nothing is held (the other gates'
+    /// consoles stay as they were).
+    private func largerPictureLine(_ keyboard: CGFloat?) -> String {
+        guard largerPicture || largerPictureHeld != nil || keyboard != nil else { return "" }
+        let streaming: String
+        switch client.active {
+        case .none: streaming = "nothing streams"
+        case .desktop: streaming = "the Desktop streams"
+        case .window: streaming = "a window streams"
+        }
+        var line = "larger picture: the switch " + (largerPicture ? "on" : "off") + ", " + streaming + ": "
+        line += keyboard.map { "Larger Picture above a \(Self.points($0)) pt keyboard" } ?? "the standard arrangement"
+        if let held = largerPictureHeld { line += " (held " + (held ? "on" : "off") + " while Settings is open)" }
+        return line
+    }
+
     /// The harness's arguments that act once the stream screen shows (ContentView's contract), once
     /// per launch. `-SillKeyboard 1` brings the software keyboard up for real in a live session (the
     /// mock only lights the button, from its init); `-SillKeyboardToggle <s>[,<s>…]` toggles it at
@@ -561,13 +603,20 @@ struct StreamScreen: View {
         overlay.setKeyboard(shown: false)
     }
 
+    /// Larger Picture in effect now (PhonePortraitLayout's rule): the switch, while a window streams.
+    /// The Desktop, which Aa never resizes, and nothing streaming keep the standard arrangement.
+    private var largerPictureNow: Bool {
+        PhonePortraitLayout.largerPicture(switchOn: largerPicture, streaming: .init(client.active))
+    }
+
     /// Opens or closes the Settings panel. Opening puts the drawer, the traffic lights and the Aa
     /// ruler away and takes the keyboard down: with the overlay not first responder no hardware
     /// key reaches the Mac, and Esc (or ⌘.) reaches the panel's Done instead. Closing (Done, a tap
     /// outside, the Settings button, Esc, the VoiceOver escape gesture) puts the keyboard back if
     /// the panel took it down; the Apps and Keyboard buttons close it with `restoreKeyboard: false`
     /// because they decide about the keyboard themselves. While it is open the arrangement keeps the
-    /// Larger Picture it opened with (`largerPictureHeld`); a change of the switch applies as it closes.
+    /// Larger Picture it opened with (`largerPictureHeld`); a change of the switch, or of what
+    /// streams, applies as it closes.
     private func setSettings(_ open: Bool, restoreKeyboard: Bool = true) {
         guard open != settingsOpen else { return }
         if open {
@@ -581,8 +630,9 @@ struct StreamScreen: View {
         withAnimation(motion) {
             settingsOpen = open
             // Larger Picture keeps the arrangement the panel opened with while it is open, so the
-            // switch never moves under the finger; a change made there applies as the panel goes.
-            largerPictureHeld = open ? largerPicture : nil
+            // panel never moves under the finger: a change of the switch, or of what streams,
+            // applies as the panel goes.
+            largerPictureHeld = open ? largerPictureNow : nil
         }
         if !open {
             if restoreKeyboard, keyboardBeforeSettings { overlay.setKeyboard(shown: true) }
@@ -1975,5 +2025,19 @@ struct DrawerRow<Leading: View>: View {
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Larger Picture's view of what streams
+
+extension PhonePortraitLayout.Streaming {
+    /// What the Mac's window list says streams (`StreamClient.active`), as Larger Picture's rule
+    /// (`PhonePortraitLayout.largerPicture(switchOn:streaming:)`) reads it.
+    init(_ source: StreamSource) {
+        switch source {
+        case .none: self = .nothing
+        case .desktop: self = .desktop
+        case .window: self = .window
+        }
     }
 }

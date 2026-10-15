@@ -12,14 +12,17 @@ Formerly winstream; the folder still carries the old name.
 PR #79; issue #58, promised to rosstex; docs/larger-picture-plan.md has the rule, the numbers, the
 open questions with their defaults, the results and the review's fixes).** "The menu and touchpad
 take up more than half of the vertical space." Device only: no wire change, nothing on the host.
+Since Noah's test on his iPhone 15 Pro (2026-10-15: "when in Desktop mode, there is negative space
+on the bottom, seemingly because of the Mac aspect ratio. Can we disable this feature when Desktop
+mode is active?") it applies only while a window streams (the bullet "Only while a window streams").
 - Settings › This iPhone: **Larger Picture** (off by default; `Sill.largerPicture`,
   `StreamClient.largerPictureKey`, never sent; offered only on an iPhone without a hinge whose
   picture it makes larger: the environment's `largerPictureOffered`, from
   `PhonePortraitLayout.offersLargerPicture(screen:)`, judged upright whichever way the phone is
-  held). With it on, a phone held upright (`PhonePortraitLayout(size:keyboard:)`) has no
-  thumbnails' row; the picture's room is every point that keeps the key row 10 pt above the
-  software keyboard (H − K − 152: 18 Pro Max 424×265 → 424×422, 15 Pro 377×235 → 377×340, SE
-  359×224 → 359×262); the trackpad is the keyboard's footprint, so nothing moves when it comes up;
+  held). With it on, a phone held upright (`PhonePortraitLayout(size:keyboard:)`) has, while a
+  window streams, no thumbnails' row; the picture's room is every point that keeps the key row
+  10 pt above the software keyboard (H − K − 152: 18 Pro Max 424×265 → 424×422, 15 Pro 377×235 →
+  377×340, SE 359×224 → 359×262); the trackpad is the keyboard's footprint, so nothing moves when it comes up;
   row 1 takes the Menus button after Apps while the Mac sent menus (`buttonsBesideMenus`); the pane
   is the picture's own shape at the top of the room (`pane(video:)`), the viewport the whole room
   (one new viewport per switch: the Mac fits a window to it once Aa is set, or on the virtual
@@ -29,6 +32,33 @@ take up more than half of the vertical space." Device only: no wire change, noth
   reads it after row 1 (PortraitStreamScreen's `AfterRow1`). A change of the switch shows when the
   Settings panel closes (`StreamScreen.largerPictureHeld`), so the panel never moves under the
   finger. Sideways, on an iPad and switched off, everything is main's.
+- Only while a window streams (Noah's test, 2026-10-15; the plan's rule 12, open questions 12 to 14,
+  Results "The Desktop keeps the standard arrangement"): one pure function of the switch and of
+  what streams, `PhonePortraitLayout.largerPicture(switchOn:streaming:)` (`Streaming`: nothing,
+  desktop, window; StreamScreen maps `client.active` and computes `largerPictureNow`), put in front
+  of `keyboard(for:largerPicture:foldable:)`, so the arrangement, its viewport and the tour's
+  targets, words and room all follow it. The Desktop keeps the standard arrangement (Aa never
+  resizes it: on the 15 Pro its 377×244 frame left 96 pt of the 377×340 room black, on the Pro Max
+  147 of 422), and so does nothing streaming (connecting; a window closed, until the Desktop the
+  device asks for; a pick that failed), so the Desktop's first picture never arrives into a layout
+  that then flips; the Mac never reports nothing between two windows. The Settings panel holds the
+  arrangement (Larger Picture in effect when it opened), so a change of what streams while it is
+  open waits for it to close too; its footnote: "Held upright, a window’s picture takes the place of
+  the window thumbnails and reaches down to where the keyboard comes up. The Desktop keeps the
+  thumbnails. … A change applies when you close Settings." A switch between the Desktop and a window
+  sends a new viewport (twice, the source change's repeat and the arrangement's, the second a no-op
+  on the Mac): with Aa set the Mac fits a window picked from the Desktop to the 16:10 pane, then to
+  the room, one restart at most, as a rotation's. A thumbnail's lights close when the arrangement
+  changes under them (they hang from the strip). The Duo's cover as before. Verified: `phone-portrait`
+  484 checks and 73 of 73 mutants (5 of the rule), `tour` 111,189 and 84 of 84 (4 of the rule, in
+  PhonePortraitLayout.swift); the three iOS builds, only the known `StreamClient` warning
+  (StreamClient.swift:3436); `run-all.sh`, all 40; on a private 18 Pro Max simulator, harness photos
+  at its own stream screen and the 15 Pro's: the Desktop and nothing with the switch on pixel for
+  pixel the switch off (plain, drawer, ruler, the tour's bar card; Settings but the switch), a window
+  pixel for pixel the branch's before the change (Settings but the footnote); live against a
+  synthetic host with a test client switching between the Desktop and a test window of the agent's
+  own: `viewport: 424×422 pt` with the window, `424×265` with the Desktop, one restart on the first
+  pick with Aa at 1× (none on the second, none back to the Desktop), none without Aa.
 - Only where it is larger (`largerPictureGains`: the room taller than today's picture and row 1's
   six buttons 44 pt or more, `minButtonWidth`): Display Zoom's 320 pt (an SE, a mini, a 6.1-inch
   iPhone; a 6.1-inch one's room would be 304×173 against today's 304×190) keeps today's layout and
@@ -64,7 +94,10 @@ take up more than half of the vertical space." Device only: no wire change, noth
   search field's, to the pixel, the switch flipped with Settings open moving nothing until it
   closed (then one viewport), and VoiceOver's order with the drawer open: row 1, then the drawer.
   Photos in `~/Downloads/sill-handoff/larger-picture/` (`review-fixes/` for the review's).
-- **Untested, for Noah (the plan's P list), on the iPhone 15 Pro with this build:** Settings ›
+- **Untested, for Noah (the plan's P list), on the iPhone 15 Pro with this build:** with the switch
+  on, the Desktop as with it off (no black under it), a window picked: Larger Picture as it appears
+  (with Aa set the window grows into the room a moment later), the Desktop again: the thumbnails
+  back, a window closed on the Mac: the thumbnails back, then the Desktop; Settings ›
   This iPhone › Larger Picture on and off with Notes and Chrome streaming (the change as Settings
   closes; a 16:10 window keeps its shape, black under it; Aa, then any size, fits it to the taller
   picture; a window taller than 16:10 gains at once); the keyboard up and down (esc to shift 10 pt
@@ -4872,7 +4905,8 @@ good.
   and its vertical span, the Aa ruler, the drawer and the Settings panel across
   row 1, and the dim, and the Menus button ending the strip's row (`menus`,
   `stripBesideMenus`); with Larger Picture's keyboard (`keyboard`, from
-  `keyboardHeight(for:)`, only where it is larger: `largerPictureGains`,
+  `keyboardHeight(for:)`, only while a window streams: `largerPicture(switchOn:
+  streaming:)` and `Streaming`, and only where it is larger: `largerPictureGains`,
   `offersLargerPicture(screen:)`) no strip, the room over the keyboard, Menus in
   row 1 (`buttonsBesideMenus`), the drawer above row 1, the pane at the
   picture's shape (`pane(video:)`) and its span (`trackpadSpan(video:)`); pure,
@@ -5336,7 +5370,9 @@ remoteslow|remotepair|remoteoff|noremote`, `-SillSettingsEnd 1` (the panel
 scrolled to its end), `-SillSettingsScroll gestures` (the panel scrolled to its
 This iPad group; the mock Mac takes gestures in every case but `legacy`),
 `-Sill.trackpadGestures 0` (the device's Three-Finger Gestures off for one run,
-in the normal app too), `-Sill.largerPicture 1` (its Larger Picture on for one run;
+in the normal app too), `-Sill.largerPicture 1` (its Larger Picture on for one run,
+in effect while a window streams, as the mock does but with `-SillActive desktop|none`;
+the console's `larger picture: …` line says what the rule made of it;
 `-SillVideoSize WxH` the mock's frame, `-SillLargerPictureToggle <s>[,<s>…]` the
 switch at those seconds), `-SillVoiceOver 1` (that group as with VoiceOver on:
 its footnote says the rows do the gestures), `-SillScanOverlay 1` (Pair This

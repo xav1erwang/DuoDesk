@@ -132,9 +132,10 @@ struct PortraitMetrics {
 /// puts the picture in a fixed 16:10 pane at the top and gives the rest to the controls: row 1
 /// (Apps, Aa, Keyboard, Desktop, Settings), the thumbnails, six keys and a taller trackpad
 /// (`PhonePortraitLayout`). With Larger Picture (the Settings panel's This iPhone; issue #58) the
-/// phone's thumbnails go and the picture grows down to the software keyboard
-/// (`largerKeyboard`; docs/larger-picture-plan.md). The picture pane, the key row, the trackpad, the
-/// drawer and the Settings panel are the same views in both; each arrangement places them.
+/// phone's thumbnails go and the picture grows down to the software keyboard while a window
+/// streams; the Desktop keeps the usual arrangement (`largerKeyboard`; docs/larger-picture-plan.md).
+/// The picture pane, the key row, the trackpad, the drawer and the Settings panel are the same views
+/// in both; each arrangement places them.
 struct PortraitStreamScreen: View {
     @ObservedObject var client: StreamClient
     var metrics: PortraitMetrics = .regular
@@ -163,8 +164,9 @@ struct PortraitStreamScreen: View {
     /// Take the Tour in the panel (see `StreamScreen.takeTour`).
     var takeTour: () -> Void = {}
     /// Larger Picture on a phone: the software keyboard's height its rows are kept above
-    /// (`PhonePortraitLayout.keyboard(for:largerPicture:foldable:)`); nil for the phone's usual
-    /// arrangement, and in the halves.
+    /// (`PhonePortraitLayout.keyboard(for:largerPicture:foldable:)`, while a window streams with the
+    /// switch on: `PhonePortraitLayout.largerPicture(switchOn:streaming:)`); nil for the phone's usual
+    /// arrangement (the switch off, the Desktop or nothing streaming), and in the halves.
     var largerKeyboard: CGFloat? = nil
 
     private var streamShape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }
@@ -300,14 +302,17 @@ struct PortraitStreamScreen: View {
     /// the landscape bar does; the dim and the tap catcher cover everything else, so a tap outside
     /// closes them and never reaches the Mac.
     ///
-    /// With Larger Picture (`layout.largerPicture`) there is no thumbnails' row: the picture gets
-    /// every point that keeps the key row 10 pt above the software keyboard, its pane at the
-    /// picture's own shape at the top of that room (`pane(video:)`), the trackpad is the keyboard's
-    /// footprint, and the Menus button joins row 1 after Apps. Windows come from Apps (an open app
-    /// again shows its next window) and from the Mac's Window menu; the drawer opens above row 1,
-    /// over the room (`layout.drawer`), so a keyboard up, the Mac's or its own search field's, covers
-    /// none of it. The viewport is the layout's picture in both arrangements (with Larger Picture
-    /// the whole room), so the Mac fits a window to all of it.
+    /// With Larger Picture (`layout.largerPicture`: the switch on while a window streams; the
+    /// Desktop, which Aa never resizes, and nothing streaming keep the usual arrangement, so
+    /// StreamScreen hands this no keyboard then) there is no thumbnails' row: the picture gets every
+    /// point that keeps the key row 10 pt above the software keyboard, its pane at the picture's own
+    /// shape at the top of that room (`pane(video:)`), the trackpad is the keyboard's footprint, and
+    /// the Menus button joins row 1 after Apps. Windows come from Apps (an open app again shows its
+    /// next window) and from the Mac's Window menu; the drawer opens above row 1, over the room
+    /// (`layout.drawer`), so a keyboard up, the Mac's or its own search field's, covers none of it.
+    /// The viewport is the layout's picture in both arrangements (with Larger Picture the whole
+    /// room), so the Mac fits a window to all of it; a switch between the Desktop and a window
+    /// changes the arrangement and so sends one new viewport, as a rotation does.
     private func phone(_ layout: PhonePortraitLayout, origin: CGPoint) -> some View {
         let span = layout.trackpadSpan(video: client.videoSize)
         return phoneStack(layout, span: span)

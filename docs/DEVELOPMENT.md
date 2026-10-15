@@ -231,10 +231,15 @@ picture, however tall it is. On its side, and on an iPad (a narrow window
 included), everything is as it was.
 
 Larger Picture (Settings › This iPhone, off by default; issue #58,
-docs/larger-picture-plan.md) gives a phone held upright more picture: the
-thumbnails go, and the picture gets every point that keeps the key row 10 pt
-above the software keyboard (a room of 424×422 pt on an 18 Pro Max against
-424×265; 377×340 on a 15 Pro). The trackpad is then exactly the keyboard's
+docs/larger-picture-plan.md) gives a phone held upright more picture while a
+window streams: the thumbnails go, and the picture gets every point that keeps
+the key row 10 pt above the software keyboard (a room of 424×422 pt on an 18
+Pro Max against 424×265; 377×340 on a 15 Pro). The Desktop keeps the usual
+arrangement, since Aa never resizes it and the extra height could only be black
+under it, and so does the moment nothing streams (Noah's test of 2026-10-15;
+`PhonePortraitLayout.largerPicture(switchOn:streaming:)`, from the window
+list's source), so a switch between the Desktop and a window changes the
+arrangement and sends a new viewport, as a rotation does. The trackpad is then exactly the keyboard's
 footprint, so nothing moves when the keyboard comes up. The picture's frame
 takes the picture's own shape at the top of that room: a 16:10 window looks as
 it did until the Mac fits it to the room (Aa set, or the virtual display),
@@ -250,8 +255,8 @@ a 6.1-inch iPhone 320 pt wide, where the room above the keyboard is shorter
 than today's picture and row 1's six buttons would be under 44 pt
 (`PhonePortraitLayout.largerPictureGains`). The Apps drawer opens above row 1,
 over the picture's room, so neither keyboard covers it, the Mac's or the one
-its search field brings. A change of the switch shows when the Settings panel
-closes, so the panel never moves under the finger.
+its search field brings. A change of the switch, or of what streams, shows when
+the Settings panel closes, so the panel never moves under the finger.
 
 The first time a Mac's picture shows on a device, and nothing is touched, sent,
 used (by any means, VoiceOver's double tap included) or opened in the second
@@ -760,7 +765,11 @@ simulator:
   changes and `keyboard: up, 320 pt tall, its top at 574 pt in the stream
   screen; the key row ends 10 pt above it, …` once the keyboard has moved.
 - Larger Picture: `-Sill.largerPicture 1` turns the device's switch on for
-  one run (in the normal app too); `-SillVideoSize 848x844` gives the mock's
+  one run (in the normal app too); it acts while a window streams, which the
+  mock does unless `-SillActive desktop` (or `none`) says otherwise, and the
+  console's `larger picture: the switch on, the Desktop streams: the standard
+  arrangement` says what the rule made of the switch and the source;
+  `-SillVideoSize 848x844` gives the mock's
   frame another shape, so the harness draws a window the Mac fitted to the
   picture's room (2800x1800 otherwise); `-SillLargerPictureToggle 4,8`
   switches it at those seconds as the panel's switch does (leave out

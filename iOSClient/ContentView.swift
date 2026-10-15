@@ -202,8 +202,11 @@ struct ContentView: View {
 ///   but `legacy`, whose group then says to update Sill on the Mac.
 /// * `-Sill.largerPicture 1` — not a harness argument either: this device's Larger Picture switch
 ///   (the Settings panel's This iPhone group; docs/larger-picture-plan.md) on for one run, in the
-///   normal app too. A phone held upright then has no thumbnails, the picture's room down to the
-///   keyboard's estimated top less the rows (PhonePortraitLayout), and the Menus button in row 1.
+///   normal app too. A phone held upright then has, while a window streams, no thumbnails, the
+///   picture's room down to the keyboard's estimated top less the rows (PhonePortraitLayout), and the
+///   Menus button in row 1; with the Desktop or nothing streaming (`-SillActive desktop|none` in the
+///   mock, whose default is a window) the usual arrangement, and the console's `larger picture: the
+///   switch on, the Desktop streams: the standard arrangement` says so.
 ///   `-SillVideoSize 848x844` gives the mock's frame another shape (2800x1800 otherwise), so the
 ///   pane at the top of that room can be drawn as a window the Mac fitted to it, or a taller one.
 ///   `-SillLargerPictureToggle <s>[,<s>…]` switches it at those seconds after the stream screen

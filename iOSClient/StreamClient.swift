@@ -3050,7 +3050,8 @@ final class StreamClient: ObservableObject {
 
     /// This device's switch for Larger Picture (the Settings panel's This iPhone group; issue #58,
     /// docs/larger-picture-plan.md): off unless turned on. The device's own preference, never sent to
-    /// the Mac; the stream screen reads it (`PhonePortraitLayout.keyboard(for:largerPicture:foldable:)`).
+    /// the Mac; the stream screen reads it with what streams (`active`): it acts only while a window
+    /// does (`PhonePortraitLayout.largerPicture(switchOn:streaming:)`).
     static let largerPictureKey = "Sill.largerPicture"
 
     /// A three- or four-finger gesture a surface decided (TrackpadGestures, StrokeObserver), to the

@@ -10,16 +10,18 @@ import CoreGraphics
 /// the trackpad; row 1, with the Keyboard button, stays above it on every phone).
 ///
 /// Larger Picture (Settings › This iPhone, issue #58; docs/larger-picture-plan.md): with the switch
-/// on and the software keyboard's height known (`keyboard`), the thumbnails' row goes and the picture
-/// gets every point that keeps the key row `keyboardClearance` above the keyboard (on an 18 Pro Max
-/// 424×422 against 424×265); the trackpad is the keyboard's footprint, so nothing moves when it comes
-/// up, and the Apps drawer opens above row 1, where no keyboard reaches (`drawer`). The picture's
-/// frame then takes the picture's own shape inside that room (`pane(video:)`, so a 16:10 window
-/// keeps its shape and a taller one gains), and the viewport is the whole room, which the Mac fits
-/// a window to once Aa sets its text size (or on the virtual display). It applies only
-/// where it makes the picture larger (`largerPictureGains`: not where Display Zoom makes the screen
-/// 320 pt wide). Every rectangle is still a function of the screen's size, the keyboard's height and
-/// the switch alone; the frame and the trackpad's span also of the picture's shape.
+/// on while a window streams (`largerPicture(switchOn:streaming:)`; the Desktop and nothing
+/// streaming keep the standard arrangement) and the software keyboard's height known (`keyboard`),
+/// the thumbnails' row goes and the picture gets every point that keeps the key row
+/// `keyboardClearance` above the keyboard (on an 18 Pro Max 424×422 against 424×265); the trackpad
+/// is the keyboard's footprint, so nothing moves when it comes up, and the Apps drawer opens above
+/// row 1, where no keyboard reaches (`drawer`). The picture's frame then takes the picture's own
+/// shape inside that room (`pane(video:)`, so a 16:10 window keeps its shape and a taller one
+/// gains), and the viewport is the whole room, which the Mac fits a window to once Aa sets its text
+/// size (or on the virtual display). It applies only where it makes the picture larger
+/// (`largerPictureGains`: not where Display Zoom makes the screen 320 pt wide). Every rectangle is
+/// still a function of the screen's size, the keyboard's height and the switch (with what streams)
+/// alone; the frame and the trackpad's span also of the picture's shape.
 ///
 /// `DuoLayout.outerPortrait` on an iPhone draws this (`DuoLayout.phoneArrangement`): every iPhone
 /// upright, and the Duo's outer display upright; an iPad window that narrow keeps the compact halves.
@@ -291,10 +293,31 @@ struct PhonePortraitLayout: Equatable {
         return wideKeyboard
     }
 
-    /// Larger Picture's keyboard for a stream screen of `container`: its estimate while the switch is
-    /// on, on a phone without a hinge, where Larger Picture earns its name (`largerPictureGains`); nil
-    /// (the standard arrangement) with the switch off, on the iPhone Duo (`foldable`), whose cover's
-    /// keyboard nobody has measured, and where the picture would not be larger.
+    /// What streams, as Larger Picture sees it: nothing (connecting, before the Desktop starts; a window
+    /// closed, or off the Mac's list for a moment; a pick that failed), the Mac's whole Desktop, or a
+    /// window: `StreamClient.active`'s three cases (StreamScreen maps them).
+    enum Streaming: CaseIterable { case nothing, desktop, window }
+
+    /// Larger Picture in effect: the switch on while a window streams, the one rule for everything the
+    /// switch decides (the arrangement, its viewport, the tour's targets and words), which
+    /// `keyboard(for:largerPicture:foldable:)` then places. The Desktop keeps the standard arrangement
+    /// (Noah, 2026-10-15, on his iPhone 15 Pro: "when in Desktop mode, there is negative space on the
+    /// bottom, seemingly because of the Mac aspect ratio"): Aa never resizes the Desktop, so the room's
+    /// extra height could only ever be black under it. So does nothing streaming, so the Desktop a
+    /// device asks for then (as it connects, and once a window has closed) arrives into the
+    /// arrangement it keeps, with no flip after its first picture. The Mac never passes through
+    /// nothing between two windows (it names the old one until the new one streams), so a switch
+    /// from window to window keeps Larger Picture throughout.
+    static func largerPicture(switchOn: Bool, streaming: Streaming) -> Bool {
+        switchOn && streaming == .window
+    }
+
+    /// Larger Picture's keyboard for a stream screen of `container`: its estimate while Larger Picture
+    /// is in effect (`largerPicture`: `largerPicture(switchOn:streaming:)`, which the stream screen
+    /// holds while its Settings panel is open), on a phone without a hinge, where Larger Picture earns
+    /// its name (`largerPictureGains`); nil (the standard arrangement) with the switch off, while the
+    /// Desktop or nothing streams, on the iPhone Duo (`foldable`), whose cover's keyboard nobody has
+    /// measured, and where the picture would not be larger.
     static func keyboard(for container: CGSize, largerPicture: Bool, foldable: Bool) -> CGFloat? {
         guard largerPicture, !foldable else { return nil }
         let keyboard = keyboardHeight(for: container)
@@ -315,9 +338,11 @@ struct PhonePortraitLayout: Equatable {
 
     /// Whether the Settings panel offers Larger Picture on a phone (without a hinge) whose stream
     /// screen is `screen` now, in either orientation: judged on it held upright, the shorter side
-    /// across. On its side the stream screen's longer side is short of the upright one by the side
-    /// insets (a notch's 44 to 68 pt each, none on an SE), which leaves the answer the same on every
-    /// iPhone, zoomed or not (Tests/checks/phone-portrait).
+    /// across, and whatever streams: as for a window, the only source it acts on (the Desktop keeps
+    /// the standard arrangement with the switch on, `largerPicture(switchOn:streaming:)`). On its
+    /// side the stream screen's longer side is short of the upright one by the side insets (a notch's
+    /// 44 to 68 pt each, none on an SE), which leaves the answer the same on every iPhone, zoomed or
+    /// not (Tests/checks/phone-portrait).
     static func offersLargerPicture(screen: CGSize) -> Bool {
         let upright = CGSize(width: min(screen.width, screen.height), height: max(screen.width, screen.height))
         return keyboard(for: upright, largerPicture: true, foldable: false) != nil

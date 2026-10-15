@@ -1,5 +1,6 @@
-"""H2 (docs/first-run-walkthrough-plan.md, §14 step 1) mutants of TourPolicy.swift: each changes it in one
-place, is compiled with the check and must make it fail. usage: mutants.py WORKTREE"""
+"""H2 (docs/first-run-walkthrough-plan.md, §14 step 1) mutants of TourPolicy.swift, and of Larger Picture's
+rule in PhonePortraitLayout.swift (docs/larger-picture-plan.md): each changes one in one place, is compiled
+with the check and must make it fail. usage: mutants.py WORKTREE"""
 import os, subprocess, sys, tempfile
 WT = sys.argv[1]; HERE = os.path.dirname(os.path.abspath(__file__))
 F = os.path.join(WT, "iOSClient/TourPolicy.swift")
@@ -99,15 +100,26 @@ MUTANTS = [
      'hint = "Under the windows: the row of keys, then the trackpad."'),
     ("the picture's room ignored", "let half = room ?? stream", "let half = stream"),
 ]
+# Larger Picture only while a window streams (Noah, 2026-10-15): the rule is PhonePortraitLayout's
+# (compiled into this check), and the tour's targets, words and places follow it. Each of these
+# changes PhonePortraitLayout.swift instead.
+LAYOUT = os.path.join(WT, "iOSClient/PhonePortraitLayout.swift")
+LAYOUT_MUTANTS = [
+    ("the Desktop with Larger Picture's tour", "switchOn && streaming == .window", "switchOn && streaming != .nothing"),
+    ("nothing streaming with Larger Picture's tour", "switchOn && streaming == .window", "switchOn && streaming != .desktop"),
+    ("what streams ignored (the Desktop's tour about Apps, as before 2026-10-15)", "switchOn && streaming == .window", "switchOn"),
+    ("the switch ignored while a window streams", "switchOn && streaming == .window", "streaming == .window"),
+]
 caught = 0
-for name, old, new in MUTANTS:
-    src = open(F).read()
+for (name, old, new), path in [(m, F) for m in MUTANTS] + [(m, LAYOUT) for m in LAYOUT_MUTANTS]:
+    src = open(path).read()
     if src.count(old) != 1:
         print(f"{name}: NOT APPLIED (pattern found {src.count(old)} times)"); continue
     with tempfile.TemporaryDirectory() as t:
-        mf = os.path.join(t, "TourPolicy.swift"); open(mf, "w").write(src.replace(old, new, 1))
+        mf = os.path.join(t, os.path.basename(path)); open(mf, "w").write(src.replace(old, new, 1))
+        sources = [mf, LAYOUT] if path == F else [F, mf]
         exe = os.path.join(t, "c")
-        r = subprocess.run(["swiftc", "-O", mf, os.path.join(WT, "iOSClient/PhonePortraitLayout.swift"), os.path.join(WT, "iOSClient/DuoPosture.swift"),
+        r = subprocess.run(["swiftc", "-O", *sources, os.path.join(WT, "iOSClient/DuoPosture.swift"),
                             os.path.join(HERE, "main.swift"), "-o", exe], capture_output=True, text=True)
         if not os.path.exists(exe): print(f"{name}: did not compile ({r.stderr.strip().splitlines()[:1]})"); continue
         r = subprocess.run([exe], capture_output=True, text=True, timeout=300)
@@ -117,5 +129,6 @@ for name, old, new in MUTANTS:
             print(f"{name}: caught ({failed[0][:100] if failed else f'exit status {r.returncode}'})")
         else:
             print(f"{name}: NOT CAUGHT")
-print(f"mutants caught: {caught} of {len(MUTANTS)}")
-sys.exit(0 if caught == len(MUTANTS) else 1)
+total = len(MUTANTS) + len(LAYOUT_MUTANTS)
+print(f"mutants caught: {caught} of {total}")
+sys.exit(0 if caught == total else 1)

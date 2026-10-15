@@ -8,7 +8,11 @@ settings option. The triage of 2026-10-13 (sill-handoff `triage/2026-10-13-open-
 recommended the design below, and the run that started this branch took it as the default. Device
 only: no wire change, nothing on the host, the switch is the device's own and never sent. An
 adversarial review the same day found five things, each fixed on this branch (Results, "The review
-and its fixes"): rules 8, 10 and 11 and open questions 9 to 11 come from it.
+and its fixes"): rules 8, 10 and 11 and open questions 9 to 11 come from it. Noah tried the branch
+on his iPhone 15 Pro on 2026-10-15: "Larger Picture seems to work properly. However, when in Desktop
+mode, there is negative space on the bottom, seemingly because of the Mac aspect ratio. Can we
+disable this feature when Desktop mode is active?" Since then it applies only while a window streams
+(rule 12, open questions 12 to 14; Results, "The Desktop keeps the standard arrangement").
 
 ## The problem
 
@@ -28,22 +32,25 @@ Below the key row there is only the trackpad, which the keyboard covers anyway.
 Settings › This iPhone gains **Larger Picture** (off by default; `Sill.largerPicture` in the app's
 defaults; shown only on an iPhone without a hinge whose picture it makes larger, where it acts: not
 where Display Zoom makes the screen 320 pt wide). With it on, a phone held upright
-draws the Larger Picture arrangement: the thumbnails' row goes, and the picture gets every point
-that keeps the key row 10 pt above the software keyboard: room = container − keyboard − 152 pt
-(18 Pro Max 424×265 → 424×422, 15 Pro 377×235 → 377×340, SE 359×224 → 359×262: the triage's 279
-took the SE's keyboard as 216 pt, and it measures 233). The trackpad
+draws the Larger Picture arrangement while a window streams (the Desktop, which Aa never resizes,
+and nothing streaming keep the standard one: rule 12): the thumbnails' row goes, and the picture
+gets every point that keeps the key row 10 pt above the software keyboard: room = container −
+keyboard − 152 pt (18 Pro Max 424×265 → 424×422, 15 Pro 377×235 → 377×340, SE 359×224 →
+359×262: the triage's 279 took the SE's keyboard as 216 pt, and it measures 233). The trackpad
 becomes the keyboard's footprint, so nothing moves when the keyboard comes up; row 1 and the key row
 stay where that rule puts them. The picture's frame takes the picture's own shape inside its room,
 from the top: a 16:10 window keeps its shape, a taller one gains, and a window the Mac fits to the
 room (Aa set, or the virtual display) fills it. The viewport is the whole room, so toggling sends
-one new viewport (one restart while the Mac fits the window). The trackpad's vertical span follows
+one new viewport (one restart while the Mac fits the window), and so does a switch between the
+Desktop and a window, as a rotation does. The trackpad's vertical span follows
 the picture's real shape, so a stroke moves the pointer as far down as across. Windows stay
 reachable from Apps (tapping an open app again shows its next window) and from the Mac's Window
 menu: the Menus button moves into row 1, after Apps, while the Mac sent menus. The Apps drawer opens
-above row 1, over the room, so no keyboard covers it, and a change of the switch shows when the
-Settings panel closes, so the panel never moves under the finger. Every rect is a pure function of
-the screen's size, the keyboard's height and the switch (and the frame and the span also of the
-picture's shape), in `PhonePortraitLayout`, checked in `Tests/checks/phone-portrait`.
+above row 1, over the room, so no keyboard covers it, and a change of the switch (or of what
+streams) shows when the Settings panel closes, so the panel never moves under the finger. Every rect
+is a pure function of the screen's size, the keyboard's height and the switch with what streams (and
+the frame and the span also of the picture's shape), in `PhonePortraitLayout`, checked in
+`Tests/checks/phone-portrait`.
 
 ### The rule
 
@@ -101,7 +108,25 @@ W × H is the stream screen (the screen less its top inset, as before); K the ke
 11. **When it applies:** a change of the switch shows when the Settings panel closes, in the panel's
    own motion (StreamScreen's `largerPictureHeld`, held by `setSettings`): the panel hangs under row
    1, which the switch moves by the picture's growth (118 pt on an 18 Pro, 157 on a Pro Max), so the
-   switch would jump from under the finger that flipped it (the review). Its footnote says so.
+   switch would jump from under the finger that flipped it (the review). Its footnote says so. Since
+   rule 12 the panel holds the arrangement itself, Larger Picture as it was in effect when it opened
+   (`largerPictureNow`), so a change of what streams while it is open (a window closed on the Mac,
+   another device's pick) waits for it to close too.
+12. **Only while a window streams** (Noah, 2026-10-15): Larger Picture is in effect with the switch on
+   while the Mac's window list says a window streams (`PhonePortraitLayout.largerPicture(switchOn:
+   streaming:)`, from `StreamClient.active`); the Desktop keeps the standard arrangement, the 16:10
+   pane and the thumbnails, because Aa never resizes the Desktop, so the room's extra height could
+   only be black under it (on the 15 Pro a 14-inch MacBook Pro's Desktop drew 377×244 at the top of a
+   377×340 room, 96 pt of black; on the 18 Pro Max 424×275 in 424×422, 147 pt). So does nothing
+   streaming (connecting until the Desktop starts; a window closed, until the Desktop the device then
+   asks for; a window off the Mac's list for a moment, a Space change; a pick that failed), so the
+   Desktop's first picture arrives into the arrangement it keeps and nothing flips after it (open
+   question 13). The Mac never reports nothing between two windows (it names the old window until
+   the new one streams), so a switch from window to window keeps Larger Picture throughout. One rule
+   for everything the switch decides: StreamScreen hands `keyboard(for:largerPicture:foldable:)` its
+   answer, and the arrangement, its viewport, the tour's targets and words and the cards' places all
+   follow from that keyboard; the Settings panel's switch and its footnote do not depend on what
+   streams (the switch is offered as for a window, the footnote says it is a window's picture).
 
 ```swift
 struct PhonePortraitLayout {        // additions
@@ -117,6 +142,8 @@ struct PhonePortraitLayout {        // additions
     func pane(video: CGSize) -> CGRect        // the frame, rule 6
     func trackpadSpan(video: CGSize) -> CGFloat
     static func keyboardHeight(for container: CGSize) -> CGFloat
+    enum Streaming: CaseIterable { case nothing, desktop, window }                       // rule 12
+    static func largerPicture(switchOn: Bool, streaming: Streaming) -> Bool             // switchOn && .window
     static func keyboard(for container: CGSize, largerPicture: Bool, foldable: Bool) -> CGFloat?
     static func largerPictureGains(_ container: CGSize, keyboard: CGFloat) -> Bool   // rule 10
     static func offersLargerPicture(screen: CGSize) -> Bool                             // the panel's switch
@@ -130,7 +157,7 @@ is the screen less its top inset (as the simulators gave it: the Air's is 68 pt)
 switch off; K is the keyboard as measured (Results, S2), which the rule's estimate gives on each
 (marked * where nobody measured it: Display Zoom's). The drawer is the room + 16 pt, above row 1.
 
-| Phone (container) | K | Room (today's picture) | Row 1 | Key row | Trackpad (today) | Panel room (today) | Drawer | The Desktop's frame |
+| Phone (container) | K | Room (today's picture) | Row 1 | Key row | Trackpad (today) | Panel room (today) | Drawer | A window of the Desktop's shape |
 |---|---|---|---|---|---|---|---|---|
 | 18 Pro Max (440×894) | 320 | 424×422 (424×265), +59 % | 454–504 | 520–564 | 412×304 at 574 (389) | 366 (523) | 438 | 424×275 |
 | 15 Pro Max, 16 Plus (430×873) | 320 | 414×401 (414×258), +55 % | 433–483 | 499–543 | 402×304 at 553 (375) | 366 (509) | 417 | 414×268 |
@@ -146,8 +173,12 @@ switch off; K is the keyboard as measured (Results, S2), which the rule's estima
 | 6.1-inch or mini with Display Zoom (320×645) | 320* | not offered: 304×173 against today's 304×190, six buttons of 42 | | | | | | |
 | SE with Display Zoom (320×548) | 233* | not offered: 304×163 against today's 304×188, six buttons of 42 | | | | | | |
 
-The Desktop of a 14-inch MacBook Pro (1512×982 pt, 1.54:1) is a little taller than 16:10, so its
-frame gains 10 pt on the Pro Max; a 16:10 window gains nothing until the Mac fits it to the room.
+A window of the shape of a 14-inch MacBook Pro's Desktop (1512×982 pt, 1.54:1) is a little taller
+than 16:10, so its frame gains 10 pt on the Pro Max; a 16:10 window gains nothing until the Mac fits
+it to the room. The Desktop itself keeps the standard arrangement since 2026-10-15 (rule 12): its
+frame is today's picture, the Desktop fitted inside it (408×265 on the Pro Max, 362×235 on the 15
+Pro), where the branch drew it 424×275 and 377×244 at the top of the room, 147 and 96 pt of black
+under it.
 Row 1's six buttons with Menus are 62 pt wide on the Pro Max and 51.2 on the 375 pt phones, the
 narrowest Larger Picture applies to; at 320 pt they would be 42, under a touch target's 44. The
 ruler's step is 36 with six on every phone. The panel room with Larger Picture is K + 46 pt (279 on
@@ -172,17 +203,24 @@ under Larger Picture's row 1 kept 62 pt in view on every phone, today's keeps 21
 - **Row 1** gets the Menus button after Apps while the Mac sent menus (`buttonsBesideMenus`,
   `rulerStepBesideMenus`), fading with the others under the Aa ruler.
 - **The trackpad** gets `trackpadSpan(video:)`.
-- **`StreamScreen`** reads the switch (`@AppStorage`) and the hinge (`posture.hinge`), asks
-  `PhonePortraitLayout.keyboard(for:largerPicture:foldable:)` for the phone's layout, and passes it
-  down; the tour learns whether the thumbnails show. While the Settings panel is open it keeps the
-  switch as it was when the panel opened (`largerPictureHeld`, rule 11), and it tells the panel
-  whether to offer the switch (`largerPictureOffered`, rule 10).
+- **`StreamScreen`** reads the switch (`@AppStorage`), what streams (`client.active`, mapped to
+  `PhonePortraitLayout.Streaming`) and the hinge (`posture.hinge`), puts the first two through rule
+  12 (`largerPictureNow`), asks `PhonePortraitLayout.keyboard(for:largerPicture:foldable:)` for the
+  phone's layout, and passes it down; the tour learns whether the thumbnails show and the room.
+  While the Settings panel is open it keeps Larger Picture as it was in effect when the panel opened
+  (`largerPictureHeld`, rule 11), and it tells the panel whether to offer the switch
+  (`largerPictureOffered`, rule 10). Its viewport follows the arrangement (PortraitStreamScreen's
+  picture), so a switch between the Desktop and a window sends a new one, as a rotation does; and a
+  thumbnail's lights, which hang from the strip, close when the arrangement changes under them
+  (what streams changed, or a turn), rather than come back unasked with the strip.
 - **`HostSettingsPanel`**, This iPhone: "Larger Picture" before Three-Finger Gestures, with its
-  footnote: "Held upright, the picture takes the place of the window thumbnails and reaches down to
-  where the keyboard comes up. Switch windows with Apps: tap an open app again for its next window.
-  To fill the taller picture with a window, set its text size with Aa. The picture changes when you
-  close Settings." Only where the stream screen offers it (`largerPictureOffered`): an iPhone
-  without a hinge whose picture it makes larger.
+  footnote: "Held upright, a window’s picture takes the place of the window thumbnails and reaches
+  down to where the keyboard comes up. The Desktop keeps the thumbnails. Switch windows with Apps:
+  tap an open app again for its next window. To fill the taller picture with a window, set its text
+  size with Aa. A change applies when you close Settings." (Until 2026-10-15: "Held upright, the
+  picture takes the place …" and "The picture changes when you close Settings.") Only where the
+  stream screen offers it (`largerPictureOffered`): an iPhone without a hinge whose picture it makes
+  larger, whatever streams.
 - **The tour** (`TourPolicy`): a target for Apps (`TourTarget.apps`, row 1's Apps on a phone);
   without the thumbnails the bar card lights Apps, Aa and Keyboard (Menus between them) and its
   first row is about Apps ("Apps lists the apps on ‹Mac›: tap an open one again for its next
@@ -201,7 +239,10 @@ under Larger Picture's row 1 kept 62 pt in view on every phone, today's keeps 21
   without VoiceOver, once a private simulator's `ApplicationAccessibilityEnabled` is on); console
   lines `keyboard: up, 320 pt tall, its top at 574 pt in the stream screen; the key row ends 10 pt
   above it, …` and `trackpad: 412×304 pt, vertical span 410.1 pt (Larger Picture: …)` in the
-  phone's arrangement.
+  phone's arrangement, and (rule 12) `larger picture: the switch on, the Desktop streams: the
+  standard arrangement` or `…, a window streams: Larger Picture above a 320 pt keyboard` whenever
+  the switch, what streams or the outcome changes (nothing while the switch is off); the mock streams
+  a window unless `-SillActive desktop|none`.
 
 ## Open questions for Noah (the default is taken unless Noah says otherwise)
 
@@ -243,6 +284,27 @@ under Larger Picture's row 1 kept 62 pt in view on every phone, today's keeps 21
    alternative applies it at once, animated, and scrolls the panel's rows by the room's growth to
    keep the switch under the finger (the panel's height changes by as much, and it can change
    between its scrolling and its fitting forms meanwhile, which resets the scroll).
+12. **The Desktop with the switch on.** Noah's decision (2026-10-15, his test on the iPhone 15 Pro):
+   **the standard arrangement** (rule 12): Aa never resizes the Desktop, so the room's extra height
+   was black under it. Before, the branch gave the Desktop the room too.
+13. **Nothing streaming.** Default: **the standard arrangement**, as for the Desktop (rule 12):
+   connecting, a window closed until the Desktop the device then asks for, a window off the Mac's
+   list for a moment (a Space change), a pick that failed. The Desktop's first picture then arrives
+   into the arrangement it keeps. The alternative keeps the last source's arrangement while nothing
+   streams: a window back on the Mac's list would come back with no flip, but the Desktop asked for
+   once a window has closed could show its first picture in the room and then flip, since its frames
+   can reach the device before the window list that names it (the Mac starts the capture, then
+   sends the list). The Mac never reports nothing between two windows, so neither choice touches a
+   switch from window to window.
+14. **The viewport while the Desktop streams.** Default: **the arrangement's picture, the 16:10
+   pane**, as everywhere. While Aa is set (or on the virtual display) a window picked from the
+   Desktop is fitted twice: to the pane by the pick (the last viewport the Mac has), then to the
+   room once the window list reaches the device and the arrangement changes, one restart, as a
+   rotation's (Results); a window already at the room's size, picked again after the Desktop,
+   shrinks to the pane on the Mac and grows back, and on the device it shows at the pane's size for
+   a moment first. The alternative sends the room while the Desktop (or nothing) streams with the
+   switch on (a Mac ignores a viewport's size then), so a picked window starts at the room's size,
+   with no second fit and no restart; the viewport would then not be the picture on screen.
 
 ## Test plan
 
@@ -267,8 +329,17 @@ scratchpad.
 | R2 | The review: live, the drawer with the Mac's keyboard up and with its search field's, on the 18 Pro Max, the 15 Pro and the SE; the switch off for comparison | The whole drawer above the keyboard, at the rule's rect |
 | R3 | The review: the switch flipped with the Settings panel open (harness and live) | Nothing moves until the panel closes; then one viewport |
 | R4 | The review: VoiceOver's order with the drawer open above row 1 | Row 1, then the drawer |
+| D1 | Rule 12: `Tests/checks/phone-portrait`: the rule's table; on every phone of the table the Desktop and nothing streaming with the switch on against the switch off (every rect, the viewport, the frames and the spans), a window against Larger Picture; the grid (a window gets the keyboard, the Desktop and nothing none, the switch off none, a hinge none); Noah's numbers; the Duo's cover; mutants of the rule | All pass, every mutant caught |
+| D2 | Rule 12: `Tests/checks/tour`: the tour as StreamScreen hands it to the overlay, from the rule: with the switch on, every card of the Desktop's and of nothing's (words, lights, places, under VoiceOver too) against the switch off's, a window's against Larger Picture's; mutants of the rule | All pass, every mutant caught |
+| D3 | Rule 12: harness photos on a private iPhone 18 Pro Max simulator, at its own stream screen (`-SillLayout 440x956 -SillSafeArea 62,0,34,0`) and the 15 Pro's (393x793): the switch on against off with the Desktop and with nothing streaming (plain, the drawer, the ruler, the tour's bar card, Settings); a window against the branch's build before the change (af462f7) | The Desktop's and nothing's the switch off's pixel for pixel (Settings: but the switch); a window's the branch's (Settings: but the footnote) |
+| D4 | Rule 12, live: the new build against `SillHost --synthetic` (loopback, software encoder), Larger Picture on, Aa at 1× and not set, a test client switching the Mac between the Desktop and a test window of the agent's own (all but invisible, behind every window, never key) | The arrangement and the viewport follow each switch; at most one restart per switch |
 
-**Untested, for Noah (P), on the iPhone 15 Pro:** the switch on and off with Notes and Chrome
+**Untested, for Noah (P), on the iPhone 15 Pro:** since rule 12, with the switch on, the Desktop
+as with the switch off (the 16:10 picture and the thumbnails, no black under it); a window picked
+from the thumbnails or Apps: Larger Picture as the window appears (the thumbnails go), and with Aa
+set the window grows into the room once, a moment later; the Desktop again (row 1's Desktop): the
+thumbnails back; a window closed on the Mac: the thumbnails back at once, then the Desktop; the
+footnote's new words; the switch on and off with Notes and Chrome
 streaming (a 16:10 window keeps its shape; Aa then fits it to the taller picture; a taller window
 gains; the change shows as Settings closes); the keyboard up and down (the key row stays above it,
 nothing moves); windows from Apps and from Menus › Window; Apps with the keyboard up and a search in
@@ -417,11 +488,90 @@ created for its runs and deleted after), against main's build (985a733, from `gi
   its two headers and its 119 rows. (Before `AfterRow1` the tree put the drawer's 123 elements first, row 1 after.)
   The switch off: main's order, row 1 then the drawer; the switch on with nothing open: as in S3.
 
+### The Desktop keeps the standard arrangement (Noah's test, 2026-10-15)
+
+Noah, on his iPhone 15 Pro: "Larger Picture seems to work properly. However, when in Desktop mode,
+there is negative space on the bottom, seemingly because of the Mac aspect ratio. Can we disable this
+feature when Desktop mode is active?" The Desktop is the Mac's display, 1.54:1 on a 14-inch MacBook
+Pro, and Aa never resizes it, so in the room it stayed at its own shape with black under it (377×244
+in 377×340 on the 15 Pro, 96 pt; 424×275 in 424×422 on the Pro Max, 147 pt). Now rule 12: Larger
+Picture is in effect only while a window streams, one pure function of the switch and of what
+streams (`PhonePortraitLayout.largerPicture(switchOn:streaming:)`) that StreamScreen puts in front
+of `keyboard(for:largerPicture:foldable:)`, so the arrangement, its viewport and the tour's targets,
+words and room all follow it; nothing streaming keeps the standard arrangement too (open question
+13); the Settings panel holds the arrangement itself while it is open (rule 11), and its footnote
+says the switch is for a window's picture. The iPhone Duo's cover is as the branch left it (no
+keyboard on a hinge, whatever streams). Device only, as before. Run on 2026-10-15 (the simulator
+private, "Sill larger-picture desktop", an iPhone 18 Pro Max on iOS 27.0, deleted after; every host
+`SillHost --synthetic` of this worktree on 127.0.0.1 alone and on the software encoder, killed by
+PID; Noah's iPhone was streaming from Sill.app over the cable meanwhile, so nothing used the
+hardware encoder):
+
+- **D1, `phone-portrait`:** 484 checks (401 before; among the new, the rule's table, every phone of
+  the table with the switch on against off for the Desktop and for nothing streaming, every rect,
+  the viewport, the frames for six shapes and the spans, a window against Larger Picture, Noah's
+  numbers, the Duo's cover, and a grid rule over the 285,150 sizes) and 73 of 73 mutants (68 before;
+  5 of the rule: the Desktop with Larger Picture, nothing streaming with it, what streams ignored,
+  the switch ignored while a window streams, the rule turned around).
+- **D2, `tour`:** 111,189 checks (111,079 before: on six phones the tour as StreamScreen hands it,
+  composed from the rule, every card's words, lights and places at three heights, under VoiceOver
+  too) and 84 of 84 mutants (80 before; 4 of the rule in PhonePortraitLayout.swift, which the check
+  compiles: the Desktop's tour about Apps, nothing's, what streams ignored, the switch ignored).
+- **H1 and H4 again:** iOS Debug and Release for the generic simulator and Debug for a generic
+  device, `CODE_SIGNING_ALLOWED=NO`: `** BUILD SUCCEEDED **`, only the known `StreamClient` capture
+  warning (StreamClient.swift:3436); the Release binary holds the new footnote and none of the DEBUG
+  lines (the new `larger picture:` line included). `Tests/checks/run-all.sh`: all 40 passed (6 min).
+- **D3, harness photos** (36 of the new build, 16 of the branch's before the change, af462f7 from
+  `git archive`; the 18 Pro Max's own stream screen, `-SillLayout 440x956 -SillSafeArea 62,0,34,0`,
+  its console's `trackpad: 412×389 pt`, and the 15 Pro's, `-SillLayout 393x793`):
+  - The Desktop with the switch on against off, both sizes: plain, the drawer, the Aa ruler and the
+    tour's bar card pixel for pixel identical; the Settings panel (at This iPhone) only in the switch
+    itself, 12,428 px within 63×28 pt (the review's R3 measured the same).
+  - Nothing streaming, the switch on against off: identical. The Desktop with the switch on against
+    the branch's with it off: identical, so the standard arrangement is the branch's (and main's).
+  - A window with the switch on against the branch's: plain, the drawer, the ruler and the tour's
+    bar card identical at both sizes; the Settings panel only from the footnote down (its words; on
+    the Pro Max it is a line longer, seven against six).
+  - The branch's Desktop with the switch on, Noah's finding: the Desktop's frame at the top of the
+    room, the black under it, which the new build no longer draws.
+- **D4, live** (the normal app with `-SillConnect 127.0.0.1:P -Sill.largerPicture 1`, the 18 Pro Max;
+  a test window of the agent's own, 1 % opaque, ignoring clicks, behind every window and refusing to
+  be raised or made key; `sillclient.py` picking it, the Desktop, it and the Desktop 4, 12, 20 and
+  28 s in). With Aa at 1× (`-SillScaleOpen 1 -SillScale 1`), the device's console: `larger picture:
+  the switch on, nothing streams: the standard arrangement` and `viewport: 424×265 pt` as it
+  connected; the Desktop: the standard arrangement, 424×265; each pick of the window: `larger
+  picture: the switch on, a window streams: Larger Picture above a 320 pt keyboard`, then
+  `viewport: 424×422 pt, scale 1, 60 fps`; each return to the Desktop: the standard arrangement,
+  `viewport: 424×265 pt`. The host: the first pick "Resized testwindow to 424×265 pt (asked 424×265
+  for a 424×265 panel at 1.0×)", streaming at 800×532 (the capture read the window's size from
+  before the resize, the lag the virtual display's notes describe), then the room's "Resized
+  testwindow to 424×422 pt (asked 424×422 for a 424×422 panel at 1.0×)" and one restart, streaming
+  at 424×422; the Desktop "Streaming a synthetic test pattern", its 424×265 viewport changing nothing
+  (a Mac ignores a viewport's size while the Desktop streams); the second pick resized to 424×265 and
+  to 424×422 again, no restart (its capture had started at the room's size). So one restart at most
+  per switch, as a rotation's. With Aa not set: no resize and no restart, the viewport still
+  following the arrangement (424×422 with the window, 424×265 with the Desktop) and the window at its
+  own shape (424×281 in the room). One test client and the device connected once and left once.
+- **The lights:** a thumbnail's lights hang from the strip, so with the arrangement now changing by
+  itself (what streams) they would have stayed open unseen in Larger Picture and come back with the
+  strip; they now close when the arrangement changes (StreamScreen). The harness with a window,
+  `-SillWindowMenu 1 -SillLargerPictureToggle 4,8` on a second private simulator (deleted after):
+  "lights: closed, the phone's arrangement changed under them" at the 4 s switch. Five photos of
+  this final build (the Desktop and a window, both sizes, the tour's card, the drawer) are pixel for
+  pixel the ones above.
+- **Found:** with Aa set, a window picked from the Desktop is fitted twice (the 16:10 pane by the
+  pick, the room once the arrangement changes), and the agent's window, already at the room's size
+  on the second pick, shrank to 424×265 and grew back to 424×422: open question 14 has the
+  alternative. Each switch sends the same viewport twice, 0.25 s apart (StreamScreen's repeat when
+  the source changes, then the arrangement's own); the Mac's 2 pt compare makes the second a no-op.
+
 **Not verified here:** a real window fitted to the room (a synthetic host's Desktop is never
-resized; the harness drew it with `-SillVideoSize`); a device's own keyboard (only simulators were
+resized; the harness drew it with `-SillVideoSize`; the live run fitted the agent's own test window,
+whose picture is all but transparent); a device's own keyboard (only simulators were
 measured, and only iOS 27's), input methods with a candidate bar, third-party keyboards and Display
 Zoom's keyboards; VoiceOver itself (the dump is the tree's order); the tour on a fresh install on a
-device; a real iPhone Duo; the Menus button's Large Content Viewer (the review's third finding).
+device; a real iPhone Duo; the Menus button's Large Content Viewer (the review's third finding);
+the Desktop and a window switching on a device with Noah's own windows.
 
 ## Progress
 
@@ -434,3 +584,8 @@ device; a real iPhone Duo; the Menus button's Large Content Viewer (the review's
   the switch applying as Settings closes (0cbe883); the docs, these results and the review's section
   (cfad7f3, and this line). Simulators deleted; the review's photos in
   `~/Downloads/sill-handoff/larger-picture/review-fixes/`. PR #79's body updated; left for Noah.
+- 2026-10-15, Noah's test on his iPhone 15 Pro (the Desktop's negative space): Larger Picture only
+  while a window streams (rule 12, open questions 12 to 14, the Results' "The Desktop keeps the
+  standard arrangement"), the checks and their mutants, the docs and the support page, in one commit.
+  The simulator deleted; the photos and the live run's logs in
+  `~/Downloads/sill-handoff/larger-picture/desktop/`. PR #79's body updated; left for Noah.
