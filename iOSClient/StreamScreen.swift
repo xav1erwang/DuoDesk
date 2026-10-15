@@ -127,6 +127,9 @@ struct StreamScreen: View {
     /// The Menus pull-down closed the Settings panel, which had taken the keyboard down: it comes
     /// back when the pull-down goes (`menusClosed`).
     @State private var keyboardAfterMenus = false
+    /// The Menus pull-down is open: it takes the arrows and Return itself, so a hardware keyboard's
+    /// hold lets go meanwhile (`keyboardTakers`).
+    @State private var menusOpen = false
     /// Pair This iPad… (the panel's Away from home group): the pairing overlay covers the stream.
     /// Up here, like the panel, so a rotation keeps it. An outside sill://pair link shows the same
     /// overlay with its confirmation.
@@ -342,6 +345,10 @@ struct StreamScreen: View {
         .onChange(of: client.connected) { _, up in
             if up { sendViewport() }
         }
+        // A hardware keyboard (docs/hardware-keyboard-plan.md §2): the input view takes the keyboard by
+        // itself while one is attached and nothing open takes it, never as the person's own.
+        .onReceive(HardwareKeyboardMonitor.shared.$attached) { overlay.update(attached: $0) }
+        .onChange(of: keyboardTakers, initial: true) { _, takers in overlay.update(takers: takers) }
         // Rotation animates, and a Mac window resize restarts the stream, so let the size settle.
         .onChange(of: panelSize) { _, _ in sendViewport(after: 0.25) }
         // Same wait for Aa: cycling from Off to 0.8× passes three sizes nobody wants the Mac to try.
@@ -496,6 +503,23 @@ struct StreamScreen: View {
                 overlay.toggleKeyboard()
             }
         }
+        // `-SillTurnAt <s>[,<s>…]`: at each second the scene is asked for the other orientation (upright
+        // or sideways, from the screen's shape then), a turn mid-session with no hand on the simulator
+        // (an iPhone's; iPadOS's windowing refuses it, and says so).
+        let turns = (defaults.string(forKey: "SillTurnAt") ?? "")
+            .split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Double($0) }.filter { $0 >= 0 }
+        for time in turns {
+            after(time) {
+                for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+                    let bounds = scene.keyWindow?.bounds ?? .zero
+                    let mask: UIInterfaceOrientationMask = bounds.width > bounds.height ? .portrait : .landscapeRight
+                    print("turn: at \(Self.points(CGFloat(time))) s, asking for " + (mask == .portrait ? "portrait" : "landscape"))
+                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
+                        print("turn: refused: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
         // `-SillAXDump <s>`: s seconds in, the screen's accessibility elements in the order the
         // accessibility tree hands them out (VoiceOver's order, without VoiceOver), labels and frames.
         let dump = defaults.double(forKey: "SillAXDump")
@@ -569,6 +593,19 @@ struct StreamScreen: View {
 
     /// Pair This iPad…, or an outside link waiting for its confirmation.
     private var overlayShown: Bool { pairingOverlay || client.pendingLink != nil }
+
+    /// What is open over the stream that takes the keyboard for itself or must keep keys from the Mac
+    /// (HardwareKeyboardPolicy.Taker): while any is, a hardware keyboard's hold lets go, and it comes
+    /// back when the last closes.
+    private var keyboardTakers: Set<HardwareKeyboardPolicy.Taker> {
+        var takers: Set<HardwareKeyboardPolicy.Taker> = []
+        if settingsOpen { takers.insert(.settings) }
+        if overlayShown { takers.insert(.pairing) }
+        if tour != nil { takers.insert(.tour) }
+        if drawerOpen { takers.insert(.drawer) }
+        if menusOpen { takers.insert(.menus) }
+        return takers
+    }
 
     /// Pair This iPad…: the panel and the keyboard are put away first, so no key reaches the Mac
     /// while the code is typed, then the overlay covers the stream. What an earlier pairing left
@@ -652,6 +689,7 @@ struct StreamScreen: View {
         setSettings(false, restoreKeyboard: false)
         windowMenu = nil
         withAnimation(.easeOut(duration: 0.18)) { drawerOpen = false }
+        menusOpen = true
     }
 
     private func menusClosed() {
@@ -660,6 +698,7 @@ struct StreamScreen: View {
         #endif
         if keyboardAfterMenus { overlay.setKeyboard(shown: true) }
         keyboardAfterMenus = false
+        menusOpen = false
     }
 
     // MARK: The tour
@@ -694,6 +733,8 @@ struct StreamScreen: View {
         if settingsOpen { return "Settings was open" }
         if windowMenu != nil { return "a window's lights were open" }
         if scaleOpen { return "the Aa ruler was open" }
+        // The person's own keyboard: a hardware keyboard's hold is not theirs, so a person with a
+        // keyboard attached still gets the tour (HardwareKeyboardPolicy).
         if keyboardShown { return "the keyboard was up" }
         if overlayShown { return "the pairing overlay was open" }
         // UIKit's word, not the scene phase: in a headless simulator the environment's scenePhase

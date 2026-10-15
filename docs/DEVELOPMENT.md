@@ -426,6 +426,50 @@ logs the shortcut it would post with "(not posted: a test host)", so
 without touching the Mac, and `SILL_TEST_HOTKEYS=108=off` (or `defaults`) gives
 such a host a table of its own instead of this Mac's shortcuts.
 
+## A hardware keyboard and trackpad on the device
+
+With a keyboard attached to the iPhone or iPad (a Magic Keyboard, a Smart
+Keyboard, a Bluetooth keyboard: whatever GameController counts as one), what is
+typed goes to the Mac as soon as the picture shows, without the Keyboard
+button: the stream's input view takes the keyboard by itself at a session's
+start, after a rotation or a reconnect, and again when the Settings panel, Pair
+This iPad…, the first-run tour, the Apps list or the Menus pull-down closes.
+While one of those is open its own keys win: Esc closes Settings, skips the tour
+or cancels pairing, and nothing reaches the Mac. Each Sill window is its own:
+Settings open in one window leaves Esc to the stream in another, and Esc closes
+only the panel of the window it was pressed in. When the keyboard goes, the
+input view lets go. It draws nothing meanwhile (an empty input view, no
+shortcuts bar), so no on-screen keyboard comes up over the stream even where
+iPadOS and GameController disagree about the keyboard. The Keyboard button
+keeps its meaning for the software keyboard: it lights only when you asked for
+it; with a keyboard attached, pressing it brings back iPadOS's own keyboard
+views (its small bar, from which the on-screen keyboard can be shown), and
+pressing it again takes them down while keys still reach the Mac. That
+automatic hold is not yours, so the first-run tour still shows to someone with
+a keyboard. `iOSClient/HardwareKeyboardPolicy.swift` is the rule, checked in
+`Tests/checks/hardware-keyboard`; docs/hardware-keyboard-plan.md has the rest.
+
+Esc reaches the Mac from `pressesBegan`, as every other key, and also through key
+commands for Esc with each combination of ⌃, ⌥, ⇧ and ⌘ that ask for priority
+over iPadOS's text and focus systems, since an iPad has been seen keeping a
+hardware Escape from `pressesBegan` (#67). One key press goes out once,
+whichever channel brings it (`ForwardedKeys`). Debug builds print a line for
+every hardware key the input view sees and how it came, `hwkey: usage 41 down
+via keyCommand (shift): to the Mac`, and `-SillKeyProbe 1` adds GameController's
+own view of each key. Control-[ reaches the Mac as Control plus the [ key,
+which iTerm2, zsh's vi mode and Zed's vim mode take as Escape.
+
+Over the picture, two fingers on a Magic Keyboard's trackpad (or a Magic
+Trackpad or Magic Mouse) scroll the window under the pointer as a finger does,
+with the same coast after a flick, and a mouse's wheel scrolls it in plain
+steps. Clicks and drags with the trackpad were already the pointer's. Over the
+portrait layout's on-screen trackpad a hardware trackpad's scroll does nothing.
+
+No device has run these yet: in the simulator Esc came through `pressesBegan`
+and a virtual mouse's scrolls reached only the wheel's pan, so Esc's key
+command and the trackpad's pan wait for a device (the plan's steps 1 and 9),
+and so do the public words for them (the plan, "Words that wait for a device").
+
 ## The Mac's menus on the device
 
 The app a device streams keeps its menu bar on the Mac, and the device shows
@@ -865,10 +909,21 @@ simulator:
 - `-SillKeyboard 1` brings the software keyboard up in a live session (in the
   mock it only lights the button), and `-SillKeyboardToggle 5,8.5` toggles it
   at those seconds as the Keyboard button does. A simulator shows it only
-  with no hardware keyboard connected to it.
+  while UIKit there counts no hardware keyboard: a fresh one (keys from
+  `Tests/keyrig` make it count one for good).
+- `-SillHardwareKeyboard 1` or `0`: a hardware keyboard attached, or not, for
+  the run, whatever GameController says. A simulator's GameController always
+  counts the simulator's own keyboard, so the input view takes the keyboard by
+  itself there unless this says `0` (it draws nothing either way). The console
+  prints `keyboard: …` for what the rule does and `hwkey: …` for every key.
+  `-SillKeyProbe 1` adds GameController's own view of each key,
+  `-SillEscViaCommand 1` hands Esc on from `pressesBegan` so its key commands
+  take it, and `-SillTurnAt 6,12` turns an iPhone's scene at those seconds.
 - `-SillInputTest 1`, with `-SillConnect` on this Mac's loopback: the portrait
   key row taps cmd, esc, shift and ctrl and the trackpad strokes, taps and
-  scrolls, through their own code, once. A synthetic host posts nothing (it
+  scrolls, through their own code, once; in every layout the stream's input
+  view then sends Esc and ⇧Esc through its key command, a trackpad's scroll
+  with its coast and a wheel's. A synthetic host posts nothing (it
   counts input as `in.dry`), but a real host, Sill.app included, posts it on
   this Mac: point it only at a synthetic host, or put a relay that drops
   input in front of the host.
@@ -955,6 +1010,21 @@ or more fingers, placed slowly, beside a resting thumb or with a brief extra
 contact too, sends its one gesture, or nothing, and nothing else. It runs on
 a simulator of its own (`SILL_TOUCHRIG_SIM`, made and deleted when missing),
 never XCUITest or a recording.
+
+### The key rig
+
+`Tests/keyrig/run.sh UDID keys 29,04,e3:down,1a,e3:up` presses Esc, A and ⌘W on
+a hardware keyboard inside a simulator, and `run.sh UDID point 'move
+300,200|wheel -3'` moves a mouse's pointer and turns its wheel (TEST ONLY:
+private interfaces, posted inside the simulator from a virtual HID device of its
+own, as the Duo rig does; never on the Mac). UIKit routes them as a real
+keyboard's and mouse's, so the stream's input view, its key commands, the
+tour's and the Settings panel's Esc and the wheel's pan run as on a device.
+With `SillHost --synthetic` and `SILL_TEST_INPUT_LOG=1` (and
+`SILL_TEST_POINTER_PATH`, without which a test host's Desktop takes no input)
+the host prints what each key would post. Only on a simulator of your own:
+after its keys, UIKit there counts a hardware keyboard for good. Its README
+has what it showed.
 
 ## Measuring latency
 
@@ -1182,7 +1252,8 @@ record field by field.
   back, against a window of its own, above).
 - `Tests/checks/`: the pure checks (above). `Tests/touchrig/`: the touch rig
   (above). `Tests/duorig/`: folds and turns the iPhone Duo simulator (TEST
-  ONLY, above). `.github/`: the CI, release and TestFlight workflows, and the
+  ONLY, above). `Tests/keyrig/`: a hardware keyboard and mouse for the
+  simulator (TEST ONLY, above). `.github/`: the CI, release and TestFlight workflows, and the
   Sponsor button.
 - `site/`: the website, plain HTML for GitHub Pages: home, download, privacy
   policy, terms of service and support, with the App Store badge
