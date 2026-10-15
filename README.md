@@ -22,9 +22,11 @@ server in between.
 [![Download on the App Store](https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83)](https://apps.apple.com/app/id6816359860)
 
 Sill for Mac is a free, notarized download from
-[getsill.app](https://getsill.app/download). Sill for iPhone and iPad is free
-on the [App Store](https://apps.apple.com/app/id6816359860), and you can also
-build it from source (below).
+[getsill.app](https://getsill.app/download); with [Homebrew](https://brew.sh),
+`brew install --cask saffsanity/sill/sill` installs the same download from
+Sill's own [tap](https://github.com/Saffsanity/homebrew-sill). Sill for iPhone
+and iPad is free on the [App Store](https://apps.apple.com/app/id6816359860),
+and you can also build it from source (below).
 
 ## Screenshots
 
