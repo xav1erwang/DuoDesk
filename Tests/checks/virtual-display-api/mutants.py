@@ -1,5 +1,6 @@
-"""Mutants of VirtualDisplay.swift's private API surface and its TypeEncoding (#87, #62): each changes
-it in one place, is compiled with the check by build.sh and must make it fail.
+"""Mutants of VirtualDisplay.swift's private API surface, its TypeEncoding, Runtime.method's decision and
+the applySettings: call (#87, #62): each changes it in one place, is compiled with the check by build.sh
+and must make it fail.
 usage: mutants.py WORKTREE"""
 import os, subprocess, sys, tempfile
 WT = sys.argv[1]; HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,16 @@ MUTANTS = [
     ("a method left off the surface", '        ("CGVirtualDisplay", "displayID", "I@:"),\n', ""),
     ("an entry written with offsets", '("CGVirtualDisplay", "initWithDescriptor:", "@@:@"),',
      '("CGVirtualDisplay", "initWithDescriptor:", "@24@0:8@16"),'),
+    # Runtime.method's decision, which the check asks through methodProblem about classes made at run time
+    ("Runtime.method's guard back to one spelling (as before #87)",
+     "guard accepted.contains(found) else {", "guard found == encoding else {"),
+    ("Runtime.method without normalized",
+     ".map { VirtualDisplay.TypeEncoding.normalized(String(cString: $0)) }", ".map { String(cString: $0) }"),
+    # The applySettings: call, which the check sends to classes made at run time
+    ("applySettings: sent expecting c@:@", '"applySettings:", "B@:@", as: Runtime.ApplyFn.self)',
+     '"applySettings:", "c@:@", as: Runtime.ApplyFn.self)'),
+    ("applySettings:'s NO read as YES", "return fn(display, sel, settings).boolValue",
+     "return fn(display, sel, settings).boolValue || true"),
 ]
 caught = 0
 for name, old, new in MUTANTS:

@@ -176,7 +176,7 @@ final class VirtualDisplay {
         let settings = try Runtime.newObject("CGVirtualDisplaySettings")
         try Runtime.setUInt32(settings, "setHiDPI:", scale == 2 ? 1 : 0)
         try Runtime.setObject(settings, "setModes:", [mode] as NSArray)
-        guard try Runtime.applySettings(display, settings) else { throw Failure.applySettingsFailed }
+        guard try VirtualDisplay.applySettings(settings, to: display) else { throw Failure.applySettingsFailed }
 
         let id = try Runtime.getUInt32(display, "displayID")
         guard id != 0 else { throw Failure.noDisplayID }
@@ -264,25 +264,44 @@ final class VirtualDisplay {
     /// (The colour primaries setters are optional and not listed; `setDispatchQueue:` is
     /// accepted in place of `setQueue:`.)
     static func checkPrivateAPI() -> [String] {
-        var problems: [String] = []
-        for entry in privateAPISurface {
-            do {
-                let c: AnyClass = try Runtime.cls(entry.cls)
-                do {
-                    _ = try Runtime.method(c, entry.selector, entry.encoding)
-                } catch where entry.selector == "setQueue:" {
-                    _ = try Runtime.method(c, "setDispatchQueue:", entry.encoding)
-                }
-            } catch {
-                problems.append("\(error)")
-            }
+        privateAPISurface.compactMap { entry -> String? in
+            let problem = methodProblem(cls: entry.cls, selector: entry.selector, encoding: entry.encoding)
+            guard problem != nil, entry.selector == "setQueue:" else { return problem }
+            return methodProblem(cls: entry.cls, selector: "setDispatchQueue:", encoding: entry.encoding)
         }
-        return problems
+    }
+
+    /// `Runtime.method`'s decision for one entry of the surface: nil when the class named `cls` has
+    /// an instance method `selector` whose type encoding, without its offsets, is one that
+    /// `TypeEncoding.accepted(encoding)` takes; else the problem, as `checkPrivateAPI` lists it.
+    /// Tests/checks/virtual-display-api asks it about classes it makes at run time, so the check
+    /// runs this decision rather than a copy of it.
+    static func methodProblem(cls: String, selector: String, encoding: String) -> String? {
+        do {
+            _ = try Runtime.method(Runtime.cls(cls), selector, encoding)
+            return nil
+        } catch {
+            return "\(error)"
+        }
+    }
+
+    /// `[display applySettings:settings]`, as `init` sends it to its `CGVirtualDisplay`. The method
+    /// is checked first (`Runtime.method`) against "B@:@", a `BOOL` return, which the runtime
+    /// spells "B" or "c" (`TypeEncoding.accepted` has where each was seen). Either way it is one
+    /// byte in the return register, read here as `ObjCBool`, which is `BOOL` on each architecture:
+    /// C99 `bool` on arm64, the same code a Swift `Bool` gives there, and `signed char` on x86_64,
+    /// where any byte but 0 is YES; a Swift `Bool` there would take the byte as it comes, which is
+    /// safe only for a 0 or a 1. Tests/checks/virtual-display-api sends it to classes it makes at
+    /// run time.
+    static func applySettings(_ settings: AnyObject, to display: AnyObject) throws -> Bool {
+        let (fn, sel) = try Runtime.imp(display, "applySettings:", "B@:@", as: Runtime.ApplyFn.self)
+        return fn(display, sel, settings).boolValue
     }
 
     /// How a method's type encoding, as the Objective-C runtime reports it, is matched against the
     /// one `privateAPISurface` gives. Pure: `Tests/checks/virtual-display-api` holds it, and the
-    /// surface, to the encodings measured and reported on Apple silicon and Intel Macs.
+    /// surface, to the encodings measured on Apple silicon, natively and under Rosetta, and
+    /// reported from Intel machines.
     enum TypeEncoding {
         /// `v24@0:8@16` → `v@:@`. Offsets vary by architecture; the types are what matter.
         static func normalized(_ encoding: String) -> String {
@@ -296,13 +315,13 @@ final class VirtualDisplay {
         /// `applySettings:` has been spelled both ways: "c@:@" on an Intel Mac mini with macOS
         /// 15.7.3 (#87), where "B@:@" alone made `Runtime.method` throw `Failure.signatureChanged`
         /// and every virtual display fall back to the real window, though the method was there and
-        /// worked; "B@:@" on an Intel machine with macOS 26.7.1, going by #62's report, where an
-        /// x86_64 build of 985a733 (build 585), which expected "B@:@" alone, passed the self test
-        /// (the encoding itself was not printed); and "c@:@" again under Rosetta on macOS 27.0.1
-        /// (c24@0:8@16). arm64 reads "B@:@" (B24@0:8@16 on macOS 27.0.1). So both are taken on
-        /// every architecture, with no `#if arch`, and the arm64 build CI makes compiles the only
-        /// path. Either is one byte in the return register, which `Runtime.applySettings` reads as
-        /// `ObjCBool`.
+        /// worked; "B@:@" on an Intel machine running macOS 26.7.1 through OpenCore, going by #62's
+        /// report, where an x86_64 build of 985a733 (build 585), which expected "B@:@" alone,
+        /// passed the self test (the encoding itself was not printed); and "c@:@" again under
+        /// Rosetta on macOS 27.0.1 (c24@0:8@16). arm64 reads "B@:@" (B24@0:8@16 on macOS 27.0.1).
+        /// So both are taken on every architecture, with no `#if arch`, and the arm64 build CI
+        /// makes compiles the only path. Either is one byte in the return register, which
+        /// `applySettings(_:to:)` reads as `ObjCBool`.
         static func accepted(_ expected: String) -> [String] {
             expected.first == "B" ? [expected, "c" + expected.dropFirst()] : [expected]
         }
@@ -327,7 +346,8 @@ private enum Runtime {
     }
 
     /// Finds an instance method and checks its type encoding (`VirtualDisplay.TypeEncoding`). Used
-    /// on classes (for init selectors, before an instance exists) and via `imp` on live objects.
+    /// on classes (for init selectors, before an instance exists, and by `VirtualDisplay.methodProblem`)
+    /// and via `imp` on live objects.
     static func method(_ c: AnyClass, _ selector: String, _ encoding: String) throws -> (IMP, Selector) {
         let sel = NSSelectorFromString(selector)
         guard let method = class_getInstanceMethod(c, sel) else {
@@ -431,16 +451,5 @@ private enum Runtime {
     static func getUInt32(_ target: AnyObject, _ selector: String) throws -> UInt32 {
         let (fn, sel) = try imp(target, selector, "I@:", as: GetUIntFn.self)
         return fn(target, sel)
-    }
-
-    /// `applySettings:` returns `BOOL`, whose type encoding the runtime spells "B" or "c"
-    /// (`VirtualDisplay.TypeEncoding.accepted` has where each was seen). Either way it is one byte
-    /// in the return register, read here as `ObjCBool`, which is `BOOL` on each architecture: C99
-    /// `bool` on arm64, the same code a Swift `Bool` gives there, and `signed char` on x86_64,
-    /// where any byte but 0 is YES; a Swift `Bool` there would take the byte as it comes, which is
-    /// safe only for a 0 or a 1.
-    static func applySettings(_ display: AnyObject, _ settings: AnyObject) throws -> Bool {
-        let (fn, sel) = try imp(display, "applySettings:", "B@:@", as: ApplyFn.self)
-        return fn(display, sel, settings).boolValue
     }
 }
