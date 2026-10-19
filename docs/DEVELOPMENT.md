@@ -171,7 +171,10 @@ Before anything else it checks each private class and selector the display needs
 with its type encoding, against `VirtualDisplay.privateAPISurface`; one missing or
 changed fails it, and makes the host stream real windows ("Virtual display
 unavailable: …" in the log). The `BOOL` that `applySettings:` returns passes
-spelled "B" or "c": macOS has spelled it both ways on Intel Macs (#87, #62).
+spelled "B" or "c". An Intel Mac mini with macOS 15.7.3 printed "c" (#87). "B"
+on Intel is inferred, not printed: an x86_64 build that took "B" alone passed the
+self test on an OpenCore machine with macOS 26.7.1 (#62). Apple silicon with
+macOS 27.0.1 reads "B", and "c" under Rosetta.
 
 First run: macOS asks for Screen Recording for Terminal
 (or Xcode, if you run it from there). Grant it, run again.

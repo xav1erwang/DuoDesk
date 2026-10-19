@@ -5025,7 +5025,9 @@ good.
   `Tests/checks/window-restore`), `VirtualDisplay` (private-API wrapper; its
   `TypeEncoding` says which type encodings the runtime may report for each method
   it calls, a `BOOL` return spelled "B" or "c" (#87, #62); pure,
-  `Tests/checks/virtual-display-api`),
+  `Tests/checks/virtual-display-api`, which also runs `Runtime.method`'s decision
+  and the `applySettings:` call, through `methodProblem` and `applySettings(_:to:)`,
+  on classes it makes at run time),
   `VirtualStage` (`--virtual-display`: owns the display and the moved window,
   geometry, prepare/release, emergency restore), `HostShutdown` (signal
   sources + atexit, installed only with the flag in the CLI, always in the app;
@@ -5551,8 +5553,9 @@ good.
   `pointer-watch`, `policy` (with its `home.swift`), `protocol`,
   `remote-rules` (with its `home.swift`), `settings-window` (Sill.app's
   `SettingsWindowFit`), `tour`, `update-policy`, `virtual-display-api`
-  (VirtualDisplay.swift whole, as VirtualDisplayProbe compiles it: its surface
-  and TypeEncoding against the encodings measured on Apple silicon and Intel Macs),
+  (VirtualDisplay.swift whole, as VirtualDisplayProbe compiles it: its surface,
+  TypeEncoding and Runtime.method's decision, on classes made at run time, against
+  the encodings measured on Apple silicon and reported from Intel machines),
   `window-restore` (WindowRestore's rule and sequences against a stand-in Mac,
   with a copy of the coordinator's glue around them) (the two encoder checks refuse a binary that links
   VideoToolbox). `run-all.sh
