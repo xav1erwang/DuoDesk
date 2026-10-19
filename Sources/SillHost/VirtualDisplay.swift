@@ -236,9 +236,8 @@ final class VirtualDisplay {
     }
 
     /// Every private class/selector/type encoding this file calls, in the order it calls them.
-    /// Encodings are Objective-C type strings with the frame offsets stripped. One of them is not
-    /// a literal: a `BOOL` return is spelled differently per architecture (`Runtime`'s
-    /// `boolReturnEncoding`).
+    /// Encodings are Objective-C type strings with the frame offsets stripped, and a `BOOL` return
+    /// is written "B", which `TypeEncoding.accepted` also takes spelled "c".
     static let privateAPISurface: [(cls: String, selector: String, encoding: String)] = [
         ("CGVirtualDisplayDescriptor", "init", "@@:"),
         ("CGVirtualDisplayDescriptor", "setName:", "v@:@"),
@@ -251,7 +250,7 @@ final class VirtualDisplay {
         ("CGVirtualDisplayDescriptor", "setQueue:", "v@:@"),
         ("CGVirtualDisplayDescriptor", "setTerminationHandler:", "v@:@?"),
         ("CGVirtualDisplay", "initWithDescriptor:", "@@:@"),
-        ("CGVirtualDisplay", "applySettings:", Runtime.boolReturnEncoding),
+        ("CGVirtualDisplay", "applySettings:", "B@:@"),
         ("CGVirtualDisplay", "displayID", "I@:"),
         ("CGVirtualDisplayMode", "initWithWidth:height:refreshRate:", "@@:IId"),
         ("CGVirtualDisplaySettings", "init", "@@:"),
@@ -281,6 +280,34 @@ final class VirtualDisplay {
         return problems
     }
 
+    /// How a method's type encoding, as the Objective-C runtime reports it, is matched against the
+    /// one `privateAPISurface` gives. Pure: `Tests/checks/virtual-display-api` holds it, and the
+    /// surface, to the encodings measured and reported on Apple silicon and Intel Macs.
+    enum TypeEncoding {
+        /// `v24@0:8@16` → `v@:@`. Offsets vary by architecture; the types are what matter.
+        static func normalized(_ encoding: String) -> String {
+            String(encoding.filter { !$0.isNumber })
+        }
+
+        /// The spellings that count as `expected`: itself and, for a `BOOL` return (written "B",
+        /// C99 `bool`), the same with "c" (`signed char`).
+        ///
+        /// The runtime spells a `BOOL` return as the Mac's CoreGraphics was built, and on x86_64
+        /// `applySettings:` has been spelled both ways: "c@:@" on an Intel Mac mini with macOS
+        /// 15.7.3 (#87), where "B@:@" alone made `Runtime.method` throw `Failure.signatureChanged`
+        /// and every virtual display fall back to the real window, though the method was there and
+        /// worked; "B@:@" on an Intel machine with macOS 26.7.1, going by #62's report, where an
+        /// x86_64 build of 985a733 (build 585), which expected "B@:@" alone, passed the self test
+        /// (the encoding itself was not printed); and "c@:@" again under Rosetta on macOS 27.0.1
+        /// (c24@0:8@16). arm64 reads "B@:@" (B24@0:8@16 on macOS 27.0.1). So both are taken on
+        /// every architecture, with no `#if arch`, and the arm64 build CI makes compiles the only
+        /// path. Either is one byte in the return register, which `Runtime.applySettings` reads as
+        /// `ObjCBool`.
+        static func accepted(_ expected: String) -> [String] {
+            expected.first == "B" ? [expected, "c" + expected.dropFirst()] : [expected]
+        }
+    }
+
     /// Releases the CGVirtualDisplay; the display disappears. Safe to call twice.
     func destroy() {
         object = nil
@@ -299,22 +326,18 @@ private enum Runtime {
         return c
     }
 
-    /// `v24@0:8@16` → `v@:@`. Offsets vary by architecture; the types are what matter.
-    static func normalized(_ encoding: String) -> String {
-        String(encoding.filter { !$0.isNumber })
-    }
-
-    /// Finds an instance method and checks its type encoding. Used on classes (for init
-    /// selectors, before an instance exists) and via `imp` on live objects.
+    /// Finds an instance method and checks its type encoding (`VirtualDisplay.TypeEncoding`). Used
+    /// on classes (for init selectors, before an instance exists) and via `imp` on live objects.
     static func method(_ c: AnyClass, _ selector: String, _ encoding: String) throws -> (IMP, Selector) {
         let sel = NSSelectorFromString(selector)
         guard let method = class_getInstanceMethod(c, sel) else {
             throw VirtualDisplay.Failure.selectorMissing(cls: NSStringFromClass(c), selector: selector)
         }
-        let found = method_getTypeEncoding(method).map { normalized(String(cString: $0)) } ?? "?"
-        guard found == encoding else {
+        let found = method_getTypeEncoding(method).map { VirtualDisplay.TypeEncoding.normalized(String(cString: $0)) } ?? "?"
+        let accepted = VirtualDisplay.TypeEncoding.accepted(encoding)
+        guard accepted.contains(found) else {
             throw VirtualDisplay.Failure.signatureChanged(cls: NSStringFromClass(c), selector: selector,
-                                                         expected: encoding, found: found)
+                                                         expected: accepted.joined(separator: " or "), found: found)
         }
         return (method_getImplementation(method), sel)
     }
@@ -377,7 +400,7 @@ private enum Runtime {
     typealias SetPointFn = @convention(c) (AnyObject, Selector, CGPoint) -> Void
     typealias SetBlockFn = @convention(c) (AnyObject, Selector, @convention(block) (UnsafeRawPointer?, UnsafeRawPointer?) -> Void) -> Void
     typealias GetUIntFn = @convention(c) (AnyObject, Selector) -> UInt32
-    typealias ApplyFn = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
+    typealias ApplyFn = @convention(c) (AnyObject, Selector, AnyObject) -> ObjCBool
 
     static func setObject(_ target: AnyObject, _ selector: String, _ value: AnyObject) throws {
         let (fn, sel) = try imp(target, selector, "v@:@", as: SetObjFn.self)
@@ -410,21 +433,14 @@ private enum Runtime {
         return fn(target, sel)
     }
 
-    /// The encoding of a `BOOL`-returning selector, which is not the same on every architecture:
-    /// `BOOL` is C99 `bool` ("B") where `OBJC_BOOL_IS_BOOL` holds (arm64) and `signed char` ("c")
-    /// where it does not (x86_64 macOS). `applySettings:` is the one selector here that returns
-    /// one, and spelling it "B@:@" outright read as a changed API on an Intel Mac: the guard threw
-    /// `Failure.changedSignature` and every virtual display fell back to streaming the real
-    /// window, though the method was present and working. The runtime reports what the platform
-    /// compiled, so the expectation has to follow it.
-    #if arch(x86_64)
-    static let boolReturnEncoding = "c@:@"
-    #else
-    static let boolReturnEncoding = "B@:@"
-    #endif
-
+    /// `applySettings:` returns `BOOL`, whose type encoding the runtime spells "B" or "c"
+    /// (`VirtualDisplay.TypeEncoding.accepted` has where each was seen). Either way it is one byte
+    /// in the return register, read here as `ObjCBool`, which is `BOOL` on each architecture: C99
+    /// `bool` on arm64, the same code a Swift `Bool` gives there, and `signed char` on x86_64,
+    /// where any byte but 0 is YES; a Swift `Bool` there would take the byte as it comes, which is
+    /// safe only for a 0 or a 1.
     static func applySettings(_ display: AnyObject, _ settings: AnyObject) throws -> Bool {
-        let (fn, sel) = try imp(display, "applySettings:", boolReturnEncoding, as: ApplyFn.self)
-        return fn(display, sel, settings)
+        let (fn, sel) = try imp(display, "applySettings:", "B@:@", as: ApplyFn.self)
+        return fn(display, sel, settings).boolValue
     }
 }

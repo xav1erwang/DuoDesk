@@ -167,6 +167,11 @@ the window back where it was and remove the display. Private API means the Mac
 companion is Developer ID distribution, never the Mac App Store.
 `swift run -c release SillHost --virtual-display-selftest` creates and destroys
 one display and reports what CoreGraphics, AppKit and ScreenCaptureKit see of it.
+Before anything else it checks each private class and selector the display needs,
+with its type encoding, against `VirtualDisplay.privateAPISurface`; one missing or
+changed fails it, and makes the host stream real windows ("Virtual display
+unavailable: …" in the log). The `BOOL` that `applySettings:` returns passes
+spelled "B" or "c": macOS has spelled it both ways on Intel Macs (#87, #62).
 
 First run: macOS asks for Screen Recording for Terminal
 (or Xcode, if you run it from there). Grant it, run again.
