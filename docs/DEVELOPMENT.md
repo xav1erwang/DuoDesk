@@ -793,8 +793,9 @@ ends, which three-finger strokes are gestures and what the Mac does with one,
 which modifiers a device's keys leave set on the Mac,
 the first-run tour, pairing at home (the doors, the cable, the device's rows),
 which keychain Sill.app keeps its identity in, the away quality and the link's
-judgement, the iPhone Duo's layouts, and what of the clipboard goes between
-the Mac and a device) on their own with a check each, and
+judgement, the iPhone Duo's layouts, what of the clipboard goes between the Mac
+and a device, and which type encodings the virtual display's private API may
+report) on their own with a check each, and
 runs them: about five minutes, no device, permission or encoder. `--mutants`
 also checks that each check fails when its file is changed in one place (well
 over an hour).
