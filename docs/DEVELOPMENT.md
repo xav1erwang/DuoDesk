@@ -459,7 +459,12 @@ whichever channel brings it (`ForwardedKeys`). Debug builds print a line for
 every hardware key the input view sees and how it came, `hwkey: usage 41 down
 via keyCommand (shift): to the Mac`, and `-SillKeyProbe 1` adds GameController's
 own view of each key. Control-[ reaches the Mac as Control plus the [ key,
-which iTerm2, zsh's vi mode and Zed's vim mode take as Escape.
+which iTerm2, zsh's vi mode and Zed's vim mode take as Escape. Return and Tab
+with Shift held reach the Mac as keys carrying it, so Shift-Return starts a new
+line in a chat box that sends on Return, and Shift-Tab moves focus back
+(`ForwardedKeys.shiftedKeyUsages`); alone they go through iPadOS's text system,
+as every typed character does. The key row's shift, latched, does the same for
+the on-screen keyboard's return and tab.
 
 Over the picture, two fingers on a Magic Keyboard's trackpad (or a Magic
 Trackpad or Magic Mouse) scroll the window under the pointer as a finger does,

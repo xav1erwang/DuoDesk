@@ -2,13 +2,14 @@ import Foundation
 import StreamProtocol
 
 // The keys this device sends for a shortcut: the Spotlight key's ⌘Space, the portrait key row's keys
-// with whatever is latched, a latched ⌘, ⌃ or ⌥ on the software keyboard, the modifiers the portrait
-// trackpad holds down around a click or a drag, and a hardware keyboard's keys (Esc also through a
-// key command, sent once whichever channel iPadOS uses). One place, so each
-// goes out the way a keyboard sends it: a shortcut's modifiers pressed with their own keys around it,
-// and every key's up after its down (2026-09-27, the stuck command after Spotlight). A shortcut sent
-// as one key down and up carrying its modifiers left them set on every Mac from before that fix,
-// which posted the up as it came, and the next click there was a ⌘-click.
+// with whatever is latched, a latched ⌘, ⌃ or ⌥ on the software keyboard (a latched shift with its
+// return or tab too), the modifiers the portrait trackpad holds down around a click or a drag, and a
+// hardware keyboard's keys (Esc also through a key command, sent once whichever channel iPadOS
+// uses). One place, so each goes out the way a keyboard sends it: a shortcut's modifiers pressed
+// with their own keys around it, and every key's up after its down (2026-09-27, the stuck command
+// after Spotlight). A shortcut sent as one key down and up carrying its modifiers left them set on
+// every Mac from before that fix, which posted the up as it came, and the next click there was a
+// ⌘-click.
 //
 // Pure: Foundation and StreamProtocol only, checked with swiftc beside the host's KeyStrokes
 // (Tests/checks/key-strokes), which is what the Mac makes of these events.
