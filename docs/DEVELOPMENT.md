@@ -167,6 +167,14 @@ the window back where it was and remove the display. Private API means the Mac
 companion is Developer ID distribution, never the Mac App Store.
 `swift run -c release SillHost --virtual-display-selftest` creates and destroys
 one display and reports what CoreGraphics, AppKit and ScreenCaptureKit see of it.
+Before anything else it checks each private class and selector the display needs,
+with its type encoding, against `VirtualDisplay.privateAPISurface`; one missing or
+changed fails it, and makes the host stream real windows ("Virtual display
+unavailable: …" in the log). The `BOOL` that `applySettings:` returns passes
+spelled "B" or "c". An Intel Mac mini with macOS 15.7.3 printed "c" (#87). "B"
+on Intel is inferred, not printed: an x86_64 build that took "B" alone passed the
+self test on an OpenCore machine with macOS 26.7.1 (#62). Apple silicon with
+macOS 27.0.1 reads "B", and "c" under Rosetta.
 
 First run: macOS asks for Screen Recording for Terminal
 (or Xcode, if you run it from there). Grant it, run again.
@@ -793,8 +801,9 @@ ends, which three-finger strokes are gestures and what the Mac does with one,
 which modifiers a device's keys leave set on the Mac,
 the first-run tour, pairing at home (the doors, the cable, the device's rows),
 which keychain Sill.app keeps its identity in, the away quality and the link's
-judgement, the iPhone Duo's layouts, and what of the clipboard goes between
-the Mac and a device) on their own with a check each, and
+judgement, the iPhone Duo's layouts, what of the clipboard goes between the Mac
+and a device, and which type encodings the virtual display's private API may
+report) on their own with a check each, and
 runs them: about five minutes, no device, permission or encoder. `--mutants`
 also checks that each check fails when its file is changed in one place (well
 over an hour).
