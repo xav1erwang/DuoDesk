@@ -5150,7 +5150,11 @@ good.
   iOSClient and Sources/StreamProtocol count), and an App Store address in
   `SillLinks.swift` that isn't one, and sourced it only defines its
   functions (docs/release-checklist.md, TestFlight). `Scripts/make-app.sh`
-  builds, iconizes, signs and installs the bundle; `Scripts/release.sh`
+  builds, iconizes, signs and installs the bundle (with `SILL_UNIVERSAL=1`
+  arm64 and x86_64, each in its own scratch path under `.build/universal`,
+  joined with lipo, for an Intel tester, #62; off by default, so releases
+  stay arm64, and `release.sh`'s `check_signature` reads every slice);
+  `Scripts/release.sh`
   (M6) makes the downloads from it:
   `make-app.sh --release`, `make-dmg.sh --prepare` (the image's tool and
   background, before anything goes to Apple), a zip (`ditto -c -k
@@ -5623,6 +5627,7 @@ Scripts/pacing/run.sh                   # remote pacing and the link's judge, th
 SILL_TEST_LOOPBACK=1 SILL_TEST_SOFTWARE_ENCODER=1 SILL_TEST_NO_ROUTER=1 SILL_TEST_ORIGIN=vpn SILL_TEST_PATTERN=noise .build/release/SillHost --synthetic --remote   # an away session whose stream follows its quality
 Scripts/make-app.sh                     # .build/Sill.app, signed with the Apple Development identity (~2 s unchanged)
 Scripts/make-app.sh --install --open    # Noah: replace /Applications/Sill.app (a running one quits first), launch it
+SILL_UNIVERSAL=1 Scripts/make-app.sh    # .build/Sill.app for Apple silicon and Intel (arm64 and x86_64) for an Intel tester (#62): twice the build time; the x86_64 slice has not streamed on an Intel Mac
 SILL_SIGN_IDENTITY='Developer ID Application: … (9B2KKVM937)' Scripts/make-app.sh --release   # M6
 SILL_SIGN_IDENTITY='Developer ID Application: … (9B2KKVM937)' SILL_NOTARY_PROFILE=sill-notary Scripts/release.sh [--dry-run]   # M6: the notarized download (docs/release-checklist.md)
 Scripts/release-ios.sh                  # the iOS app for App Store Connect: archive, export .build/ios/export/Sill.ipa, check it; uploads nothing

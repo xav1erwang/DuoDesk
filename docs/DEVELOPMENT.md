@@ -64,6 +64,19 @@ another folder. With no Apple Development identity in the keychain it signs ad
 hoc and says so, and then Screen Recording and Accessibility have to be granted
 again after every rebuild (see Permissions).
 
+`SILL_UNIVERSAL=1 Scripts/make-app.sh` builds a universal Sill.app, arm64 and
+x86_64, for someone testing on an Intel Mac (#62): one build per architecture,
+each in its own scratch path under `.build/universal`, joined with `lipo`, then
+stamped, iconized and signed as usual. It takes about twice as long, and
+`.build/release/SillMenuBar` is not refreshed, so it is off by default; unset,
+the build is for this Mac's architecture alone. The x86_64 slice has never
+streamed on an Intel Mac: until it has, README, the site, the App Store text
+and the Homebrew cask's `depends_on arch: :arm64` stay Apple silicon, and
+releases stay arm64 (`release.sh` names the architectures it built and checks
+every slice's signature). On the Intel Mac, `Sill.app/Contents/MacOS/Sill
+--virtual-display-selftest` checks the virtual display (moving the pointer onto
+it for a moment) and `--encoder-selftest` the video encoder.
+
 Sill lives in the menu bar: no Dock icon, no window at launch. The menu shows
 whether it is visible on the network, each connected device with its frame
 rate, frame age, round trip and how it is connected ("Wired", "Wi-Fi" or
