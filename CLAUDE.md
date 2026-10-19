@@ -4971,7 +4971,9 @@ good.
   `WindowCatalog` (polls windows and thumbnails only while a client is
   connected; icons; installed apps in the background), `InstalledApps`
   (where those are found: each applications folder and the folders inside it,
-  one level down, never inside a bundle, #76; pure, `Tests/checks/installed-apps`),
+  at any depth (#135's), never inside a bundle, another package or a
+  framework, and never through a link inside a scanned folder (one given that
+  is itself a link is followed), #76; pure, `Tests/checks/installed-apps`),
   `WindowCapture` (ScreenCaptureKit), `SyntheticCapture` (test pattern for
   `--synthetic`; SILL_TEST_PATTERN=noise adds a square of noise,
   SILL_TEST_PATTERN=picture:<path> shows a still picture instead), `HEVCEncoder` (VideoToolbox with one frame inside, a

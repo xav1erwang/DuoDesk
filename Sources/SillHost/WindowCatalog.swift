@@ -351,6 +351,8 @@ final class WindowCatalog {
     /// Sorted by display name, first bundle ID wins. Thread-safe (FileManager + Bundle only).
     nonisolated private static func findInstalledApps() -> [(name: String, bundleID: String, path: String)] {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        // Both Utilities folders are read twice, as a folder inside /Applications or /System/Applications
+        // and as given: harmless, since the first bundle with an ID wins and the second read finds the same ones.
         return InstalledApps.find(in: ["/Applications", "/Applications/Utilities", "/System/Applications",
                                        "/System/Applications/Utilities", home.appendingPathComponent("Applications").path])
     }
