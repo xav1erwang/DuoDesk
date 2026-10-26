@@ -367,8 +367,46 @@ check("kind 23 is hello (update-notice); 24, 25 and 27 the Mac's menus; 26 the M
       header(23)?.kind == .hello && header(24)?.kind == .macMenu && header(25)?.kind == .pressMenuItem
       && header(27)?.kind == .fetchMenu && header(26)?.kind == .macPointer)
 check("kind 28 is gesture (trackpad gestures), 29 unknown (skipped)", header(28)?.kind == .gesture && header(29)?.kind == .unknown)
-check("kind 32 is the clipboard; 29, 30, 31 and 33 unknown (skipped)",
-      header(32)?.kind == .clipboard && [29, 30, 31, 33].allSatisfy { header(UInt8($0))?.kind == .unknown })
+check("kind 32 is the clipboard, 33 requests recovery, 34 resets video; reserved kinds remain unknown",
+      header(32)?.kind == .clipboard && header(33)?.kind == .requestKeyframe
+      && header(34)?.kind == .streamReset
+      && [29, 30, 31, 35].allSatisfy { header(UInt8($0))?.kind == .unknown })
+let recovery = StreamMessage(kind: .requestKeyframe, timestamp: 1, isKeyframe: false, payload: Data()).serialized()
+check("decoder recovery keeps the bounded header and empty payload",
+      recovery.count == StreamMessage.headerLength && StreamMessage.parseHeader(recovery)?.payloadLength == 0)
+var resetEpoch = VideoStreamEpoch()
+let resetMessage = StreamMessage(kind: .streamReset, timestamp: 1, isKeyframe: false, payload: resetEpoch.nextReset()).serialized()
+check("video reset keeps the bounded header and eight-byte epoch",
+      resetMessage.count == StreamMessage.headerLength + 8 && StreamMessage.parseHeader(resetMessage)?.payloadLength == 8)
+let videoInput = InputEvent.pointer(.leftDown, x: 0.5, y: 0.25)
+let videoControl = VideoControlPayload(epoch: 0x0102030405060708, payload: Wire.encode(videoInput))!
+let taggedInput = StreamMessage(kind: .input, timestamp: 1, isKeyframe: false, payload: videoControl.encoded).serialized()
+check("tagged input preserves kind 8 and the full bounded payload length",
+      StreamMessage.parseHeader(taggedInput)?.kind == .input
+      && StreamMessage.parseHeader(taggedInput)?.payloadLength == Wire.encode(videoInput).count + 12)
+let inputBody = VideoControlPayload(encoded: Data(taggedInput.dropFirst(StreamMessage.headerLength)))
+check("video identity and pointer coordinates survive message framing",
+      inputBody?.epoch == 0x0102030405060708 && inputBody.flatMap { Wire.decode(InputEvent.self, from: $0.payload) } == videoInput)
+let videoGesture = TrackpadGesture(gesture: TrackpadGesture.swipeLeft, fingers: 3)
+let gestureBody = VideoControlPayload(encoded: VideoControlPayload(epoch: 1, payload: Wire.encode(videoGesture))!.encoded)
+check("gesture uses the same video prefix with its existing JSON type",
+      gestureBody.flatMap { Wire.decode(TrackpadGesture.self, from: $0.payload) } == videoGesture
+      && Wire.decode(InputEvent.self, from: gestureBody!.payload) == nil)
+let ordinaryCatalog = Wire.encode(WindowList(macName: "test", windows: [], active: .desktop))
+check("ordinary and legacy catalogs do not claim dry-run input",
+      Wire.decode(WindowList.self, from: ordinaryCatalog)?.inputDryRun == nil
+      && !String(decoding: ordinaryCatalog, as: UTF8.self).contains("inputDryRun"))
+let dryCatalog = WindowList(macName: "test", windows: [], active: .desktop, inputDryRun: true)
+check("test catalog explicitly confirms non-posting input",
+      Wire.decode(WindowList.self, from: Wire.encode(dryCatalog))?.inputDryRun == true)
+var unconfirmedCatalog = try JSONSerialization.jsonObject(with: ordinaryCatalog) as! [String: Any]
+unconfirmedCatalog["inputDryRun"] = false
+let falseCatalog = try JSONSerialization.data(withJSONObject: unconfirmedCatalog)
+unconfirmedCatalog["inputDryRun"] = "true"
+let malformedCatalog = try JSONSerialization.data(withJSONObject: unconfirmedCatalog)
+check("false and malformed dry-run attestations cannot authorize test input",
+      Wire.decode(WindowList.self, from: falseCatalog)?.inputDryRun != true
+      && Wire.decode(WindowList.self, from: malformedCatalog) == nil)
 check("kinds 16 and 17 unchanged", header(16)?.kind == .hostSettings && header(17)?.kind == .changeSettings)
 check("caps: 1 MiB client, 4 KiB pairing, 32 MiB frames, 4 MiB other",
       StreamMessage.maxClientPayload == 1_048_576 && StreamMessage.maxPairingPayload == 4096

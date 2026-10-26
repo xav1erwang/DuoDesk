@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import UIKit
 import AVFoundation
 import Combine
@@ -5,15 +6,76 @@ import CoreMedia
 import SwiftUI
 import StreamProtocol
 
-/// A UIView whose layer is an AVSampleBufferDisplayLayer, which decodes HEVC in hardware itself.
-/// No VTDecompressionSession needed for the spike.
+/// Presents IOSurface backed frames produced by the verified hardware HEVC decoder.
 final class HEVCDisplayView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
     private var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
 
-    private var formatDescription: CMVideoFormatDescription?
-    private var waitingForKeyframe = true
-    private var lastParameterSets: Data?
+    var onNativeDisplaySize: ((DuoNativeDisplayMetrics) -> Void)?
+    var onDecoderFailure: ((String) -> Void)?
+    var onKeyframeNeeded: (() -> Void)?
+    private var displayedGeneration: UInt64?
+    var hasCurrentImage: Bool {
+        guard let token = displayedGeneration else { return false }
+        return window != nil && hardwareDecoder.isCurrent(token) && videoPresenter.isReady(token)
+    }
+    /// Taken on main with a touch, checked on the network queue before it is sent. Captures the
+    /// thread-safe decoder and token only, so queued input never reads UIKit from another thread.
+    func makeInputFence() -> @Sendable () -> Bool {
+        let decoder = hardwareDecoder
+        guard let token = displayedGeneration, decoder.isCurrent(token) else { return { false } }
+        let presentation = videoPresenter.makeInputFence(token)
+        return { decoder.isCurrent(token) && presentation() }
+    }
+    private lazy var videoPresenter: HardwareVideoPresenter = HardwareVideoPresenter(renderer: displayLayer.sampleBufferRenderer, onFirstImage: { [weak self] size, token in
+        Task { @MainActor [weak self] in
+            guard let self, self.hardwareDecoder.isCurrent(token), self.videoPresenter.isReady(token) else { return }
+            self.displayedGeneration = token
+            self.pointerVideoSize = size
+            self.onVideoSize?(size)
+            self.placeCursor()
+            self.onVideoSizeForPointer?(size)
+        }
+    }, onFailure: { [weak self] message, token, revision in
+        Task { @MainActor [weak self] in
+            guard let self, self.hardwareDecoder.isCurrent(token),
+                  self.videoPresenter.isCurrentSurface(token, revision: revision) else { return }
+            self.onDecoderFailure?(message)
+        }
+    })
+    private lazy var hardwareDecoder: HardwareHEVCDecoder = {
+        let presenter = videoPresenter
+        return HardwareHEVCDecoder(onFormat: { _, token in
+            presenter.reset(token)
+        }, onSample: { sample, token in
+            presenter.enqueue(sample, generation: token)
+        }, onFailure: { [weak self] message, token in
+            Task { @MainActor [weak self] in
+                guard let self, self.hardwareDecoder.isCurrent(token) else { return }
+                self.onDecoderFailure?(message)
+            }
+        }, onNeedsKeyframe: { [weak self] token in
+            Task { @MainActor [weak self] in
+                guard let self, self.hardwareDecoder.isCurrent(token) else { return }
+                self.onKeyframeNeeded?()
+            }
+        })
+    }()
+
+    func requireNativeResolution(_ resolution: DuoDesktopResolution?) {
+        let token = hardwareDecoder.require(resolution)
+        videoPresenter.reset(token)
+    }
+
+    private func reportNativeDisplaySize() {
+        guard let window, let screen = window.windowScene?.screen else { return }
+        let windowPixels = [window.bounds.width * screen.nativeScale, window.bounds.height * screen.nativeScale].sorted()
+        let native = [screen.nativeBounds.width, screen.nativeBounds.height].sorted()
+        // A fold briefly reports the new hinge with the old scene metrics. Do not cache that
+        // transient outer-display size as the inner display's native resolution.
+        guard abs(windowPixels[0] - native[0]) < 2, abs(windowPixels[1] - native[1]) < 2 else { return }
+        onNativeDisplaySize?(DuoNativeDisplayMetrics(pixels: screen.nativeBounds.size, windowSize: window.bounds.size))
+    }
 
     /// The streamed frame's pixel size, reported on main whenever new parameter sets arrive.
     /// Input needs it: touches are normalized against the video, not against this view.
@@ -73,14 +135,41 @@ final class HEVCDisplayView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// AVFoundation's renderer counters, not enqueued/received frames or the panel's maximum Hz.
+    @MainActor
+    func presentationMetrics() async -> (total: Int, dropped: Int)? {
+        guard #available(iOS 17.4, *) else { return nil }
+        guard let metrics = await displayLayer.sampleBufferRenderer.videoPerformanceMetrics else { return nil }
+        return (metrics.totalNumberOfFrames, metrics.numberOfDroppedFrames)
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        presentationHierarchyChanged()
+        reportNativeDisplaySize()
         // A standalone layer renders at 1× unless told otherwise; the arrow should be crisp.
         if let scale = window?.screen.scale { cursorLayer.contentsScale = scale }
     }
 
+    private weak var presentationWindow: UIWindow?
+    private weak var presentationParent: UIView?
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        presentationHierarchyChanged()
+    }
+    private func presentationHierarchyChanged() {
+        let changed = presentationWindow !== window || presentationParent !== superview
+        presentationWindow = window; presentationParent = superview
+        guard changed, let token = displayedGeneration, hardwareDecoder.isCurrent(token) else { return }
+        videoPresenter.refreshSurface(token)
+        #if DEBUG
+        print("Video surface rehosted: attached=\(window != nil), generation=\(token)")
+        #endif
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        reportNativeDisplaySize()
         placeCursor()   // rotation and letterbox changes move the video rect under it
         #if DEBUG
         if let debugFrame {
@@ -226,97 +315,23 @@ final class HEVCDisplayView: UIView {
         return shape
     }
 
-    /// Thread-safe: AVSampleBufferDisplayLayer's enqueue/flush are documented as safe off main.
-    func apply(_ ps: ParameterSets) {
-        // The host repeats the parameter sets with every keyframe. Only a real change (a new source,
-        // a resize) needs a new format description and a blank layer; a repeat must not flicker.
-        let encoded = ps.encoded()
-        if encoded == lastParameterSets, formatDescription != nil { return }
-        lastParameterSets = encoded
-        let buffers = ps.sets.map { set -> UnsafeMutablePointer<UInt8> in
-            let p = UnsafeMutablePointer<UInt8>.allocate(capacity: set.count)
-            set.copyBytes(to: p, count: set.count)
-            return p
-        }
-        defer { buffers.forEach { $0.deallocate() } }
-        let pointers = buffers.map { UnsafePointer($0) }
-        let sizes = ps.sets.map(\.count)
+    /// VideoToolbox owns decoding; the layer receives only decoded image buffers.
+    func apply(_ ps: ParameterSets) { hardwareDecoder.apply(ps) }
 
-        var desc: CMVideoFormatDescription?
-        let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-            allocator: nil, parameterSetCount: pointers.count, parameterSetPointers: pointers,
-            parameterSetSizes: sizes, nalUnitHeaderLength: Int32(ps.nalUnitHeaderLength),
-            extensions: nil, formatDescriptionOut: &desc)
-        guard status == noErr, let desc else { print("format description failed: \(status)"); return }
-        formatDescription = desc
-        waitingForKeyframe = true
-        let dimensions = CMVideoFormatDescriptionGetDimensions(desc)
-        let size = CGSize(width: CGFloat(dimensions.width), height: CGFloat(dimensions.height))
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.pointerVideoSize = size
-            self.onVideoSize?(size)
-            self.placeCursor()
-            self.onVideoSizeForPointer?(size)
-        }
-        // Remove the last frame too: switching sources should show black until the new keyframe,
-        // not the previous window frozen in place.
-        displayLayer.flushAndRemoveImage()
-    }
-
-    /// Session over: drop the picture and forget the format so the next Mac starts clean.
     func clear() {
-        formatDescription = nil
-        lastParameterSets = nil
-        waitingForKeyframe = true
-        displayLayer.flushAndRemoveImage()
-        // The pointer's copy of the size is main-thread state; the client zeroes its own alongside.
-        DispatchQueue.main.async { [weak self] in
-            self?.pointerVideoSize = .zero
-            self?.placeCursor()
+        let token = hardwareDecoder.clear()
+        videoPresenter.reset(token)
+        Task { @MainActor [weak self] in
+            guard let self, self.hardwareDecoder.isCurrent(token) else { return }
+            self.pointerVideoSize = .zero
+            self.placeCursor()
         }
     }
 
     func enqueue(_ data: Data, isKeyframe: Bool) {
-        guard let desc = formatDescription else { return }
-        if waitingForKeyframe {
-            guard isKeyframe else { return }
-            waitingForKeyframe = false
-        }
-
-        let count = data.count
-        var block: CMBlockBuffer?
-        guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: count, blockAllocator: nil,
-                                                 customBlockSource: nil, offsetToData: 0, dataLength: count, flags: 0,
-                                                 blockBufferOut: &block) == noErr, let block,
-              CMBlockBufferAssureBlockMemory(block) == noErr else { return }
-        let replaced = data.withUnsafeBytes { raw in
-            CMBlockBufferReplaceDataBytes(with: raw.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: count)
-        }
-        guard replaced == noErr else { return }
-
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .invalid, decodeTimeStamp: .invalid)
-        var size = count
-        var sample: CMSampleBuffer?
-        guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: desc, sampleCount: 1,
-                                        sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-                                        sampleSizeEntryCount: 1, sampleSizeArray: &size,
-                                        sampleBufferOut: &sample) == noErr, let sample else { return }
-
-        // Show each frame as soon as it decodes instead of scheduling by timestamp.
-        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) as NSArray?,
-           let first = attachments.firstObject as? NSMutableDictionary {
-            first[kCMSampleAttachmentKey_DisplayImmediately as String] = true
-        }
-
-        if displayLayer.status == .failed {
-            print("display layer failed: \(String(describing: displayLayer.error))")
-            displayLayer.flush()
-            waitingForKeyframe = true
-            return
-        }
-        displayLayer.enqueue(sample)
+        hardwareDecoder.enqueue(data, isKeyframe: isKeyframe)
     }
+
 }
 
 struct StreamView: UIViewRepresentable {

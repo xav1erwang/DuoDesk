@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+    <key>CFBundleDisplayName</key><string>DUO你电脑 Mac</string>
+    <key>CFBundleExecutable</key><string>DuoDeskHost</string>
+    <key>CFBundleIdentifier</key><string>com.duodesk.host</string>
+    <key>CFBundleName</key><string>DUO你电脑 Mac</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key><string>27.0</string>
+    <key>LSUIElement</key><true/>
+    <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSLocalNetworkUsageDescription</key><string>让你的 iPhone Duo 发现并连接这台 Mac。</string>
+    <key>NSBonjourServices</key><array><string>_sill._tcp</string></array>
+    <key>NSHumanReadableCopyright</key><string>DUO你电脑 contributors. Based on Sill; Apache-2.0. See NOTICE.</string>
+    <key>NSSupportsAutomaticTermination</key><false/>
+    <key>NSSupportsSuddenTermination</key><false/>
+</dict></plist>

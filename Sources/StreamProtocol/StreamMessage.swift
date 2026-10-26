@@ -75,6 +75,8 @@ public enum StreamMessageKind: UInt8 {
                              // on), its text becomes the Mac's clipboard, and `stop` ends the subscription; only
                              // to a host whose window list says `clipboard` 1 or more. Host → device: text copied
                              // on the Mac (or sent by another device), only to a connection that subscribed
+    case requestKeyframe = 33 // client → host, empty: recover a bounded decoder queue after a burst
+    case streamReset = 34     // host → client: 8-byte video epoch; invalidate old images before a restart
     case unknown = 255       // never sent: what parseHeader yields for a kind this build does not know
 }
 

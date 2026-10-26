@@ -1,3 +1,5 @@
+> 上游 Sill 历史记录。DUO你电脑的当前行为、构建和验收范围见 README.md 与 docs/DUO-DEVELOPMENT.md；其中原作者的产品决定和发布账户不适用于本分支。
+
 # Sill
 
 Open-source, free app that streams individual Mac app windows to iPhone and iPad

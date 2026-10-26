@@ -53,8 +53,17 @@ import StreamProtocol
 /// a slow uplink is normal there. A session at a TLS home door is a home client in all of this: the
 /// home rule of `broadcast` and the home eviction, as on the plain door.
 final class StreamServer {
+    /// A multiplexed transport belongs to exactly one admitted stream. Its owner validates the
+    /// current path and trust before delivery, and releases the tunnel when the client leaves.
+    struct TransportLease {
+        let validate: (NWPath?) -> Bool
+        let validatePath: (NWPath?) -> Bool
+        let ended: () -> Void
+    }
+
     private final class Client {
         let connection: NWConnection
+        var transport: TransportLease?
         var inflight = 0          // every message still unacknowledged (backpressure for delta drops)
         var inflightFrames = 0    // video frames only
         var oldestUnackedFrameAt: TimeInterval?   // last time a frame was drained, or queued from 0 (dead-peer detection)
@@ -135,6 +144,9 @@ final class StreamServer {
     let queue: DispatchQueue
     private var clients: [ObjectIdentifier: Client] = [:]
     private var lastParameterSets: Data?
+    private var videoEpoch = VideoStreamEpoch()
+    private var videoToken: UUID?
+    private var lastStreamReset: Data?
     /// A client was admitted (home door at `.ready`, remote door once paired and checked), with
     /// its route (which door, from where) and, for a home client, its link (ClientLink.route; nil
     /// when its connection does not say, and always for a remote session). Called on the network
@@ -148,6 +160,8 @@ final class StreamServer {
     /// A client fell behind and lost a delta frame; the encoder should produce a keyframe now
     /// rather than in up to 4 s. Called on the network queue.
     var onKeyframeNeeded: (() -> Void)?
+    // All admitted peers share this ceiling: a faulty client cannot force continuous IDRs.
+    private var lastDecoderRecoveryRequest = -Double.infinity // network queue
     /// Number of connected clients changed. Called on the network queue. Zero means the host can idle.
     var onClientCountChanged: ((Int) -> Void)?
     /// One connection ended (before `onClientCountChanged`), for per-client state such as its rate.
@@ -240,6 +254,7 @@ final class StreamServer {
         let reported = pointerSampler == nil ? samplePointer(now: now) : []
         let data = StreamMessage(kind: .tick, timestamp: now, isKeyframe: false, payload: Data()).serialized()
         for (id, client) in clients where client.connection.state == .ready {
+            guard transportAllows(client) else { continue }
             // A kind 26 just sent keeps its link awake this turn.
             if reported.contains(id) { continue }
             // Over TLS every record costs CPU (the remote plan's H20): skip a tick right after
@@ -278,6 +293,7 @@ final class StreamServer {
         var sent = Set<ObjectIdentifier>()
         var watched = false
         for (id, client) in clients where client.connection.state == .ready {
+            guard transportAllows(client) else { continue }
             guard let report = reading.report(for: id, seen: client.inputsRead) else {
                 client.lastPointer = nil
                 continue
@@ -363,6 +379,7 @@ final class StreamServer {
     var homeTLS: Bool { homeDoor != nil }
 
     private var listener: NWListener                 // replaced whole, never reconfigured
+    private var quicListener: QUICDoorListener?
     /// The Mac's name and `_sill._tcp`, a test registration (SILL_TEST_SERVICE_TYPE), or nil (the
     /// synthetic hosts, which devices must never find).
     private let serviceNameAndType: (name: String, type: String)?
@@ -431,6 +448,9 @@ final class StreamServer {
         listener.service = makeService()
         wire(listener)
         door?.server = self
+        if let door {
+            quicListener = QUICDoorListener(door: door, queue: queue, loopback: test && Self.testLoopback, label: "Home door")
+        }
     }
 
     /// TEST ONLY: SILL_TEST_SERVICE_TYPE (see the type's doc comment). Read once. Only a
@@ -524,7 +544,7 @@ final class StreamServer {
     /// `origin(of:)` with the interface it arrived on (the scope, else the owner of the local
     /// address), which names a VPN route ("through Tailscale").
     func arrival(of c: NWConnection, remoteDoor: Bool = false) -> (origin: OriginPolicy.Origin, interface: String?) {
-        guard case .hostPort(let host, _) = c.endpoint else { return (.internet, nil) }
+        guard case .hostPort(let host, _) = c.currentPath?.remoteEndpoint ?? c.endpoint else { return (.internet, nil) }
         let (remote, scope) = Self.addressText(host)
         return arrival(remote: remote, scope: scope ?? OriginPolicy.scope(ofEndpoint: "\(c.endpoint)"), local: Self.pathLocal(c),
                        remoteDoor: remoteDoor)
@@ -538,10 +558,16 @@ final class StreamServer {
     /// one not, the local address is the one the kernel's route back to the peer sends from. Nil
     /// when neither is known: `.preparing` judges it then, as before.
     func arrivalBeforeStart(of c: NWConnection, remoteDoor: Bool = false) -> (origin: OriginPolicy.Origin, interface: String?)? {
-        guard case .hostPort(let host, _) = c.endpoint else { return (.internet, nil) }
+        arrivalBeforeStart(endpoint: c.endpoint, local: Self.pathLocal(c), remoteDoor: remoteDoor)
+    }
+
+    /// A QUIC group is classified before starting its handshake, before it has any child stream.
+    func arrivalBeforeStart(endpoint: NWEndpoint, local: String? = nil,
+                            remoteDoor: Bool = false) -> (origin: OriginPolicy.Origin, interface: String?)? {
+        guard case .hostPort(let host, _) = endpoint else { return (.internet, nil) }
         let (remote, endpointScope) = Self.addressText(host)
-        let scope = endpointScope ?? OriginPolicy.scope(ofEndpoint: "\(c.endpoint)")
-        var local = Self.pathLocal(c)
+        let scope = endpointScope ?? OriginPolicy.scope(ofEndpoint: "\(endpoint)")
+        var local = local
         if local == nil, scope == nil, let source = IPBytes.parse(remote), !IPBytes.isLoopback(source) {
             guard let routed = InterfaceSnapshot.routeSource(to: source) else { return nil }
             local = IPBytes.text(routed)
@@ -634,7 +660,9 @@ final class StreamServer {
             switch state {
             case .ready:
                 portLock.lock(); readyPort = l.port?.rawValue; portLock.unlock()
+                quicListener?.set(port: l.port, peerToPeer: l.parameters.includePeerToPeer)
             case .failed(let e):
+                quicListener?.set(port: nil)
                 if case .settling(let n) = swap {
                     // A replacement failed after binding: its own fallback (another port, else the
                     // rule below), reported from there.
@@ -691,6 +719,7 @@ final class StreamServer {
         let n = swapCount
         swap = .cancelling(n)
         let old = listener
+        quicListener?.set(port: nil)
         let oldPort = old.port   // nil for a listener that failed or was never ready: any port then
         // Its registration ending is not the Mac leaving: the status keeps the name through the
         // replacement, whose own registration brings it back.
@@ -980,8 +1009,13 @@ final class StreamServer {
     /// client connected" line), then its hello, when the gate read one (`took`). A remote session has
     /// no link (its card names the route, "through Tailscale"); a home one's link is read at
     /// registration and then follows the path, as the plain door's does. On `queue`.
-    func serve(_ connection: NWConnection, route: ClientRoute, hello: Hello?, admitted: () -> Void = {}) {
+    func serve(_ connection: NWConnection, route: ClientRoute, hello: Hello?, transport: TransportLease? = nil,
+               admitted: () -> Void = {}) {
+        guard transport?.validate(connection.currentPath) != false else {
+            connection.cancel(); transport?.ended(); return
+        }
         let client = Client(connection)
+        client.transport = transport
         client.route = route
         // As its route says: every session a Door admits is TLS (a remote one, or a home one with its
         // peer's key); a home route without a peer is a plain connection and keeps the plain door's
@@ -1000,10 +1034,11 @@ final class StreamServer {
             default: break
             }
         }
-        if !route.isRemote {
-            client.link = link(connection, path: connection.currentPath)
-            connection.pathUpdateHandler = { [weak self] path in
-                guard let self, self.clients[id] === client else { return }
+        if !route.isRemote { client.link = link(connection, path: connection.currentPath) }
+        connection.pathUpdateHandler = { [weak self] path in
+            guard let self, self.clients[id] === client else { return }
+            guard client.transport?.validate(path) != false else { connection.cancel(); return }
+            if !route.isRemote {
                 let link = self.link(connection, path: path)
                 guard link != client.link else { return }
                 client.link = link
@@ -1042,6 +1077,8 @@ final class StreamServer {
     /// whose connection the stream and the catalog share. A connection that was never registered
     /// closes with `closeWithGoodbye`. On `queue`.
     func goodbye(_ goodbye: Goodbye, to connection: NWConnection, within: TimeInterval = 0.25) {
+        if let client = clients[ObjectIdentifier(connection)],
+           client.transport?.validatePath(connection.currentPath) == false { connection.cancel(); return }
         Self.sayGoodbye(payload: Wire.encode(goodbye), on: connection, queue: queue, within: within)
     }
 
@@ -1063,6 +1100,7 @@ final class StreamServer {
             let data = StreamMessage(kind: .goodbye, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                                      payload: Wire.encode(goodbye)).serialized()
             for client in clients.values where client.connection.state == .ready {
+                guard client.transport?.validatePath(client.connection.currentPath) != false else { client.connection.cancel(); continue }
                 group.enter()
                 client.connection.send(content: data, completion: .contentProcessed { _ in group.leave() })
             }
@@ -1295,6 +1333,11 @@ final class StreamServer {
     /// connection that was never registered (refused, or failed before it was ready) leaves no line.
     private func unregister(_ id: ObjectIdentifier) {
         guard let client = clients.removeValue(forKey: id) else { return }
+        // The path callback retains this client, which retains its connection. Break that cycle
+        // explicitly, including for transports that keep a parent tunnel until ended() runs.
+        client.connection.stateUpdateHandler = nil
+        client.connection.pathUpdateHandler = nil
+        client.transport?.ended()
         pointerWatch?.clientLeft(id)
         print("Client left: \(client.connection.endpoint)")
         onClientDisconnected?(client.connection)
@@ -1306,13 +1349,31 @@ final class StreamServer {
     /// The source is changing: forget the old parameter sets and make every client wait for
     /// the next keyframe, so nobody decodes frames of the new window with the old format. Each
     /// client's link keeps its judgement (`resetLinks` is the coordinator's to call).
-    func resetForNewStream() {
-        queue.async { [self] in
-            lastParameterSets = nil
-            for client in clients.values {
-                client.needsKeyframe = true
-                client.awaitingFirstKeyframe = true
-            }
+    func resetForNewStream(reset: Data) {
+        queue.async { [self] in resetVideoState(token: nil, reset: reset) }
+    }
+
+    /// Serial with outgoing video: an old encoder can finish after capture stops, but its output
+    /// must never enter a replacement stream, even at the same size and with identical HEVC sets.
+    func beginVideoStream(_ token: UUID, reset: Data) {
+        queue.async { [self] in resetVideoState(token: token, reset: reset) }
+    }
+
+    private func resetVideoState(token: UUID?, reset payload: Data) {
+        guard videoEpoch.acceptReset(payload) else {
+            videoToken = nil; lastParameterSets = nil
+            Stats.shared.bump("video.invalidReset")
+            return
+        }
+        videoToken = token
+        lastParameterSets = nil
+        let reset = StreamMessage(kind: .streamReset, timestamp: Date().timeIntervalSince1970,
+                                  isKeyframe: false, payload: payload).serialized()
+        lastStreamReset = reset
+        for client in clients.values {
+            client.needsKeyframe = true
+            client.awaitingFirstKeyframe = true
+            if client.connection.state == .ready { send(reset, to: client) }
         }
     }
 
@@ -1376,6 +1437,8 @@ final class StreamServer {
                 return
             }
             let deliver = { (payload: Data) in
+                guard self.clients[ObjectIdentifier(c)] === client,
+                      client.transport?.validate(c.currentPath) != false else { c.cancel(); return }
                 if header.kind == .input {
                     self.lastInputAt = Date().timeIntervalSince1970
                     if self.tickTimer == nil { self.updateTicking() }
@@ -1383,7 +1446,10 @@ final class StreamServer {
                     // in the same queue turn as every sample, so no kind 26 carries the new count
                     // with the old controller (docs/pointer-visibility-plan.md §3.3).
                     client.inputsRead += 1
-                    self.pointerWatch?.inputArrived(from: ObjectIdentifier(c), movesPointer: PointerControl.movesPointer(payload: payload))
+                    let control = VideoControlPayload(encoded: payload)
+                    let currentVideo = control == nil || self.videoEpoch.acceptsControl(control)
+                    self.pointerWatch?.inputArrived(from: ObjectIdentifier(c),
+                        movesPointer: currentVideo && PointerControl.movesPointer(payload: control?.payload ?? payload))
                 }
                 if header.kind == .ping {
                     // Echo straight back from the network queue: the round trip should measure the
@@ -1420,6 +1486,12 @@ final class StreamServer {
                         client.helloSeen = true
                         if let hello = Wire.decode(Hello.self, from: payload) { self.took(hello, from: client) }
                     }
+                } else if header.kind == .requestKeyframe {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if payload.isEmpty, now - self.lastDecoderRecoveryRequest >= 0.5 {
+                        self.lastDecoderRecoveryRequest = now
+                        self.onKeyframeNeeded?()
+                    }
                 } else if header.kind == .pairingWanted && client.route.isRemote {
                     // "Show your pairing code" comes only from a device near the Mac: ignored here.
                 } else {
@@ -1450,9 +1522,10 @@ final class StreamServer {
     }
 
     /// Thread-safe: hops onto the network queue.
-    func broadcast(_ message: StreamMessage) {
+    func broadcast(_ message: StreamMessage, videoToken token: UUID? = nil) {
         let data = message.serialized()
         queue.async { [self] in
+            if let token, token != videoToken { Stats.shared.bump("video.staleEncoded"); return }
             if message.kind == .parameterSets { lastParameterSets = data }
             if message.kind == .frame, message.isKeyframe { lastKeyframeAt = Date().timeIntervalSince1970 }
             var wantKeyframe = false
@@ -1470,6 +1543,7 @@ final class StreamServer {
                             if !client.awaitingFirstKeyframe { client.withheldThisSecond += 1 }
                             continue
                         }
+                        if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client) }
                         send(ps, to: client)
                         client.needsKeyframe = false
                         client.awaitingFirstKeyframe = false
@@ -1537,6 +1611,7 @@ final class StreamServer {
                 client.keyframeWanted = true
                 return false
             }
+            if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client) }
             send(ps, to: client)
             client.needsKeyframe = false
             client.awaitingFirstKeyframe = false
@@ -1606,6 +1681,7 @@ final class StreamServer {
     private static let graceAfterConnect: TimeInterval = 8.0
 
     private func send(_ data: Data, to client: Client, isFrame: Bool = false, isKeyframe: Bool = false) {
+        guard transportAllows(client) else { return }
         let now = Date().timeIntervalSince1970
         let remote = client.route.isRemote
         if isFrame, let oldest = client.oldestUnackedFrameAt,
@@ -1653,6 +1729,11 @@ final class StreamServer {
                 }
             }
         })
+    }
+
+    private func transportAllows(_ client: Client) -> Bool {
+        guard client.transport?.validate(client.connection.currentPath) != false else { client.connection.cancel(); return false }
+        return true
     }
 }
 

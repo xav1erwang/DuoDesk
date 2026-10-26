@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import SwiftUI
 import StreamProtocol
 
@@ -172,15 +173,30 @@ struct PortraitStreamScreen: View {
     private var streamShape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }
     /// The Duo's fold across this screen (StreamScreen, iOS 27.1): where the halves split.
     @Environment(\.duoFold) private var duoFold
+    @State private var resolutionWaitFailed = false
 
     var body: some View {
         GeometryReader { geo in
-            if metrics.phone {
-                phone(PhonePortraitLayout(size: geo.size, keyboard: largerKeyboard), origin: geo.frame(in: .global).origin)
-            } else {
-                halves(geo.size)
-            }
+            halves(geo.size)
         }
+        .onAppear { keepCompleteDesktop() }
+        .onChange(of: client.active) { _, _ in keepCompleteDesktop() }
+        .task(id: client.nativeDesktopResolution) {
+            resolutionWaitFailed = false
+            guard client.nativeDesktopResolution != nil else { return }
+            do { try await Task.sleep(for: .seconds(8)) } catch { return }
+            resolutionWaitFailed = !client.hasNativeDesktopVideo
+        }
+        .onChange(of: client.hasNativeDesktopVideo) { _, ready in
+            if ready { resolutionWaitFailed = false }
+        }
+    }
+
+    private func keepCompleteDesktop() {
+        // A window selected in the landscape interface (or left active on the host) must not
+        // become the Duo laptop's entire upper display. Its source is always the whole desktop.
+        guard client.connected, case .window = client.active else { return }
+        client.select(.desktop)
     }
 
     // MARK: Two halves: the inner display, an iPad window
@@ -188,15 +204,23 @@ struct PortraitStreamScreen: View {
     private func halves(_ size: CGSize) -> some View {
         // At the middle, as before; on the Duo (iOS 27.1) at the fold's real band half-folded, and
         // open flat at the picture's own shape (docs/iphone-duo-plan.md, (b1) and (b2)).
-        let split = DuoPosture.portraitSplit(size, duoFold, aspect: client.duoPaneAspect(textScale: textScale),
-                                             controls: metrics.controlsHeight)
-        let half = split.picture
+        let band = duoFold.horizontalBand
+        let split = DuoConsoleGeometry(width: size.width, height: size.height,
+                                       foldMinY: band.map { Double($0.minY) },
+                                       foldMaxY: band.map { Double($0.maxY) }, cover: metrics.phone)
+        let half = split.pictureHeight
         return ZStack(alignment: .topLeading) {
             Color.black
 
-            VStack(spacing: split.controls - half) {
-                picturePane(measured: true).padding(8).frame(height: half)
-                controls(width: size.width).frame(height: size.height - split.controls)
+            VStack(spacing: split.controlsTop - half) {
+                picturePane(measured: true).frame(height: half)
+                DuoControlDeck(client: client, latched: $latched,
+                               showSettings: { setSettings(!settingsOpen, false) },
+                               showSystemKeyboard: {
+                                   setSettings(false, false)
+                                   overlay.toggleKeyboard()
+                               })
+                    .frame(height: max(0, size.height - split.controlsTop))
             }
 
             // Same order as landscape: the dim goes over the stream so a tap with the drawer
@@ -209,7 +233,7 @@ struct PortraitStreamScreen: View {
                     .frame(maxHeight: .infinity)
                     .padding(.leading, 22)
                     // Hangs from just under the window bar, so the button that opened it stays visible.
-                    .padding(.top, split.controls + metrics.padTop + metrics.barHeight + 8)
+                    .padding(.top, split.controlsTop + 64)
                     .padding(.bottom, metrics.padBottom)
                     .transition(.opacity)
             }
@@ -220,7 +244,7 @@ struct PortraitStreamScreen: View {
             // halves, as the drawer's dim does, so a tap anywhere outside closes the panel first
             // and never reaches the Mac.
             if settingsOpen {
-                let top = split.controls + metrics.padTop + metrics.barHeight + 8
+                let top = split.controlsTop + 64
                 catcher
 
                 settingsPanel
@@ -456,6 +480,7 @@ struct PortraitStreamScreen: View {
     private func picturePane(measured: Bool) -> some View {
         ZStack {
             StreamView(client: client)
+                .opacity(client.hasNativeDesktopVideo ? 1 : 0)
             InputOverlay(videoSize: client.videoSize,
                          send: { client.sendInput($0) },
                          setOwnPointer: { client.setOwnPointer($0, from: $1) },
@@ -464,6 +489,15 @@ struct PortraitStreamScreen: View {
                          latchedModifiers: latched,
                          onModifiersConsumed: { latched = [] },
                          sendGesture: { client.sendGesture($0, fingers: $1) })
+                .allowsHitTesting(client.hasNativeDesktopVideo)
+            if !client.hasNativeDesktopVideo {
+                Text(client.nativeDesktopResolution == nil ? "展开 Duo 以读取上屏原生分辨率"
+                     : resolutionWaitFailed ? "Mac 未能匹配原生分辨率，请更新服务端或重新连接。" : "正在让 Mac 匹配 Duo 上屏…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding()
+                    .allowsHitTesting(false)
+            }
         }
         .background(Palette.panel)
         .overlay(alignment: .top) { LinkLineView(text: linkLine) }

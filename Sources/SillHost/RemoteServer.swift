@@ -25,6 +25,7 @@ final class RemoteServer {
     private unowned let server: StreamServer
     private let trust: TrustBox
     private let door: Door
+    private let quic: QUICDoorListener
 
     /// The listener's port and state are called back on the network queue.
     var onListener: ((RemoteStatus.Listener) -> Void)?
@@ -45,8 +46,10 @@ final class RemoteServer {
         self.server = server
         queue = server.queue
         self.trust = trust
-        door = Door(.remote, queue: server.queue, identity: identity, trust: trust, testHost: server.isTestHost)
+        let door = Door(.remote, queue: server.queue, identity: identity, trust: trust, testHost: server.isTestHost)
+        self.door = door
         door.server = server
+        quic = QUICDoorListener(door: door, queue: server.queue, loopback: server.loopbackOnly, label: "Remote access")
     }
 
     // MARK: The listener
@@ -73,6 +76,7 @@ final class RemoteServer {
     func retryNow() {
         queue.async { [self] in
             if wanted, listener == nil { startListener() }
+            else if wanted { quic.retryNow() }
         }
     }
 
@@ -80,6 +84,7 @@ final class RemoteServer {
         retryItem?.cancel(); retryItem = nil
         listener?.cancel()
         listener = nil
+        quic.set(port: nil)
     }
 
     private func startListener() {
@@ -113,17 +118,20 @@ final class RemoteServer {
             switch state {
             case .ready:
                 let bound = Int(l.port?.rawValue ?? 0)
+                quic.set(port: l.port)
                 reportedFailure = false
                 print("Remote access: listening on port \(bound) (TLS, paired devices only; \(trust.snapshot.paired.count) paired).")
                 onListener?(.listening(bound))
             case .failed(let e):
                 l.cancel()
                 listener = nil
+                quic.set(port: nil)
                 failed(e)
             case .waiting(let e):
                 if case .posix(.EADDRINUSE) = e {
                     l.cancel()
                     listener = nil
+                    quic.set(port: nil)
                     failed(e)
                 }
             default:

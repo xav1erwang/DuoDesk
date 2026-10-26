@@ -44,6 +44,9 @@ final class RemoteConnector {
         let candidate: RemoteDialPolicy.Candidate
         let connection: NWConnection
         var ended = false
+        var started = false
+        var startItem: DispatchWorkItem?
+        var fallback: Attempt?
         init(_ candidate: RemoteDialPolicy.Candidate, _ connection: NWConnection) {
             self.candidate = candidate; self.connection = connection
         }
@@ -53,6 +56,7 @@ final class RemoteConnector {
     private let candidates: [RemoteDialPolicy.Candidate]
     private let mode: Mode
     private let identity: RemoteIdentity
+    private let preferQUIC: Bool
     /// A session dial's other keys by candidate (`Candidate.key`): saved Macs whose key may answer
     /// at that address in the pin's place (RemoteDialPolicy.successors). The winner's `fingerprint`
     /// says which key it met.
@@ -71,11 +75,12 @@ final class RemoteConnector {
     var onFailed: ((Failed) -> Void)?
 
     init(candidates: [RemoteDialPolicy.Candidate], mode: Mode, identity: RemoteIdentity, queue: DispatchQueue,
-         successors: [String: [Data]] = [:]) {
+         successors: [String: [Data]] = [:], preferQUIC: Bool = true) {
         self.candidates = candidates
         self.successors = successors
         self.mode = mode
         self.identity = identity
+        self.preferQUIC = preferQUIC
         self.queue = queue
     }
 
@@ -100,7 +105,7 @@ final class RemoteConnector {
             guard !finished else { return }
             finished = true
             staggerItem?.cancel(); wholeItem?.cancel()
-            for a in attempts where !a.ended { a.ended = true; a.connection.cancel() }
+            for a in attempts where !a.ended { a.ended = true; a.startItem?.cancel(); a.connection.cancel() }
         }
     }
 
@@ -125,16 +130,35 @@ final class RemoteConnector {
         // The whole of trust: the pin, or on the typed pairing path any P-256 key (nil is no P-256).
         // The one TLS builder every connection to a Mac goes through (DeviceTLS).
         let others: [Data] = { if case .session = mode { return successors[candidate.key] ?? [] }; return [] }()
-        let tls = DeviceTLS.options(identity: identity, alpn: alpn, pin: pin, queue: queue, alsoAccept: others)
-        let connection = NWConnection(host: NWEndpoint.Host(candidate.host), port: port,
-                                      using: RemoteTLS.parameters(tls: tls, dialing: true))
-        let attempt = Attempt(candidate, connection)
-        attempts.append(attempt)
-        connection.stateUpdateHandler = { [weak self, weak attempt] state in
-            guard let self, let attempt else { return }
-            self.stateChanged(attempt, state)
+        func makeAttempt(quic: Bool) -> Attempt {
+            let parameters: NWParameters
+            if quic {
+                parameters = DeviceTLS.quic(identity: identity, alpn: alpn, pin: pin, queue: queue, alsoAccept: others)
+            } else {
+                let tls = DeviceTLS.options(identity: identity, alpn: alpn, pin: pin, queue: queue, alsoAccept: others)
+                parameters = RemoteTLS.parameters(tls: tls, dialing: true)
+            }
+            let connection = NWConnection(host: NWEndpoint.Host(candidate.host), port: port, using: parameters)
+            let attempt = Attempt(candidate, connection)
+            attempts.append(attempt)
+            connection.stateUpdateHandler = { [weak self, weak attempt] state in
+                guard let self, let attempt else { return }
+                self.stateChanged(attempt, state)
+            }
+            return attempt
         }
-        connection.start(queue: queue)
+        let tcp = makeAttempt(quic: false)
+        if sequential || !preferQUIC {
+            // Pairing proofs are single-use. A pre-list transport retry also uses TCP alone.
+            begin(tcp)
+        } else {
+            let quic = makeAttempt(quic: true)
+            quic.fallback = tcp
+            let item = DispatchWorkItem { [weak self, weak tcp] in if let tcp { self?.begin(tcp) } }
+            tcp.startItem = item
+            queue.asyncAfter(deadline: .now() + 0.35, execute: item)
+            begin(quic)
+        }
         if !sequential {
             let item = DispatchWorkItem { [weak self] in self?.startNext() }
             staggerItem = item
@@ -142,22 +166,35 @@ final class RemoteConnector {
         }
     }
 
+    private func begin(_ attempt: Attempt) {
+        guard !finished, !attempt.ended, !attempt.started else { return }
+        attempt.started = true
+        attempt.startItem?.cancel(); attempt.startItem = nil
+        attempt.connection.start(queue: queue)
+    }
+
     private func stateChanged(_ attempt: Attempt, _ state: NWConnection.State) {
         guard !attempt.ended else { return }
         switch state {
         case .ready:
             guard !finished else { attempt.ended = true; attempt.connection.cancel(); return }
+            let c = attempt.connection
+            guard let fp = RemoteTLS.peerFingerprint(c),
+                  RemoteTLS.negotiatedALPN(c) == (sequential ? RemoteTLS.pairingALPN : RemoteTLS.sessionALPN) else {
+                end(attempt, .notSill); return
+            }
+            #if DEBUG
+            print("remote dial: selected \(c.metadata(definition: NWProtocolQUIC.definition) != nil ? "QUIC" : "TCP"), mutual TLS 1.3")
+            #endif
             finished = true
             attempt.ended = true
             staggerItem?.cancel(); wholeItem?.cancel()
             for other in attempts where other !== attempt && !other.ended {
                 other.ended = true
+                other.startItem?.cancel(); other.startItem = nil
                 other.connection.cancel()
             }
-            let c = attempt.connection
             c.stateUpdateHandler = nil
-            let fp: Data? = RemoteTLS.peerFingerprint(c) ?? { if case .session(let p) = mode { return p }; return nil }()
-            guard let fp else { c.cancel(); onFailed?(Failed(failure: .notSill, candidate: attempt.candidate)); return }
             onWinner?(Winner(connection: c, candidate: attempt.candidate, fingerprint: fp,
                              usedTunnel: c.currentPath?.usesInterfaceType(.other) ?? false))
         case .waiting(let error), .failed(let error):
@@ -173,6 +210,7 @@ final class RemoteConnector {
     /// and the next address starts at once.
     private func end(_ attempt: Attempt, _ how: RemoteDialPolicy.End?) {
         attempt.ended = true
+        attempt.startItem?.cancel(); attempt.startItem = nil
         let usedTunnel = attempt.connection.currentPath.map { $0.usesInterfaceType(.other) }
         attempt.connection.cancel()
         if let how, let failure = RemoteDialPolicy.classify(how, candidate: attempt.candidate, usedTunnel: usedTunnel) {
@@ -182,6 +220,7 @@ final class RemoteConnector {
         print("remote dial: \(attempt.candidate.host):\(attempt.candidate.port) ended \(how.map { "\($0)" } ?? "cancelled")")
         #endif
         guard !finished else { return }
+        if let fallback = attempt.fallback { begin(fallback) }
         startNext()
     }
 
@@ -189,6 +228,7 @@ final class RemoteConnector {
         guard !finished else { return }
         for a in attempts where !a.ended {
             a.ended = true
+            a.startItem?.cancel(); a.startItem = nil
             a.connection.cancel()
             results.append((RemoteDialPolicy.classify(.timeout, candidate: a.candidate, usedTunnel: a.connection.currentPath.map { $0.usesInterfaceType(.other) }) ?? .noAnswer, a.candidate))
         }

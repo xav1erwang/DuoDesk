@@ -1,0 +1,17 @@
+DUO你电脑 (DuoDesk)
+Copyright 2026 DUO你电脑 contributors
+
+This project is a modified distribution of Sill:
+https://github.com/Saffsanity/sill
+Upstream baseline: 4d990e9b92d5b87b4b4afed6213ffbab91ac0f39 (2026-10-25 checkout).
+Sill and its contributors retain all original copyright notices.
+The original Apache License 2.0 is preserved in LICENSE.
+
+Changes in this distribution include the iPhone Duo control deck, full ANSI keyboard,
+three input modes, hinge-based desktop layout, direct-route high-frame-rate policy,
+presentation diagnostics, separate application identities and local signing-renewal tools.
+Additional changes implement strict Duo native-pixel/aspect negotiation, transactional Mac
+desktop display-mode switching/mirroring and restoration, and rejection of undersized video.
+New application artwork is by DUO你电脑 contributors.
+
+DUO你电脑 is an independent project. It is not an Apple or Sill product.

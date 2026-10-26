@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import AppKit
 import Combine
 import SwiftUI
@@ -29,9 +30,9 @@ struct SettingsPane: View {
         }
         .formStyle(.grouped)
         .frame(width: 520)
-        // Permissions and the login item change behind Sill's back, in System Settings. Re-read
-        // them once a second, only while this tab is on screen, and when Sill becomes active; an
-        // idle Sill with Settings closed wakes for nothing. The Devices and Remote Access panes
+        // Permissions and the login item change behind DUO你电脑's back, in System Settings. Re-read
+        // them once a second, only while this tab is on screen, and when DUO你电脑 becomes active; an
+        // idle DUO你电脑 with Settings closed wakes for nothing. The Devices and Remote Access panes
         // follow the host's status, which is pushed, so they poll nothing.
         .task(id: model.visibleSettingsTab == tab) {
             guard model.visibleSettingsTab == tab, tab != .streaming, tab != .devices, tab != .remoteAccess else { return }
@@ -93,7 +94,7 @@ private struct GeneralPane: View {
                 Toggle("Launch at login", isOn: Binding(get: { model.loginItem.isOn }, set: { model.loginItem.set($0) }))
                     .disabled(!model.loginItem.available)
                 if !model.loginItem.available {
-                    Footnote("Available when Sill runs from its app bundle.")
+                    Footnote("Available when DUO你电脑 runs from its app bundle.")
                 } else if model.loginItem.needsApproval {
                     LabeledContent("Waiting for your approval") {
                         Button("Approve in System Settings…") { model.loginItem.openSystemSettings() }
@@ -111,7 +112,7 @@ private struct GeneralPane: View {
                         .textSelection(.enabled)
                 }
                 if !Self.runsFromApplications {
-                    Label("The login item and the permissions follow this copy of Sill. Keep one copy, in Applications.",
+                    Label("The login item and the permissions follow this copy of DUO你电脑. Keep one copy, in Applications.",
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                 }
@@ -139,17 +140,17 @@ private struct GeneralPane: View {
             Section {
                 Toggle("Direct wireless connection", isOn: $settings.config.directWireless)
             } footer: {
-                Footnote("Lets your iPhone and iPad connect when they’re near this Mac, even without a shared Wi\u{2011}Fi network, the way AirDrop does. While it’s on, this Mac’s Wi\u{2011}Fi keeps stepping away from your network, so streaming over Wi\u{2011}Fi can stutter. Anyone nearby with Sill can find this Mac; only devices you paired can connect, unless Require pairing is off.")
+                Footnote("Lets your iPhone and iPad connect when they’re near this Mac, even without a shared Wi\u{2011}Fi network, the way AirDrop does. While it’s on, this Mac’s Wi\u{2011}Fi keeps stepping away from your network, so streaming over Wi\u{2011}Fi can stutter. Anyone nearby with DUO你电脑 can find this Mac; only devices you paired can connect, unless Require pairing is off.")
             }
             // The clipboard both ways (HostClipboard): at once, no restart. Each device has its own
             // switch too. macOS's answer is read with the permissions (once a second while this pane
-            // shows, and when Sill becomes active), never in a preview.
+            // shows, and when DUO你电脑 becomes active), never in a preview.
             ClipboardSection(shareClipboard: $settings.config.shareClipboard,
                              access: previewClipboardAccess ?? model.permissions.clipboardAccess,
                              allow: { model.permissions.allowClipboard() })
             if let preview = previewUpdates {
                 UpdatesSection(pane: preview, automatic: .constant(true))
-            } else {
+            } else if Bundle.main.bundleIdentifier != "com.duodesk.host" {
                 UpdatesSection(pane: model.updates.pane, automatic: $settings.updateCheck,
                                actions: UpdatesSection.Actions(checkNow: { model.updates.checkNow() },
                                                                openRelease: { NSWorkspace.shared.open($0) }))
@@ -165,9 +166,9 @@ private struct GeneralPane: View {
             }
             Section {
                 // A way out when the status item is hidden (a crowded menu bar, the notch).
-                Button("Quit Sill") { NSApp.terminate(nil) }
+                Button("Quit DUO你电脑") { NSApp.terminate(nil) }
             } footer: {
-                Footnote("Sill \(AppModel.version) (\(AppModel.build)). Free and open source.")
+                Footnote("DUO你电脑 \(AppModel.version) (\(AppModel.build)). Free and open source.")
             }
         }
     }
@@ -187,7 +188,7 @@ private struct GeneralPane: View {
 // MARK: Clipboard
 
 /// Share clipboard with devices (HostClipboard, docs/clipboard-plan.md): the switch and its footnote,
-/// and while the switch is on and macOS does not allow every read Sill makes on its own
+/// and while the switch is on and macOS does not allow every read DUO你电脑 makes on its own
 /// (ClipboardPolicy.MacAccess), why what is copied here stays on this Mac and the way to allow it.
 /// Drawn alone in the previews in each of macOS's answers (DebugHooks).
 struct ClipboardSection: View {
@@ -219,7 +220,7 @@ struct ClipboardSection: View {
 // MARK: Updates
 
 /// Settings › General's update check: the automatic switch, the line (what the last check found, or
-/// why Sill cannot check), Open Release Page… while a newer release is offered, and Check Now. Plain
+/// why DUO你电脑 cannot check), Open Release Page… while a newer release is offered, and Check Now. Plain
 /// values in, so the previews draw every state. Errors show here and in the log, never in an alert.
 struct UpdatesSection: View {
     struct Actions {
@@ -300,7 +301,7 @@ private struct StreamingPane: View {
             } header: {
                 Text("Away from home")
             } footer: {
-                Footnote("Sill streams at these while every connected device is away from home, through a VPN or over the internet, so a slow connection never starts at your home quality. A device away from home changes these, and never your Quality and Resolution above."
+                Footnote("DUO你电脑 streams at these while every connected device is away from home, through a VPN or over the internet, so a slow connection never starts at your home quality. A device away from home changes these, and never your Quality and Resolution above."
                          + (model.coordinator?.status.snapshot.away == true ? " Streaming at these now." : ""))
             }
             Section {
@@ -312,7 +313,7 @@ private struct StreamingPane: View {
                 Section {
                     Label(snapshot.hardwareEncoderStuck
                           ? "The hardware encoder is stuck, so streams use the software encoder: up to 60 fps at Standard resolution. Restarting the Mac fixes this."
-                          : "The hardware encoder is busy or not answering, so streams use the software encoder: up to 60 fps at Standard resolution. Sill switches back by itself once it keeps up again.",
+                          : "The hardware encoder is busy or not answering, so streams use the software encoder: up to 60 fps at Standard resolution. DUO你电脑 switches back by itself once it keeps up again.",
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                 }
@@ -334,7 +335,7 @@ private struct VirtualDisplayPane: View {
             Section {
                 Toggle("Stream from a virtual display", isOn: $settings.config.virtualDisplay)
             } footer: {
-                Footnote("Sill moves the window you pick onto an invisible display made for your device, so it keeps updating when other windows cover it and text is drawn at your device’s scale. The window leaves this screen while it streams and comes back when you stop streaming or quit Sill.")
+                Footnote("DUO你电脑 moves the window you pick onto an invisible display made for your device, so it keeps updating when other windows cover it and text is drawn at your device’s scale. The window leaves this screen while it streams and comes back when you stop streaming or quit DUO你电脑.")
             }
             Section {
                 LabeledContent("Status") {
@@ -359,7 +360,7 @@ private struct VirtualDisplayPane: View {
                     }
                 }
             } footer: {
-                Footnote("Uses a private macOS interface (CGVirtualDisplay). If a macOS update breaks it, Sill streams the window where it is.")
+                Footnote("Uses a private macOS interface (CGVirtualDisplay). If a macOS update breaks it, DUO你电脑 streams the window where it is.")
             }
         }
     }
@@ -393,24 +394,23 @@ private struct PermissionsPane: View {
         let network = model.coordinator?.status.snapshot.network
         Form {
             Section {
-                PermissionRow(title: "Screen Recording", allowed: permissions.screenRecording,
-                              // Not "on this network": a device connected over Direct Wireless shares none.
-                              explanation: "Lets Sill capture the windows you pick on your iPhone or iPad. Nothing is recorded or saved; frames go straight to your devices.",
+                PermissionRow(id: "screen-recording", title: "Screen Recording", allowed: permissions.screenRecording,
+                              explanation: "Allows your iPhone Duo to view the complete Mac desktop.",
                               button: model.settings.askedScreenRecording ? "Open System Settings…" : "Allow…") {
                     permissions.requestScreenRecording()
                 }
-                PermissionRow(title: "Accessibility", allowed: permissions.accessibility,
-                              explanation: "Lets your iPhone or iPad click, scroll and type on this Mac, and lets Sill move and size the window it streams.",
+                PermissionRow(id: "accessibility", title: "Accessibility", allowed: permissions.accessibility,
+                              explanation: "Allows your iPhone Duo to click, scroll and type on this Mac.",
                               button: model.settings.askedAccessibility ? "Open System Settings…" : "Allow…") {
                     permissions.requestAccessibility()
                 }
             } footer: {
-                Footnote("Access belongs to Sill itself. Access you gave Terminal for the SillHost command-line tool doesn’t carry over.")
+                Footnote("Enable both permissions for DUO你电脑 Mac in System Settings.")
             }
             if permissions.relaunchSuggested, !permissions.screenRecording {
                 Section {
-                    LabeledContent("Screen Recording starts working once Sill opens again.") {
-                        Button(permissions.canRelaunch ? "Relaunch Sill" : "Quit Sill") { permissions.relaunch() }
+                    LabeledContent("Screen Recording starts working once DUO你电脑 opens again.") {
+                        Button(permissions.canRelaunch ? "Relaunch DUO你电脑" : "Quit DUO你电脑") { permissions.relaunch() }
                     }
                 }
             }
@@ -420,13 +420,13 @@ private struct PermissionsPane: View {
                         Button("Open Local Network…") { permissions.openPrivacyPane("Privacy_LocalNetwork") }
                     } label: {
                         Text("Local Network")
-                        Text("If your iPhone or iPad can’t find this Mac, allow Sill in Privacy & Security › Local Network.")
+                        Text("If your iPhone or iPad can’t find this Mac, allow DUO你电脑 in Privacy & Security › Local Network.")
                     }
                 }
             }
             if permissions.allGranted {
                 Section {
-                    Label("You’re all set. Open Sill on your iPhone or iPad.", systemImage: "checkmark.seal.fill")
+                    Label("You’re all set. Open DUO你电脑 on your iPhone or iPad.", systemImage: "checkmark.seal.fill")
                 }
             }
         }
@@ -441,27 +441,37 @@ private struct PermissionsPane: View {
 }
 
 private struct PermissionRow: View {
-    let title: String
+    let id: String
+    let title: LocalizedStringResource
     let allowed: Bool
-    let explanation: String
-    let button: String
+    let explanation: LocalizedStringResource
+    let button: LocalizedStringResource
     let action: () -> Void
 
     var body: some View {
-        LabeledContent {
-            if allowed {
-                Label("Allowed", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Button(button, action: action)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                if allowed {
+                    Label("Allowed", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .accessibilityHidden(true)
+                        Button(action: action) { Text(button) }
+                            .accessibilityLabel(Text("\(Text(title)): \(Text(button))"))
+                            .accessibilityIdentifier("duodesk.permission.\(id)")
+                    }
                 }
             }
-        } label: {
-            Text(title)
             Text(explanation)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .accessibilityElement(children: .contain)
     }
 }

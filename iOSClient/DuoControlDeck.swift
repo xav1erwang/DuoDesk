@@ -1,0 +1,256 @@
+// Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
+import SwiftUI
+import UIKit
+import StreamProtocol
+
+/// The aluminum lower half. The video view is a sibling and is never rebuilt by a mode change.
+struct DuoControlDeck: View {
+    @ObservedObject var client: StreamClient
+    @Binding var latched: KeyModifiers
+    let showSettings: () -> Void
+    let showSystemKeyboard: () -> Void
+    @AppStorage("duodesk.controlMode") private var mode: DuoControlMode = .combined
+    @State private var capsLock = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            let room = max(0, geometry.size.height - (mode == .combined ? 126 : 116))
+            let keyHeight = mode == .combined ? min(220, max(200, room * 0.61)) : max(200, room)
+            VStack(spacing: 10) {
+                toolbar
+                if mode.hasKeyboard {
+                    DuoKeyboardView(latched: $latched, capsLock: $capsLock, send: client.sendFromKeyRow)
+                        .frame(height: keyHeight)
+                        .accessibilityIdentifier("duo.keyboard")
+                }
+                if mode.hasTrackpad {
+                    glassTrackpad
+                        .frame(maxWidth: mode == .combined ? min(geometry.size.width * 0.65, 480) : .infinity)
+                        .frame(maxHeight: .infinity)
+                        .accessibilityIdentifier("duo.trackpad")
+                }
+                DuoConnectionReadout(client: client)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 30)
+        }
+        .clipped()
+        .background {
+            LinearGradient(colors: [Color(white: 0.76), Color(white: 0.9), Color(white: 0.75)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.65)).frame(height: 1) }
+        }
+        .onChange(of: mode) { _, _ in
+            // No modifier may linger when the surface that shows it disappears.
+            latched = []
+            UISelectionFeedbackGenerator().selectionChanged()
+        }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 6) {
+            deckButton("断开连接", symbol: "rectangle.portrait.and.arrow.right", action: client.disconnect)
+            Spacer(minLength: 0)
+            HStack(spacing: 3) {
+                ForEach(DuoControlMode.allCases) { item in
+                    Button { mode = item } label: {
+                        Label(title(item), systemImage: symbol(item))
+                            .font(.system(size: 12, weight: .semibold))
+                            .labelStyle(.titleAndIcon)
+                            .frame(maxWidth: .infinity, minHeight: 38)
+                            .foregroundStyle(mode == item ? Color.white : Color(white: 0.24))
+                            .background(mode == item ? Color(white: 0.22) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(mode == item ? [.isSelected] : [])
+                    .accessibilityIdentifier("duo.mode.\(item.rawValue)")
+                }
+            }
+            .padding(3)
+            .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.5)))
+            .frame(maxWidth: 430)
+            Spacer(minLength: 0)
+            deckButton("系统键盘", symbol: "keyboard.badge.ellipsis", action: showSystemKeyboard)
+            deckButton("设置", symbol: "gearshape", action: showSettings)
+        }
+        .frame(height: 44)
+    }
+
+    private func deckButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Color(white: 0.25))
+                .frame(width: 38, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(title))
+    }
+
+    private var glassTrackpad: some View {
+        TrackpadView(send: client.sendInput,
+                     setPointer: { client.setOwnPointer($0, from: .trackpad) },
+                     feed: { let state = client.pointerFeedState; return (state.anchor, state.reseeds) },
+                     onFingers: client.trackpadFingers,
+                     latched: latched, onModifiersConsumed: { latched = [] },
+                     verticalSpan: nil,
+                     sendGesture: { client.sendGesture($0, fingers: $1) })
+            .background {
+                RoundedRectangle(cornerRadius: 13)
+                    .fill(LinearGradient(colors: [Color(white: 0.69), Color(white: 0.78)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .shadow(color: .black.opacity(0.2), radius: 1, y: -1)
+                    .shadow(color: .white.opacity(0.9), radius: 1, y: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 13))
+            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(Color.black.opacity(0.2), lineWidth: 0.75))
+            .accessibilityLabel("Mac 触控板")
+            .accessibilityHint("单指移动，轻点单击，双指滚动或右键，双击后拖动")
+    }
+
+    private func title(_ mode: DuoControlMode) -> String {
+        switch mode {
+        case .keyboard: return "键盘"
+        case .trackpad: return "触控板"
+        case .combined: return "键盘＋触控板"
+        }
+    }
+    private func symbol(_ mode: DuoControlMode) -> String {
+        switch mode {
+        case .keyboard: return "keyboard"
+        case .trackpad: return "rectangle"
+        case .combined: return "laptopcomputer"
+        }
+    }
+}
+
+private struct DuoKeyboardView: View {
+    @Binding var latched: KeyModifiers
+    @Binding var capsLock: Bool
+    let send: (InputEvent) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            // On the cover keep actual key targets usable, rather than squeezing fourteen into 380 pt.
+            let boardWidth = max(548, geometry.size.width - 12)
+            let gap: CGFloat = 4
+            let rowHeight = max(28, (geometry.size.height - 12 - 5 * gap) / 6)
+            ScrollView(.horizontal) {
+                VStack(spacing: gap) {
+                    ForEach(DuoKeyboardLayout.rows.indices, id: \.self) { rowIndex in
+                        let row = DuoKeyboardLayout.rows[rowIndex]
+                        let widths = DuoKeyboardLayout.widths(for: row, available: boardWidth, gap: gap)
+                        HStack(spacing: gap) {
+                            ForEach(Array(zip(row, widths)), id: \.0.id) { key, width in
+                                Button { press(key) } label: {
+                                    Text(legend(key))
+                                        .font(.system(size: key.legend.count > 2 ? 11 : 15, weight: .medium))
+                                        .frame(width: width, height: rowHeight)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(DuoKeycapStyle(selected: selected(key)))
+                                .buttonRepeatBehavior(isRepeatable(key) ? .enabled : .disabled)
+                                .accessibilityLabel(Text(key.accessibilityName ?? legend(key)))
+                                .accessibilityAddTraits(selected(key) ? [.isSelected] : [])
+                                .accessibilityIdentifier("duo.key.\(key.id)")
+                            }
+                        }
+                    }
+                }
+                .padding(6)
+            }
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.45), lineWidth: 0.7))
+    }
+
+    private func legend(_ key: DuoKey) -> String {
+        if case .key(let usage) = key.action, (0x04...0x1D).contains(usage) {
+            return (latched.contains(.shift) != capsLock) ? key.legend.uppercased() : key.legend
+        }
+        return latched.contains(.shift) ? (key.shifted ?? key.legend) : key.legend
+    }
+    private func selected(_ key: DuoKey) -> Bool {
+        switch key.action {
+        case .modifier(let bits): return latched.contains(KeyModifiers(rawValue: bits))
+        case .capsLock: return capsLock
+        default: return false
+        }
+    }
+    private func isRepeatable(_ key: DuoKey) -> Bool {
+        if case .key(let usage) = key.action { return usage == 0x2A || (0x4F...0x52).contains(usage) }
+        return false
+    }
+    private func press(_ key: DuoKey) {
+        switch key.action {
+        case .modifier(let bits):
+            let flag = KeyModifiers(rawValue: bits)
+            if latched.contains(flag) { latched.remove(flag) } else { latched.insert(flag) }
+        case .capsLock:
+            capsLock.toggle()
+            KeyChord.press(0x39, with: []).forEach(send)
+        case .inputSource:
+            KeyChord.press(0x2C, with: .control).forEach(send)
+            latched = []
+        case .key(let usage):
+            KeyChord.press(usage, with: latched).forEach(send)
+            latched = []
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.45)
+    }
+}
+
+private struct DuoKeycapStyle: ButtonStyle {
+    let selected: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(selected ? Color(red: 0.64, green: 0.9, blue: 0.74) : Color(white: 0.96))
+            .background {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(LinearGradient(colors: [Color(white: configuration.isPressed ? 0.09 : 0.24),
+                                                   Color(white: 0.09)], startPoint: .top, endPoint: .bottom))
+                    .shadow(color: .black.opacity(0.9), radius: 0.5, y: configuration.isPressed ? 0 : 2)
+            }
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(configuration.isPressed ? 0.05 : 0.18), lineWidth: 0.5))
+            .offset(y: configuration.isPressed ? 1 : 0)
+    }
+}
+
+/// Counts the renderer's actual presentation totals, separately from network reception.
+/// A missing renderer metric stays unknown. It must never inherit the requested stream rate.
+private struct DuoConnectionReadout: View {
+    @ObservedObject var client: StreamClient
+    @State private var displayedFPS: Int? = nil
+    @State private var sampler = DuoFrameRateSampler()
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(client.connected ? Color(red: 0.13, green: 0.48, blue: 0.31) : .gray).frame(width: 5, height: 5)
+            Text(client.hasNativeDesktopVideo ? "\(Int(client.videoSize.width))×\(Int(client.videoSize.height)) · 原生" : "匹配原生分辨率…")
+            Spacer()
+            Text("接收 \(client.linkStats.map { String($0.fps) } ?? "—") · 显示 \(displayedFPS.map(String.init) ?? "—") FPS")
+                .monospacedDigit()
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(Color(white: 0.3))
+        .frame(height: 12)
+        .task {
+            while !Task.isCancelled {
+                if let metrics = await client.displayView.presentationMetrics() {
+                    displayedFPS = sampler.sample(total: metrics.total, dropped: metrics.dropped,
+                                                  time: ProcessInfo.processInfo.systemUptime)
+                } else {
+                    displayedFPS = nil
+                    sampler = DuoFrameRateSampler()
+                }
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
+    }
+}

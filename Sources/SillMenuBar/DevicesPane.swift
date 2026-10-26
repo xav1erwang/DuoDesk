@@ -11,12 +11,23 @@ struct LiveDevicesPane: View {
     @Bindable var settings: HostSettings
 
     var body: some View {
-        DevicesPane(status: model.coordinator?.status.snapshot.remote ?? RemoteStatus(),
-                    requirePairing: Binding(get: { settings.config.requirePairing }, set: { model.setRequirePairing($0) }),
-                    requirePairingProblem: model.requirePairingProblem,
-                    actions: DevicesPane.Actions(pair: { model.pairDevice() },
-                                                 remove: { model.removeDevice($0) },
-                                                 rename: { model.renameDevice($0, to: $1) }))
+        if model.identityLoading {
+            Form {
+                HStack(spacing: 12) {
+                    ProgressView().controlSize(.small).accessibilityHidden(true)
+                    Text("Reading saved pairing information…")
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("duodesk.identity.loading")
+            }
+        } else {
+            DevicesPane(status: model.coordinator?.status.snapshot.remote ?? RemoteStatus(),
+                        requirePairing: Binding(get: { settings.config.requirePairing }, set: { model.setRequirePairing($0) }),
+                        requirePairingProblem: model.requirePairingProblem,
+                        actions: DevicesPane.Actions(pair: { model.pairDevice() },
+                                                     remove: { model.removeDevice($0) },
+                                                     rename: { model.renameDevice($0, to: $1) }))
+        }
     }
 }
 

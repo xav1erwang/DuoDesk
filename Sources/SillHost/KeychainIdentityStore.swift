@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import Foundation
 import Security
 
@@ -21,10 +22,10 @@ import Security
 ///   IdentityStorePlan picks it only when the running binary actually holds the entitlement.
 ///
 /// The items, in either keychain:
-/// - The key: a permanent P-256 private key, application tag `me.saffer.sill.remote.host-key`,
+/// - The key: a permanent P-256 private key, application tag `com.duodesk.host.remote.host-key`,
 ///   label "Sill Remote Access", looked up by its tag. Only the private key is stored; the public
 ///   one is derived from it.
-/// - The recognition key: a generic password, service `me.saffer.sill.remote`, account
+/// - The recognition key: a generic password, service `com.duodesk.host.remote`, account
 ///   `recognition-key`, 32 bytes.
 /// - The trust list: a generic password, same service, account `paired-devices`, JSON.
 /// - Require pairing: a generic password, same service, account `require-pairing`: "1", or "0."
@@ -58,9 +59,9 @@ import Security
 /// (the same posture as the iOS device key, WhenUnlockedThisDeviceOnly). The legacy store keeps the
 /// login keychain's own default, as it always did.
 package final class KeychainIdentityStore: IdentityStore {
-    static let keyTag = Data("me.saffer.sill.remote.host-key".utf8)
-    static let label = "Sill Remote Access"
-    static let service = "me.saffer.sill.remote"
+    static let keyTag = Data("com.duodesk.host.remote.host-key".utf8)
+    static let label = "DUO你电脑 Remote Access"
+    static let service = "com.duodesk.host.remote"
     static let recognitionAccount = "recognition-key"
     static let pairedAccount = "paired-devices"
     static let requirePairingAccount = "require-pairing"

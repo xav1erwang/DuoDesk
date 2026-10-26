@@ -285,7 +285,7 @@ final class WindowCatalog {
         let infoByID = Dictionary(uniqueKeysWithValues: infos.map { ($0.id, $0) })
         thumbStamps = thumbStamps.filter { infoByID[$0.key] != nil }      // forget closed windows
         for w in windows {
-            if Task.isCancelled { return }
+            if Task.isCancelled || !thumbnailsWanted { return }
             guard let info = infoByID[w.windowID] else { continue }
             if let stamp = thumbStamps[w.windowID], stamp.info == info, w.windowID != activeWindowID,
                now - stamp.at < Self.staticThumbnailInterval { continue }
@@ -298,7 +298,7 @@ final class WindowCatalog {
             let filter = SCContentFilter(desktopIndependentWindow: w)
             guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config),
                   let jpeg = Self.jpeg(image, quality: 0.6) else { continue }
-            onThumbnail?(w.windowID, jpeg)
+            if thumbnailsWanted { onThumbnail?(w.windowID, jpeg) }
         }
     }
 

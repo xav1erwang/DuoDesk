@@ -85,7 +85,7 @@ final class DiagnosticsHUDView: UIView {
         label.isUserInteractionEnabled = false
         label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         label.textColor = .white
-        label.numberOfLines = 1
+        label.numberOfLines = 0
         addSubview(label)
         update(stats: nil, videoSize: .zero)
     }
@@ -94,7 +94,8 @@ final class DiagnosticsHUDView: UIView {
     /// `stats` nil: no second measured yet.
     func update(stats: StreamClient.LinkStats?, videoSize: CGSize) {
         let size = videoSize == .zero ? "no video" : "\(Int(videoSize.width))×\(Int(videoSize.height))"
-        label.text = "\(stats?.fps ?? 0) fps · age \(Self.text(stats?.frameAge)) · rtt \(Self.text(stats?.rtt)) · \(size)"
+        let decoder = HardwareHEVCDecoder.simulatorSoftwareEnabled ? "SIM · SW decode" : "HW required"
+        label.text = "\(stats?.fps ?? 0) fps · \(size) · \(decoder)\nage \(Self.text(stats?.frameAge)) · rtt \(Self.text(stats?.rtt))"
         superview?.setNeedsLayout()
     }
 
@@ -106,8 +107,9 @@ final class DiagnosticsHUDView: UIView {
 
     /// Called from the host view's `layoutSubviews`: pin to the top-right corner of `bounds`.
     func place(in bounds: CGRect) {
-        let text = label.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude))
         let p = Self.padding
+        let available = max(1, bounds.width - 2 * Self.inset - p.left - p.right)
+        let text = label.sizeThatFits(CGSize(width: available, height: .greatestFiniteMagnitude))
         let size = CGSize(width: ceil(text.width) + p.left + p.right, height: ceil(text.height) + p.top + p.bottom)
         frame = CGRect(x: bounds.maxX - Self.inset - size.width, y: bounds.minY + Self.inset,
                        width: size.width, height: size.height)

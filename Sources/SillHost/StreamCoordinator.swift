@@ -27,6 +27,19 @@ package final class StreamCoordinator {
     /// highest, so a ProMotion device is not held to a 60 Hz one beside it; a re-sent viewport
     /// from either is then a no-op instead of a restart. Cleared when the client leaves.
     private var clientFPS: [ObjectIdentifier: Int] = [:]
+    private var clientDesktopResolutions: [ObjectIdentifier: DuoDesktopResolution] = [:]
+    private let duoDesktop: DuoDesktopDisplay
+    private var desktopResolution: DuoDesktopResolution? {
+        clientDesktopResolutions.values.max { $0.width * $0.height < $1.width * $1.height }
+    }
+    private var desktopResolutionNeedsRestart: Bool {
+        guard active == .desktop else { return false }
+        if let wanted = desktopResolution {
+            return !wanted.accepts(width: encoderWidth, height: encoderHeight)
+                || (!synthetic && duoDesktop.resolution != wanted)
+        }
+        return duoDesktop.resolution != nil
+    }
     private var wantedFPS: Int { min(maxFPS, max(24, clientFPS.values.max() ?? 60)) }
     /// What the next pipeline will run at: the software encoder is not asked for more than 60.
     private var effectiveFPS: Int { useSoftwareEncoder ? min(wantedFPS, 60) : wantedFPS }
@@ -80,12 +93,10 @@ package final class StreamCoordinator {
     /// Why that check failed, if it did: the virtual display then stays off for the whole run.
     private var apiProblem: String?
     private var encoder: HEVCEncoder? { didSet { encoderBox.current = encoder } }
-    /// Hardware HEVC normally. When a hardware session stops returning frames, or the launch probe
-    /// gets no answer, the stream runs on the software encoder at half the capture scale and up to
-    /// 60 fps, slow but alive (`enterSoftwareFallback`), until a re-check finds the hardware keeping
-    /// up with the stream again (`recheckLoop`, `hardwareIsBack`). The hardware has been stuck for
-    /// hours (2026-09-22) and busy for seconds (2026-09-24, when this used to last until the host
-    /// relaunched: 3 h at half resolution after a 1.8 s stall).
+    private var videoEpoch = VideoStreamEpoch()
+    private var nativeVideoActive = false
+    /// Production sessions always require verified hardware HEVC. Only the explicit synthetic
+    /// test hook can select software; a hardware failure ends production streaming.
     private var useSoftwareEncoder = false
     private var softwareRestarts = 0
     private var lastSoftwareHangAt: CFAbsoluteTime = 0
@@ -191,7 +202,7 @@ package final class StreamCoordinator {
         "Gestures ignored: \(counts["gestures"] ?? 0) in a minute, from devices sending more than \(StreamCoordinator.gesturesPerSecond) a second."
     }
     /// Gestures waiting for a switch in flight to finish, in arrival order, and the task posting them.
-    private var pendingGestures: [(gesture: TrackpadGesture, device: String)] = []
+    private var pendingGestures: [(gesture: TrackpadGesture, device: String, epoch: UInt64?)] = []
     private var gestureDrain: Task<Void, Never>?
     /// A host that does not advertise (the synthetic test hosts, which tests reach by port) posts no
     /// gesture's chord: it logs the one it would post, "(not posted: a test host)", and counts
@@ -282,12 +293,14 @@ package final class StreamCoordinator {
     /// that advertises, those hooks are ignored with one line each. `hostVersion`: Sill.app's
     /// version for the window lists, when it has one that parses.
     package init(config: HostConfig, synthetic: Bool = false, appKitLoop: Bool, remote: RemoteAccess? = nil,
-                 homePairing: Bool = false, testHooks: Bool = true, hostVersion: String? = nil) throws {
+                 homePairing: Bool = false, testHooks: Bool = true, hostVersion: String? = nil,
+                 independentDuoDesktop: Bool = false) throws {
         var config = config.validated()
         if !appKitLoop { config.virtualDisplay = false }
         self.config = config
         self.synthetic = synthetic
         self.appKitLoop = appKitLoop
+        duoDesktop = DuoDesktopDisplay(layout: independentDuoDesktop && appKitLoop ? .nativePrimary : .mirrored)
         self.hostVersion = hostVersion
         let env = ProcessInfo.processInfo.environment
         let path = PointerTestHooks.pointerPath(synthetic: synthetic, environment: env)
@@ -389,6 +402,7 @@ package final class StreamCoordinator {
             Task { @MainActor in
                 guard let self else { return }
                 self.clientFPS[ObjectIdentifier(connection)] = nil
+                self.clientDesktopResolutions[ObjectIdentifier(connection)] = nil
                 self.settingsArrivals[ObjectIdentifier(connection)] = nil
                 self.settingsIgnoredLineAt[ObjectIdentifier(connection)] = nil
                 let id = ObjectIdentifier(connection)
@@ -407,7 +421,9 @@ package final class StreamCoordinator {
                 let flipped = self.routesChanged(joined: nil, endpoint: nil)
                 // A 120 Hz device left a 60 Hz one behind: come down to its rate. The restart takes
                 // the flip too (select's commit), so a device that leaves costs one.
-                if self.active != .none, self.catalog.clientCount > 1, self.effectiveFPS != self.fps {
+                if self.desktopResolutionNeedsRestart {
+                    await self.select(self.connections.isEmpty ? .none : self.active)
+                } else if self.active != .none, self.catalog.clientCount > 1, self.effectiveFPS != self.fps {
                     await self.select(self.active)
                 } else if flipped {
                     await self.applyPending()
@@ -420,7 +436,7 @@ package final class StreamCoordinator {
                 let wasEmpty = self.catalog.clientCount == 0
                 self.catalog.clientCount = count          // the catalog idles itself at 0
                 // Nobody is watching: stop capturing and encoding. The next client picks afresh.
-                if count == 0 { self.viewport = nil; self.clientFPS = [:] }   // the next device starts from scratch
+                if count == 0 { self.viewport = nil; self.clientFPS = [:]; self.clientDesktopResolutions = [:] }
                 if count == 0 { self.gestureChords.forget() }                 // and did not open a view it could close
                 // On the software encoder, the hardware is checked only while someone watches.
                 if count == 0 { self.stopRecheck() } else { self.devicesPresent(firstArrived: wasEmpty) }
@@ -442,8 +458,10 @@ package final class StreamCoordinator {
             self.server.broadcast(StreamMessage(kind: .appList, timestamp: Date().timeIntervalSince1970,
                                                 isKeyframe: false, payload: Wire.encode(apps)))
         }
+        let traceInputTiming = ProcessInfo.processInfo.environment["SILL_TEST_INPUT_TIMING"] == "1"
         server.onMessage = { [weak self] message, connection in
-            Task { @MainActor in await self?.handle(message, from: connection) }
+            let queuedAt = traceInputTiming && message.kind == .input ? Date().timeIntervalSince1970 : nil
+            Task { @MainActor in await self?.handle(message, from: connection, inputQueuedAt: queuedAt) }
         }
         catalog.onWindowsChanged = { [weak self] infos in
             Task { @MainActor in await self?.windowsChanged(infos) }
@@ -586,7 +604,9 @@ package final class StreamCoordinator {
             // hanging the first stream for 1.5 s and restarting it; the re-check comes back to the
             // hardware once it answers.
             let hardwareResponds = await Task.detached(priority: .userInitiated) { EncoderProbe.hardwareResponds() }.value
-            if !hardwareResponds { enterSoftwareFallback(afterHang: false) }
+            if !hardwareResponds {
+                print("Hardware HEVC is not responding; connections will require a verified hardware session. No software fallback.")
+            }
         }
         if virtualDisplay { enableVirtualDisplay() }
         catalog.start()
@@ -874,7 +894,16 @@ package final class StreamCoordinator {
 
     // MARK: Client messages
 
-    private func handle(_ message: StreamMessage, from connection: NWConnection) async {
+    private func handle(_ message: StreamMessage, from connection: NWConnection, inputQueuedAt: TimeInterval? = nil) async {
+        let enteredAt = inputQueuedAt.map { _ in Date().timeIntervalSince1970 }
+        var mappedAt: TimeInterval?
+        var deliveredAt: TimeInterval?
+        defer {
+            if let inputQueuedAt, let enteredAt {
+                // Test-only phase timestamps; no key code, typed text, coordinates or identity.
+                print("Input timing: sent=\(message.timestamp) network=\(inputQueuedAt) main=\(enteredAt) mapped=\(mappedAt ?? 0) delivered=\(deliveredAt ?? 0)")
+            }
+        }
         switch message.kind {
         case .selectSource:
             guard let source = Wire.decode(StreamSource.self, from: message.payload) else { return }
@@ -913,29 +942,38 @@ package final class StreamCoordinator {
                 if let error { print("Launch failed: \(error.localizedDescription)") }
             }
         case .input:
-            guard let event = Wire.decode(InputEvent.self, from: message.payload) else { return }
+            let control = VideoControlPayload(encoded: message.payload)
+            guard let raw = Wire.decode(InputEvent.self, from: control?.payload ?? message.payload), let event = raw.boundedCoordinates else { return }
             let device = ObjectIdentifier(connection)
+            guard routes[device] != nil else { return }
+            let currentVideo = control == nil ? desktopResolution == nil : videoEpoch.acceptsControl(control)
+            guard currentVideo else { Stats.shared.bump("in.staleVideo"); return }
             guard let rect = currentSourceRect() else {
                 // Nothing streams (between sources, or the stream stopped: the window closed under a
                 // drag): input has nowhere to land. The up of a key or a button the Mac has down still
                 // goes (DroppedInput), a button's where the pointer is (`.null`), so no modifier this
                 // device pressed stays down to make a later click a ⌘-click, and no button to make
                 // every later move a drag.
-                if injector.isUpOfSomethingDown(event) { deliver(event, in: .null, from: device) }
+                if injector.isUpOfSomethingDown(event) { deliver(event, in: .null, from: device, epoch: control?.epoch) }
                 return
             }
+            if inputQueuedAt != nil { mappedAt = Date().timeIntervalSince1970 }
             // A click, a key or text may close a view a gesture opened; a move or a scroll does not.
             gestureChords.input(Self.gestureInput(event))
             // A synthetic host acts on nothing: it posts no event (InputInjector.dryRun), so it
             // activates and raises nothing either.
             if !synthetic { raiseIfInteracting(event) }
-            deliver(event, in: rect, from: device)
+            deliver(event, in: rect, from: device, epoch: control?.epoch)
+            if inputQueuedAt != nil { deliveredAt = Date().timeIntervalSince1970 }
             desktopInputMayActivate(event)
         case .gesture:
             // A three- or four-finger gesture (docs/trackpad-gestures-plan.md §7.4), which the Mac
             // turns into its own shortcut. At most `gesturesPerSecond` a second per connection: a
             // stroke makes one, so more is a runaway or hostile client.
-            guard let gesture = Wire.decode(TrackpadGesture.self, from: message.payload) else { return }
+            let control = VideoControlPayload(encoded: message.payload)
+            let currentVideo = control == nil ? desktopResolution == nil : videoEpoch.acceptsControl(control)
+            guard routes[ObjectIdentifier(connection)] != nil, currentVideo,
+                  let gesture = Wire.decode(TrackpadGesture.self, from: control?.payload ?? message.payload) else { return }
             let id = ObjectIdentifier(connection)
             let now = CFAbsoluteTimeGetCurrent()
             var recent = (gestureArrivals[id] ?? []).filter { now - $0 < 1 }
@@ -948,10 +986,14 @@ package final class StreamCoordinator {
             gestureArrivals[id] = recent
             queueGesture(gesture, from: deviceName(connection))
         case .viewport:
-            guard let v = Wire.decode(Viewport.self, from: message.payload) else { return }
+            guard let v = Wire.decode(Viewport.self, from: message.payload), v.isValid else { return }
             viewport = v
             let id = ObjectIdentifier(connection)
             clientFPS[id] = v.fps ?? 60
+            clientDesktopResolutions[id] = v.desktopResolution
+            // Duo always controls the complete desktop. Per-window screenshot work is unused
+            // there and competes with the continuous native capture on WindowServer.
+            catalog.thumbnailsWanted = desktopResolution == nil
             // The flip its connection made waited for this, its rate (`flipAwaits`): the restart the
             // rate needs takes the flip too, and the flip alone restarts once when the rate needs none.
             let flipWaited = flipWait == id
@@ -1046,6 +1088,7 @@ package final class StreamCoordinator {
     /// what the injector maps the client's fractions onto. Nil when nothing is streaming, so
     /// input that arrives between sources is dropped rather than poked at the wrong window.
     private func currentSourceRect() -> CGRect? {
+        guard !switching, encoder?.isDead == false else { return nil }
         switch active {
         case .none:
             return nil
@@ -1053,7 +1096,7 @@ package final class StreamCoordinator {
             // The test pattern with the TEST ONLY scripted pointer: its own space, where a test
             // client's input moves that pointer (a synthetic host posts nothing).
             if synthetic, pointer.hasTestPointer { return Self.testPatternRect }
-            return catalog.display?.frame
+            return duoDesktop.captureBounds ?? catalog.display?.frame
         case .window(let id):
             // On the virtual display the video is the captured crop, not the whole window: an app
             // that took a larger size than asked overhangs the display and the overhang is not shown.
@@ -1096,7 +1139,7 @@ package final class StreamCoordinator {
             return nil
         case .desktop:
             if synthetic { return pointer.hasTestPointer ? .rect(Self.testPatternRect) : nil }
-            return catalog.display.map { .rect($0.frame) }
+            return (duoDesktop.captureBounds ?? catalog.display?.frame).map { .rect($0) }
         case .window(let id):
             guard !synthetic else { return nil }
             if virtualDisplay, stage.isStaged, let onScreen = stage.captureRectOnScreen { return .rect(onScreen) }
@@ -1136,7 +1179,7 @@ package final class StreamCoordinator {
     private func applyViewportToActiveWindow() async {
         // A different rate (a ProMotion device joined, Low Power Mode toggled) needs a new capture
         // interval and encoder session: one restart, whatever the source.
-        if active != .none, effectiveFPS != fps { await select(active); return }
+        if active != .none, effectiveFPS != fps || desktopResolutionNeedsRestart { await select(active); return }
         if virtualDisplay, stage.isStaged, case .window(let id) = active {
             // One restart: prepare re-places the window on the same display (the display is only
             // recreated if the envelope grew). The client's identical re-send after a switch is a
@@ -1202,9 +1245,24 @@ package final class StreamCoordinator {
     /// restarts leave Mac focus where it is, and so does staging a window on the virtual display.
     /// One exception: a staged window that comes home because the virtual display was turned off
     /// comes forward too, whichever select commits that change (see `cameHome`).
-    func select(_ source: StreamSource, bringForward: Bool = false) async {
+    func select(_ requestedSource: StreamSource, bringForward: Bool = false) async {
         guard !switching, !shuttingDown else { return }
+        let source: StreamSource
+        if desktopResolution != nil, case .window(let id) = requestedSource {
+            // Native Duo sessions always carry the complete desktop, including in landscape
+            // and after an app launch. A window pick only brings that window forward inside it.
+            if bringForward, !synthetic, let window = catalog.window(id: id) {
+                activateAndRaise(window: window)
+            }
+            if active == .desktop { return }
+            source = .desktop
+        } else {
+            source = requestedSource
+        }
         switching = true
+        // A native picture restart cancels the interaction at its source. This lets the new
+        // epoch reject even old releases: a delayed old up must not release a new click or key.
+        if nativeVideoActive || desktopResolution != nil { injector.releaseAll() }
         if source != active { missingPolls = 0 }    // a window's looks off the list are its own
         restartOf = (source == active && source != .none) ? source : nil
         defer {
@@ -1240,7 +1298,7 @@ package final class StreamCoordinator {
             if pendingConfig != nil || (awayWanted != awayRunning && flipWait == nil) { Task { @MainActor in await self.applyPending() } }
             // A stream that did not start (its window gone, capture refused): nothing streams, so
             // the links have nothing to be judged at, and a window sized for it goes back.
-            if active == .none { judgeLinks(nil); restoreFits(keeping: nil) }
+            if active == .none { judgeLinks(nil); restoreFits(keeping: nil); _ = duoDesktop.restore() }
         }
 
         await capture.stop()
@@ -1256,15 +1314,17 @@ package final class StreamCoordinator {
         heldInput = []; holdUntil = 0
         for item in dropped {
             switch item {
-            case .input(let event, _, let device):
+            case .input(let event, _, let device, _):
                 if injector.isUpOfSomethingDown(event) { injector.apply(event, in: .null, from: device) }
-            case .chord(let keyCode, let flags):
-                injector.chord(keyCode: keyCode, flags: flags)
+            case .chord(let keyCode, let flags, let epoch):
+                if epoch == nil { injector.chord(keyCode: keyCode, flags: flags) }
             }
         }
         releaseKeysOfDevicesThatLeft()
         encoder = nil                  // deinit invalidates the VT session
-        server.resetForNewStream()          // every client waits for the next parameter sets + keyframe
+        nativeVideoActive = false
+        if source != .desktop || desktopResolution == nil { _ = duoDesktop.restore() }
+        server.resetForNewStream(reset: videoEpoch.nextReset()) // input and video share this main-actor epoch
         // New settings take effect here, between pipelines, before the rate, the scale and the
         // stage are worked out for the next one.
         var leftStage = false
@@ -1391,11 +1451,34 @@ package final class StreamCoordinator {
             if synthetic {
                 // A 1512×949-point test pattern: the same size as a typical streamed window, so the
                 // encoder and the fallback see realistic load without Screen Recording.
-                width = evenPixels(1512 * captureScale); height = evenPixels(949 * captureScale)
+                if let native = desktopResolution {
+                    width = native.encodedWidth; height = native.encodedHeight
+                } else {
+                    width = evenPixels(1512 * captureScale); height = evenPixels(949 * captureScale)
+                }
                 describe = "a synthetic test pattern\(useSoftwareEncoder ? " (software encoder)" : "")"
                 title = "Test Pattern"; kind = .testPattern
             } else {
-                guard let d = catalog.display else { active = .none; broadcastList(); return }
+                let d: SCDisplay
+                if let native = desktopResolution {
+                    do {
+                        let prepared = try await duoDesktop.prepare(native, fps: fps)
+                        guard !shuttingDown, catalog.clientCount > 0 else {
+                            _ = duoDesktop.restore(); active = .none; broadcastList(); return
+                        }
+                        d = prepared.display
+                    } catch {
+                        _ = duoDesktop.restore()
+                        active = .none; broadcastList()
+                        print("Duo desktop unavailable: \(error.localizedDescription)")
+                        server.goodbyeAll(Goodbye(reason: "duoResolution", message: error.localizedDescription,
+                                                  reconnect: false), within: 0.1)
+                        return
+                    }
+                } else {
+                    guard let display = catalog.display else { active = .none; broadcastList(); return }
+                    d = display
+                }
                 // Sill's own windows (Settings, Log, the pairing window with its code) never go out
                 // in a Desktop stream. Fixed here at pipeline start: a running SCStream is never
                 // reconfigured, so a host that can show a pairing code (remote access) looks for
@@ -1403,16 +1486,24 @@ package final class StreamCoordinator {
                 // would let a pairing window opened later reach the devices. Without Sill anywhere
                 // (the CLI has no windows), as before.
                 var own = catalog.ownApplication
-                if own == nil, remote != nil {
+                if own == nil, remote != nil, Bundle.main.bundleURL.pathExtension == "app" {
                     own = await catalog.resolveOwnApplication()
                     guard !shuttingDown else { active = .none; broadcastList(); return }
                 }
                 if let own {
                     filter = SCContentFilter(display: d, excludingApplications: [own], exceptingWindows: [])
+                } else if duoDesktop.followsNativeCadence {
+                    filter = SCContentFilter(display: d, excludingApplications: [], exceptingWindows: [])
                 } else {
                     filter = SCContentFilter(display: d, excludingWindows: [])
                 }
-                width = evenPixels(CGFloat(d.width) * captureScale); height = evenPixels(CGFloat(d.height) * captureScale)
+                if let native = desktopResolution {
+                    // Exact native canvas on hardware AND software encoders; network and quality
+                    // settings never shrink a Duo desktop behind the client's back.
+                    width = native.encodedWidth; height = native.encodedHeight
+                } else {
+                    width = evenPixels(CGFloat(d.width) * captureScale); height = evenPixels(CGFloat(d.height) * captureScale)
+                }
                 describe = "the whole desktop\(useSoftwareEncoder ? " (software encoder)" : "")"
                 title = "Whole Desktop"; kind = .desktop
             }
@@ -1442,6 +1533,12 @@ package final class StreamCoordinator {
                 print("Could not start streaming \(describe): \(error)")
                 if virtualDisplay { stage.release() }   // nothing streams: never leave a window on the virtual display
                 active = .none
+                if desktopResolution != nil {
+                    let message = error is HEVCEncoder.EncoderError
+                        ? "Mac 无法启动硬件编码，请稍后重新连接。"
+                        : "Mac 无法启动原生桌面捕获，请检查屏幕录制权限后重连。"
+                    server.goodbyeAll(Goodbye(reason: "duoStream", message: message, reconnect: false), within: 0.1)
+                }
             }
         }
         broadcastList()
@@ -1453,6 +1550,9 @@ package final class StreamCoordinator {
     /// `title` and `kind` describe the stream in the app's menu.
     private func startPipeline(source: StreamSource, filter: SCContentFilter?, sourceRect: CGRect?, width: Int, height: Int, describe: String,
                                title: String, kind: HostStatusSnapshot.Stream.Kind) async throws {
+        // A new display layout can invalidate Quartz's event-builder cache. Prepare it after
+        // reconfiguration, before the first streamed image enables interaction. No event is posted.
+        if !synthetic { injector.prepareForInput() }
         let enc = try HEVCEncoder(width: width, height: height, fps: fps, bitrate: streamBitrate, prioritizeSpeed: prioritizeSpeed,
                                   software: useSoftwareEncoder)
         enc.onHung = { [weak self, weak enc] in
@@ -1462,21 +1562,25 @@ package final class StreamCoordinator {
             }
         }
         let server = self.server
+        let videoToken = UUID()
+        server.beginVideoStream(videoToken, reset: videoEpoch.nextReset())
         enc.onEncoded = { data, isKey, parameterSets in
             let now = Date().timeIntervalSince1970
             if let ps = parameterSets {
-                server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true, payload: ps.encoded()))
+                server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true, payload: ps.encoded()), videoToken: videoToken)
             }
-            server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: isKey, payload: data))
+            server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: isKey, payload: data), videoToken: videoToken)
         }
         if let filter {
             capture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }
-            try await capture.start(filter: filter, width: width, height: height, fps: fps, showsCursor: false, sourceRect: sourceRect)
+            try await capture.start(filter: filter, width: width, height: height, fps: fps, showsCursor: false, sourceRect: sourceRect,
+                                    nativeCadence: source == .desktop && desktopResolution != nil && duoDesktop.followsNativeCadence)
         } else {
             syntheticCapture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }
             syntheticCapture.start(width: width, height: height, fps: fps)
         }
         encoder = enc
+        nativeVideoActive = desktopResolution != nil
         active = source
         print("Streaming \(describe) at \(width)×\(height), \(fps) fps, \(streamBitrate / 1_000_000) Mbps")
         status.update {
@@ -1516,7 +1620,10 @@ package final class StreamCoordinator {
     /// Input held for an activation, replayed in order once the app is up, each with the device that
     /// sent it (its keys are its own, KeyStrokes); a gesture's chord that arrives meanwhile waits
     /// behind it, so a click just before the gesture lands first.
-    private enum Held { case input(InputEvent, CGRect, KeyStrokes.Device), chord(keyCode: UInt16, flags: UInt64) }
+    private enum Held {
+        case input(InputEvent, CGRect, KeyStrokes.Device, epoch: UInt64?)
+        case chord(keyCode: UInt16, flags: UInt64, epoch: UInt64?)
+    }
     private var heldInput: [Held] = []
     private var holdUntil: CFAbsoluteTime = 0
     /// Devices that left while input was held: their keys go up after it (`releaseKeys`).
@@ -1524,9 +1631,12 @@ package final class StreamCoordinator {
     /// How long held input waits for the app to become frontmost before it is replayed anyway.
     private static let activationTimeout: TimeInterval = 0.6
 
-    private func deliver(_ event: InputEvent, in rect: CGRect, from device: KeyStrokes.Device) {
+    private func deliver(_ event: InputEvent, in rect: CGRect, from device: KeyStrokes.Device, epoch: UInt64?) {
         // Queue while holding, and while anything is still queued, so order is never inverted.
-        if !heldInput.isEmpty || CFAbsoluteTimeGetCurrent() < holdUntil { heldInput.append(.input(event, rect, device)); return }
+        if !heldInput.isEmpty || CFAbsoluteTimeGetCurrent() < holdUntil {
+            heldInput.append(.input(event, rect, device, epoch: epoch))
+            return
+        }
         logClick(event, in: rect)
         injector.apply(event, in: rect, from: device)
     }
@@ -1537,8 +1647,14 @@ package final class StreamCoordinator {
         heldInput = []
         for item in held {
             switch item {
-            case .input(let event, let rect, let device): logClick(event, in: rect); injector.apply(event, in: rect, from: device)
-            case .chord(let keyCode, let flags): injector.chord(keyCode: keyCode, flags: flags)
+            case .input(let event, let rect, let device, let epoch):
+                if epoch == nil || (epoch == videoEpoch.lastValue && currentSourceRect() != nil) {
+                    logClick(event, in: rect); injector.apply(event, in: rect, from: device)
+                } else if injector.isUpOfSomethingDown(event) {
+                    injector.apply(event, in: .null, from: device)
+                }
+            case .chord(let keyCode, let flags, let epoch):
+                if epoch == nil || (epoch == videoEpoch.lastValue && currentSourceRect() != nil) { injector.chord(keyCode: keyCode, flags: flags) }
             }
         }
         releaseKeysOfDevicesThatLeft()
@@ -1894,6 +2010,7 @@ package final class StreamCoordinator {
         shuttingDown = true
         restoreFits(keeping: nil)
         stage.release()
+        _ = duoDesktop.restore()
     }
 
     /// The CLI's default path at a signal (HostShutdown.installKeyRelease), just before it dies of it:
@@ -1903,6 +2020,7 @@ package final class StreamCoordinator {
     package func releaseKeysForExit() {
         injector.releaseAll()
         restoreFits(keeping: nil)
+        _ = duoDesktop.restore()
     }
 
     // MARK: A window Sill sized goes back (WindowRestore, issue #57)
@@ -1936,19 +2054,20 @@ package final class StreamCoordinator {
     /// long as that encoder is newer than the last return to the hardware (an older one's report
     /// is stale and must not undo the return), but only the encoder carrying the stream may
     /// restart it: a replaced encoder whose frame is still stuck inside VideoToolbox times out
-    /// later, and must not disturb its successor. A hardware hang: switch to the software encoder
-    /// and restart the source; the re-check brings it back. If even the software encoder dies
-    /// repeatedly, stop streaming rather than loop.
+    /// later, and must not disturb its successor. A hardware hang ends the production session.
+    /// The synthetic software test hook has a bounded restart path of its own.
     private func encoderHung(_ enc: HEVCEncoder, attempt: Int = 0) async {
-        if !enc.software, !useSoftwareEncoder, enc.serial > returnSerial {
-            enterSoftwareFallback(afterHang: true)
-        }
         guard enc === encoder, active != .none else { return }
         if switching {
             // Reported in the tail of a switch: `select` would drop it. Try again once it has settled.
             guard attempt < 50 else { print("Encoder hang report could not be applied: a switch never finished."); return }
             try? await Task.sleep(for: .milliseconds(100))
             await encoderHung(enc, attempt: attempt + 1)
+            return
+        }
+        if !enc.software {
+            await select(.none)
+            server.goodbyeAll(Goodbye(reason: "hardwareEncoder", message: "Mac 硬件编码器暂时不可用，请稍后重新连接。", reconnect: false), within: 0.1)
             return
         }
         if enc.software {
@@ -2169,6 +2288,10 @@ package final class StreamCoordinator {
     private func windowsChanged(_ infos: [WindowInfo]) async {
         // The pointer's rectangle follows the catalog: the Desktop's display, a window's bounds.
         defer { pointer.setGeometry(pointerGeometry(), fps: fps) }
+        if active == .desktop, desktopResolution != nil, !synthetic, !duoDesktop.activeModeMatches {
+            await select(.desktop)
+            return
+        }
         if let pending = pendingLaunch, let w = infos.first(where: { $0.bundleID == pending }) {
             pendingLaunch = nil
             await select(.window(w.id), bringForward: true)   // launched from the device to use it: a pick
@@ -2239,7 +2362,8 @@ package final class StreamCoordinator {
     /// window may be on its way home from the virtual display, and the view should open over the
     /// Desktop, which is the only source that shows it.
     private func queueGesture(_ gesture: TrackpadGesture, from device: String) {
-        pendingGestures.append((gesture, device))
+        if desktopResolution != nil, currentSourceRect() == nil { return }
+        pendingGestures.append((gesture, device, desktopResolution == nil ? nil : videoEpoch.lastValue))
         guard gestureDrain == nil else { return }
         gestureDrain = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -2249,7 +2373,8 @@ package final class StreamCoordinator {
             }
             while !self.pendingGestures.isEmpty {
                 let next = self.pendingGestures.removeFirst()
-                self.performGesture(next.gesture, from: next.device)
+                if let epoch = next.epoch, epoch != self.videoEpoch.lastValue || self.currentSourceRect() == nil { continue }
+                self.performGesture(next.gesture, from: next.device, epoch: next.epoch)
             }
             self.gestureDrain = nil
         }
@@ -2259,7 +2384,7 @@ package final class StreamCoordinator {
     /// one line saying what it did, and the chord posted, behind input held for an activation; on
     /// a host that does not advertise, only counted. Nothing is raised or activated first: these
     /// views act on the whole Mac (App Exposé on the app in front), as they do from its keyboard.
-    private func performGesture(_ gesture: TrackpadGesture, from device: String) {
+    private func performGesture(_ gesture: TrackpadGesture, from device: String, epoch: UInt64?) {
         guard !shuttingDown else { return }
         let outcome = gestureChords.resolve(gesture.gesture, table: hotKeyTable())
         print(GestureChords.line(device: device, gesture: gesture.gesture, fingers: gesture.fingers,
@@ -2270,7 +2395,7 @@ package final class StreamCoordinator {
             return
         }
         if !heldInput.isEmpty || CFAbsoluteTimeGetCurrent() < holdUntil {
-            heldInput.append(.chord(keyCode: keyCode, flags: flags))
+            heldInput.append(.chord(keyCode: keyCode, flags: flags, epoch: epoch))
             return
         }
         injector.chord(keyCode: keyCode, flags: flags)
@@ -2322,7 +2447,8 @@ package final class StreamCoordinator {
         StreamMessage(kind: .windowList, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                       payload: Wire.encode(WindowList(macName: macName, windows: catalog.infos, active: active, launchID: launchID,
                                                       hostVersion: hostVersion, protocol: SillProtocol.current,
-                                                      gestures: TrackpadGesture.generation, clipboard: clipboard.advertised)))
+                                                      gestures: TrackpadGesture.generation, clipboard: clipboard.advertised,
+                                                      inputDryRun: synthetic && injector.dryRun && injector.testLog ? true : nil)))
     }
 
     private func broadcastList() { server.broadcast(listMessage()) }

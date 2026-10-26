@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import Foundation
 import Network
 import QuartzCore
@@ -90,10 +91,8 @@ enum RemoteRoute: Equatable {
     /// Anything else: an address reached directly (the tests' 127.0.0.1, a LAN address).
     case address
 
-    /// Through a VPN or over the internet this device asks for at most 60 fps (§7.6): half the data
-    /// of a 120 fps stream, on the link that is usually the slow part. By address (a LAN address,
-    /// the tests' loopback) runs as at home.
-    var capsFrameRate: Bool { self != .address }
+    /// DUO你电脑 permits the panel's full rate on every direct route, including public IP and VPN.
+    var capsFrameRate: Bool { false }
 
     /// "through Tailscale", "through your VPN", "over the internet", "by address".
     var phrase: String {
@@ -311,6 +310,35 @@ final class StreamClient: ObservableObject {
     /// Pixel size of the frames the host is sending, from the HEVC parameter sets. Input positions
     /// are fractions of this, so the overlay needs it to letterbox touches the way the layer does.
     @Published var videoSize: CGSize = .zero
+    @Published var nativeDisplayMetrics: DuoNativeDisplayMetrics? = nil
+    @Published private(set) var nativeDesktopResolution: DuoDesktopResolution? = {
+        guard let data = UserDefaults.standard.data(forKey: "duodesk.nativeUpperDisplay"),
+              let value = try? JSONDecoder().decode(DuoDesktopResolution.self, from: data), value.isValid else { return nil }
+        return value
+    }()
+
+    var hasNativeDesktopVideo: Bool {
+        guard active == .desktop,
+              nativeDesktopResolution?.accepts(width: Int(videoSize.width), height: Int(videoSize.height)) == true else { return false }
+        // A remembered size alone cannot authorize input while a new format/connection is
+        // awaiting its first native image. The decoder generation fences the old picture out.
+        return displayView.hasCurrentImage
+    }
+
+    func updateDuoNativeResolution(innerDisplay: Bool, frame: CGRect, fold: CGRect?) {
+        guard innerDisplay, let metrics = nativeDisplayMetrics,
+              DuoStreamPolicy.coherentInnerMetrics(metrics, frame: frame, fold: fold),
+              let resolution = DuoStreamPolicy.nativeUpperDisplay(width: metrics.pixels.width, height: metrics.pixels.height),
+              resolution != nativeDesktopResolution else { return }
+        displayView.requireNativeResolution(resolution)
+        nativeDesktopResolution = resolution
+        if let data = try? JSONEncoder().encode(resolution) {
+            UserDefaults.standard.set(data, forKey: "duodesk.nativeUpperDisplay")
+        }
+        #if DEBUG
+        print("duo native: inner \(Int(metrics.pixels.width))×\(Int(metrics.pixels.height)) px; upper \(resolution.width)×\(resolution.height); encode \(resolution.encodedWidth)×\(resolution.encodedHeight)")
+        #endif
+    }
     // The pointer sprite (docs/pointer-visibility-plan.md §7.3; the rules are PointerPresence.swift's).
     // One sprite in the display view shows the Mac's pointer while the Mac, or another device, moved it
     // last (kind 26 says where), and this device's own only for the portrait trackpad (and the Pencil,
@@ -437,9 +465,22 @@ final class StreamClient: ObservableObject {
     /// view that would sit black until the next keyframe, up to 4 s later. Main thread.
     private(set) lazy var displayView: HEVCDisplayView = {
         let view = HEVCDisplayView(frame: .zero)
+        view.requireNativeResolution(nativeDesktopResolution)
         view.onVideoSize = { [weak self] size in self?.videoSize = size }
+        view.onDecoderFailure = { [weak self] message in
+            self?.disconnect()
+            self?.status = message
+        }
+        view.onNativeDisplaySize = { [weak self] metrics in
+            DispatchQueue.main.async {
+                guard let self, self.nativeDisplayMetrics != metrics else { return }
+                self.nativeDisplayMetrics = metrics
+            }
+        }
+        onVideoReset = { view.clear() }
         onParameterSets = { ps in view.apply(ps) }
         onFrame = { data, isKey in view.enqueue(data, isKeyframe: isKey) }
+        view.onKeyframeNeeded = { [weak self] in self?.send(.requestKeyframe, payload: Data()) }
         return view
     }()
 
@@ -456,6 +497,8 @@ final class StreamClient: ObservableObject {
         }
     }
     var onFrame: ((_ data: Data, _ isKeyframe: Bool) -> Void)?
+    var onVideoReset: (() -> Void)?
+    private var videoEpoch = VideoStreamEpoch()
 
     // Discovery (main thread). Two browsers: the network one always runs and never uses
     // peer-to-peer; the nearby one runs only when DiscoveryPolicy says, never while connected.
@@ -699,9 +742,15 @@ final class StreamClient: ObservableObject {
         /// Remote: the address that won, and why it was dialed.
         var candidate: RemoteDialPolicy.Candidate?
         var why: DialReason?
+        /// A QUIC winner is not admitted until its first list. If it ends sooner, retry only
+        /// this exact candidate and observed pin once over TLS/TCP; never loosen identity checks.
+        var remoteQUICPin: Data? = nil
         /// At home: how its connections speak to the Mac's door (docs/home-pairing-plan.md §7.2),
         /// plain or TLS, and the key each is pinned to; nil for a remote session.
         var home: DiscoveryPolicy.HomeTrust? = nil
+        /// An unadmitted home QUIC stream can fail in its read callback before its state callback.
+        /// The terminal path keeps the observed pin and performs the same one-time TCP retry.
+        var retryHomeTCP: ((DiscoveryPolicy.HomeTrust) -> Void)? = nil
         /// The row it was dialed from, for a pin that fails (§7.6); nil for an address.
         var row: HomeRow? = nil
         /// The endpoint dialed (the DEBUG move and path tests start from it).
@@ -1479,13 +1528,14 @@ final class StreamClient: ObservableObject {
     /// none can be made (the status says so).
     @discardableResult
     func connect(to endpoint: NWEndpoint, name: String, peerToPeer: Bool = false, macID: String? = nil, fallback: NWEndpoint? = nil,
-                 trust: DiscoveryPolicy.HomeTrust = .plain, row: HomeRow? = nil) -> Bool {
+                 trust: DiscoveryPolicy.HomeTrust = .plain, row: HomeRow? = nil, preferQUIC: Bool = true) -> Bool {
         // A TLS dial's parameters need this device's key, made now at its first one. A pin refused
         // (-9808) ends the dial as its `.waiting` would have: a Bonjour row's connection never says
         // so itself, it prepares again and again (DeviceTLS.options), and the tap's "Connecting to…"
         // stayed for good (Noah, 2026-09-27).
         let refused = WeakConnection()
-        guard let params = sessionParameters(trust, peerToPeer: peerToPeer, onPinRefused: { [weak self] in
+        let useQUIC = trust.tls && preferQUIC
+        guard let params = sessionParameters(trust, peerToPeer: peerToPeer, quic: useQUIC, onPinRefused: { [weak self] in
             guard let self, let c = refused.connection else { return }
             refused.connection = nil   // once per connection
             #if DEBUG
@@ -1527,6 +1577,24 @@ final class StreamClient: ObservableObject {
         if trust.tls { print("home: dialing \(name) over TLS, \(DiscoveryPolicy.pin(trust) == .anyKey ? "any key" : "pinned")") }
         #endif
         let c = NWConnection(to: endpoint, using: params)
+        // On the main queue. Only a dial that has not become a session may retry TCP; a user tap,
+        // successful window list, or newer connection makes this work stale. Keep the key already
+        // observed by an open TLS door, too, so a retry cannot silently change the answering Mac.
+        let retryTCP = { [weak self] in
+            guard let self, self.connection === c, !self.connected else { return }
+            let pinnedTrust = self.session?.home ?? trust
+            #if DEBUG
+            print("home: retrying unavailable QUIC over TCP with the same pin")
+            #endif
+            _ = self.connect(to: endpoint, name: name, peerToPeer: peerToPeer, macID: macID, fallback: fallback,
+                             trust: pinnedTrust, row: row, preferQUIC: false)
+        }
+        if useQUIC {
+            session?.retryHomeTCP = { [weak self] pinnedTrust in
+                _ = self?.connect(to: endpoint, name: name, peerToPeer: peerToPeer, macID: macID, fallback: fallback,
+                                  trust: pinnedTrust, row: row, preferQUIC: false)
+            }
+        }
         // The hello first, written to `c` before it becomes the session's connection below: from
         // then on the session can send through the link before `.ready` (a coast's end as the
         // stream screen goes, the pointer's viewport 200 ms after a tear-down), and a send made
@@ -1544,6 +1612,9 @@ final class StreamClient: ObservableObject {
                 // split its messages), and its path is back.
                 guard !wasReady else { self.sessionReadyAgain(c); return }
                 wasReady = true
+                #if DEBUG
+                if trust.tls { print("home: session transport \(useQUIC ? "QUIC" : "TCP"), mutual TLS 1.3") }
+                #endif
                 let direct = peerToPeer && Self.runsPeerToPeer(c.currentPath)
                 let path = c.currentPath
                 let seen = trust.tls ? RemoteTLS.peerFingerprint(c) : nil
@@ -1566,6 +1637,10 @@ final class StreamClient: ObservableObject {
                 self.startReading(c)
             case .waiting(let e):
                 print("connection waiting: \(e)")
+                if useQUIC && !wasReady {
+                    DispatchQueue.main.async(execute: retryTCP)
+                    return
+                }
                 // Once `c` carries the session (a wired dial's too), waiting again means its path is gone.
                 self.sessionWaiting(c)
                 if let fallback {   // a wired dial that cannot go on (the cable just pulled, say)
@@ -1599,6 +1674,13 @@ final class StreamClient: ObservableObject {
                 }
             case .failed(let e):
                 print("connection failed: \(e)")
+                if useQUIC {
+                    DispatchQueue.main.async {
+                        if self.connection === c, !self.connected { retryTCP() }
+                        else { self.connectionLost(c, error: e); c.cancel() }
+                    }
+                    return
+                }
                 if let fallback {
                     // Queued before the cancel's .cancelled, whose connectionLost then finds `c`
                     // replaced by the unconstrained dial.
@@ -1620,6 +1702,11 @@ final class StreamClient: ObservableObject {
         followRoute(of: c)
         connection = c        // before start: .ready can be delivered before the next line runs
         c.start(queue: queue)
+        if useQUIC {
+            // UDP may be unavailable at an older host or a router. A retry remains mutual TLS
+            // with the same pin, and pairing proofs themselves are never raced or replayed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: retryTCP)
+        }
         if reconnect == nil {
             // Not the automatic reconnect's dial (a tap's, the session after a pairing, `-SillConnect`):
             // its first window list within DiscoveryPolicy.tapDialDeadline, or it ends with words, so
@@ -3073,7 +3160,9 @@ final class StreamClient: ObservableObject {
     /// that was to carry a session whose connection had gone on did not (`moveEnded`,
     /// `followBestPath`). Main thread.
     private func endSession(error: NWError? = nil, end: RemoteDialPolicy.End? = nil) {
+        let ended = connection
         connection = nil
+        ended?.cancel()
         #if DEBUG
         if connected { print("session: over; back to the connect screen") }
         #endif
@@ -3110,7 +3199,7 @@ final class StreamClient: ObservableObject {
         sessionHost = nil
         refusedListing = nil
         resetHomeMove()
-        queue.async { self.lastParameterSets = nil; self.pendingMove = nil; self.stopMeasuring() }
+        queue.async { self.lastParameterSets = nil; self.videoEpoch.reset(); self.pendingMove = nil; self.stopMeasuring() }
         firstListDeadline?.cancel()
         firstListDeadline = nil
         session = nil
@@ -3257,6 +3346,11 @@ final class StreamClient: ObservableObject {
     }
 
     func sendInput(_ event: InputEvent) {
+        // Releases still end a drag or modifier during a video restart.
+        guard event.isRelease || hasNativeDesktopVideo else { return }
+        let stillCurrent: @Sendable () -> Bool
+        if event.isRelease { stillCurrent = { true } }
+        else { stillCurrent = displayView.makeInputFence() }
         // Every input passes here, a hover and a flick's coast included: the tour's rule counts it
         // as something happening (StreamScreen.considerTour).
         lastInputAt = ProcessInfo.processInfo.systemUptime
@@ -3267,13 +3361,13 @@ final class StreamClient: ObservableObject {
         if inputPaused { print("tour: INPUT SENT WHILE THE TOUR SHOWED: \(event)") }
         #endif
         queue.async { [weak self] in
-            guard let self else { return }
+            guard let self, stillCurrent() else { return }
             // Every input hands this device the pointer, coalesced moves included, here where the
             // Mac's reports are judged, so none can slip between an input and its count.
             self.pointerNoteSent(event)
             guard case .pointer(.move, _, _) = event else {
                 self.flushPendingMove()
-                self.send(.input, Wire.encode(event))
+                self.sendVideoControl(.input, Wire.encode(event))
                 return
             }
             let now = CACurrentMediaTime()
@@ -3281,7 +3375,7 @@ final class StreamClient: ObservableObject {
             if now >= due {
                 self.pendingMove = nil
                 self.lastMoveAt = now
-                self.send(.input, Wire.encode(event))
+                self.sendVideoControl(.input, Wire.encode(event))
             } else {
                 self.pendingMove = event   // replaces any older pending move
                 if !self.moveFlushScheduled {
@@ -3321,6 +3415,10 @@ final class StreamClient: ObservableObject {
     /// pointer, no scroll, and a latched modifier stays latched. Main thread. True when it went.
     @discardableResult
     func sendGesture(_ gesture: TrackpadGestures.Gesture, fingers: Int) -> Bool {
+        if nativeDesktopResolution != nil, !hasNativeDesktopVideo { return false }
+        let stillCurrent: @Sendable () -> Bool
+        if nativeDesktopResolution == nil { stillCurrent = { true } }
+        else { stillCurrent = displayView.makeInputFence() }
         var windowStreams = false
         if case .window = active { windowStreams = true }
         let plan = TrackpadGestures.sending(switchOn: Self.gesturesOn, connected: connected, hostGestures: hostGestures,
@@ -3328,10 +3426,12 @@ final class StreamClient: ObservableObject {
         guard plan.send else { return false }
         if plan.desktopFirst { select(.desktop) }
         let payload = Wire.encode(TrackpadGesture(gesture: gesture.rawValue, fingers: fingers))
+        let nativeVideo = nativeDesktopResolution != nil
         queue.async { [weak self] in
-            guard let self else { return }
+            guard let self, stillCurrent() else { return }
             self.flushPendingMove()
-            self.send(.gesture, payload)
+            if nativeVideo { self.sendVideoControl(.gesture, payload) }
+            else { self.send(.gesture, payload) }
         }
         return true
     }
@@ -3341,7 +3441,16 @@ final class StreamClient: ObservableObject {
         guard let move = pendingMove else { return }
         pendingMove = nil
         lastMoveAt = CACurrentMediaTime()
-        send(.input, Wire.encode(move))
+        sendVideoControl(.input, Wire.encode(move))
+    }
+
+    /// On `queue`: preserve the video identity across the network, including a delayed TCP input.
+    private func sendVideoControl(_ kind: StreamMessageKind, _ payload: Data) {
+        if let epoch = videoEpoch.lastValue, let control = VideoControlPayload(epoch: epoch, payload: payload) {
+            send(kind, control.encoded)
+        } else {
+            send(kind, payload) // Compatibility with hosts that send no video restart markers.
+        }
     }
 
     private func send(_ kind: StreamMessageKind, _ payload: Data) {
@@ -3600,6 +3709,14 @@ final class StreamClient: ObservableObject {
     /// On the network queue.
     private func handle(_ header: StreamHeader, _ data: Data) {
         switch header.kind {
+        case .streamReset:
+            guard videoEpoch.acceptReset(data) else { return }
+            lastParameterSets = nil
+            pendingMove = nil
+            // Clear synchronously on this serial receive queue before any following parameter
+            // sets are admitted. The decoder fences input immediately; UIKit updates hop to main.
+            onVideoReset?()
+            DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
         case .parameterSets:
             if let ps = ParameterSets(encoded: data) {
                 lastParameterSets = ps

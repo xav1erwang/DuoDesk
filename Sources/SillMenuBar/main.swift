@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import SillHostCore
 
 // Sill.app's executable (Scripts/make-app.sh wraps it into the signed bundle). The AppKit
@@ -9,6 +10,16 @@ import SillHostCore
 setvbuf(stdout, nil, _IOLBF, 0)
 // A write to a closed pipe (stdout of a Terminal that went away) must not end the host.
 signal(SIGPIPE, SIG_IGN)
+
+// Read the app's own TCC state before initializing logs, identity storage, UI or listeners.
+// Launch this bundle through LaunchServices: the SSH/Terminal CLI has separate permissions.
+// Preflight never requests a grant or opens a system authorization prompt.
+if CommandLine.arguments.contains("--print-permissions") {
+    print("Screen capture: \(CGPreflightScreenCaptureAccess() ? "allowed" : "not allowed")")
+    print("Input control: \(AXIsProcessTrusted() ? "allowed" : "not allowed")")
+    print("Application: \(Bundle.main.bundleIdentifier ?? "unbundled")")
+    exit(0)
+}
 
 // Before anything prints: the host's lines go to the Log window's ring and the log file too.
 HostLog.shared.configure(keepLines: 5_000, fileURL: DebugHooks.logFileURL)

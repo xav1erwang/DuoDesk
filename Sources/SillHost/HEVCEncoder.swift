@@ -21,9 +21,8 @@ import StreamProtocol
 ///   once was measured against the hardware's slow state and dropped (CLAUDE.md, "The 33 fps
 ///   plateau").
 /// - A watchdog on its own queue declares the session dead when a frame has been inside VT
-///   `hangAfter` seconds without an output. The owner is told (`onHung`) and starts over on the
-///   software encoder, and leaves it again once a re-check finds the hardware keeping up with the
-///   stream (StreamCoordinator, EncoderProbe). It has fired for two different reasons:
+///   `hangAfter` seconds without an output. The owner is told (`onHung`); DuoDesk ends that
+///   production session instead of falling back to software. Upstream observed two causes:
 ///   - Stuck. 2026-09-22 the Mac's hardware encoder wedged system-wide for about three hours: a
 ///     fresh session in a fresh process never returned a single frame. With the old direct call
 ///     that froze the capture queue, then `stopCapture`, then every later source switch.
@@ -63,6 +62,8 @@ final class HEVCEncoder {
 
     /// Called on VideoToolbox's callback thread with one access unit (length-prefixed NALs).
     var onEncoded: ((_ data: Data, _ isKeyframe: Bool, _ parameterSets: ParameterSets?) -> Void)?
+    /// Actual VideoToolbox hand-over to callback time, in milliseconds; no cross-host clock comparison.
+    var onEncodeLatency: ((Double) -> Void)?
     /// The session stopped returning frames. Called once, on the watchdog's queue. The encoder is
     /// dead afterwards: it drops every further frame.
     var onHung: (() -> Void)?
@@ -151,6 +152,7 @@ final class HEVCEncoder {
         var s: VTCompressionSession?
         var spec: [CFString: Any] = [:]
         if software { spec[kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder] = false }
+        else { spec[kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder] = true }
         let status = VTCompressionSessionCreate(
             allocator: nil, width: Int32(width), height: Int32(height),
             codecType: kCMVideoCodecType_HEVC, encoderSpecification: spec.isEmpty ? nil : spec as CFDictionary,
@@ -159,20 +161,38 @@ final class HEVCEncoder {
         guard status == noErr, let session = s else { throw EncoderError.create(status) }
 
         func set(_ key: CFString, _ value: CFTypeRef) { VTSessionSetProperty(session, key: key, value: value) }
-        set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
+        func require(_ key: CFString, _ value: CFTypeRef) throws {
+            let status = VTSessionSetProperty(session, key: key, value: value)
+            guard status == noErr else {
+                VTCompressionSessionInvalidate(session)
+                throw EncoderError.property(key as String, status)
+            }
+        }
+        try require(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
         set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
-        set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)      // no B-frames
+        try require(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse) // no B-frames
         // Keyframes are requested on demand (new client, dropped delta, source switch); this is
         // only a safety interval. Longer intervals cut the periodic IDR hitch; 4 s is the value
         // every working stream so far has used.
         set(kVTCompressionPropertyKey_MaxKeyFrameInterval, (fps * 4) as CFNumber)
-        set(kVTCompressionPropertyKey_ExpectedFrameRate, fps as CFNumber)
+        try require(kVTCompressionPropertyKey_ExpectedFrameRate, fps as CFNumber)
         set(kVTCompressionPropertyKey_AverageBitRate, bitrate as CFNumber)
         set(kVTCompressionPropertyKey_DataRateLimits, [bitrate / 8, 1] as CFArray)
         if prioritizeSpeed || software, #available(macOS 14.0, *) {
             set(kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanTrue)
         }
-        VTCompressionSessionPrepareToEncodeFrames(session)
+        let prepared = VTCompressionSessionPrepareToEncodeFrames(session)
+        guard prepared == noErr else { VTCompressionSessionInvalidate(session); throw EncoderError.create(prepared) }
+        if !software {
+            var actual: Unmanaged<CFTypeRef>?
+            let queried = VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+                                                allocator: nil, valueOut: &actual)
+            let hardware = (actual?.takeRetainedValue() as? NSNumber)?.boolValue == true
+            guard queried == noErr, hardware else {
+                VTCompressionSessionInvalidate(session)
+                throw EncoderError.create(queried == noErr ? kVTVideoEncoderNotAvailableNowErr : queried)
+            }
+        }
         return session
     }
 
@@ -415,13 +435,16 @@ final class HEVCEncoder {
         let now = CACurrentMediaTime()
         // The slow state is judged on frames that came back encoded, timed from their hand-over.
         var event: EncoderSlowState.Event?
+        var latency: Double?
         if let bytes, !mailbox.dead, let inside = mailbox.inside, inside.id == id, inside.handed {
+            latency = (now - inside.since) * 1000
             event = slowState?.returned(turnaround: now - inside.since, bytes: bytes, at: now)
         }
         let outcome = mailbox.returned(id, now: now)
         // Queued before the lock is released, like every frame let in (`admitLocked`).
         if case .next(let (pb, pts), let next) = outcome { encodeQueue.async { [weak self] in self?.submit(pb, pts: pts, id: next) } }
         lock.unlock()
+        if let latency { onEncodeLatency?(latency) }
         if let event { slowStateSays(event) }
         switch outcome {
         case .late: return false
@@ -540,7 +563,7 @@ final class HEVCEncoder {
         return ParameterSets(nalUnitHeaderLength: Int(nalLen), sets: sets)
     }
 
-    enum EncoderError: Error { case create(OSStatus) }
+    enum EncoderError: Error { case create(OSStatus); case property(String, OSStatus) }
 
     /// TEST ONLY. `SILL_TEST_ENCODER_HANG=N`: the first N hardware stream sessions of this process
     /// each hold their 90th frame on `encodeQueue` for 3 s before handing it to VideoToolbox (later

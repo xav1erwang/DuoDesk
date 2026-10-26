@@ -60,12 +60,17 @@ public struct WindowList: Codable {
     /// pull request #66's `Bool` (never released) does not decode here and becomes an Int as it
     /// rebases.
     public var clipboard: Int?
+    /// Test-only attestation: this host logs input without posting any system event. Omitted
+    /// by ordinary hosts; diagnostics must require exactly true before sending dry-run input.
+    public var inputDryRun: Bool?
 
     public init(macName: String, windows: [WindowInfo], active: StreamSource, launchID: String? = nil,
-                hostVersion: String? = nil, protocol: Int? = nil, gestures: Int? = nil, clipboard: Int? = nil) {
+                hostVersion: String? = nil, protocol: Int? = nil, gestures: Int? = nil, clipboard: Int? = nil,
+                inputDryRun: Bool? = nil) {
         self.macName = macName; self.windows = windows; self.active = active; self.launchID = launchID
         self.hostVersion = hostVersion; self.protocol = `protocol`; self.gestures = gestures
         self.clipboard = clipboard
+        self.inputDryRun = inputDryRun
     }
 }
 

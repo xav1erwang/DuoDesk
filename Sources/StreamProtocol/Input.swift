@@ -31,6 +31,35 @@ public enum InputEvent: Codable, Hashable {
     /// A key by USB HID usage (UIKeyboardHIDUsage.rawValue on iOS) with UIKeyModifierFlags bits,
     /// which are the same bit positions as CGEventFlags for shift/control/option/command.
     case key(hidUsage: UInt16, down: Bool, modifiers: UInt64)
+
+    /// Key and pointer releases can finish an interaction while its video is restarting.
+    public var isRelease: Bool {
+        switch self {
+        case .key(_, false, _), .pointer(.leftUp, _, _), .pointer(.rightUp, _, _): return true
+        default: return false
+        }
+    }
+
+    /// Bound untrusted unit coordinates before any screen-space multiplication or integer logging.
+    /// A finite JSON number can overflow when multiplied by a desktop's width.
+    public var boundedCoordinates: InputEvent? {
+        func position(_ x: Double, _ y: Double) -> (Double, Double)? {
+            guard x.isFinite, y.isFinite else { return nil }
+            return (min(1, max(0, x)), min(1, max(0, y)))
+        }
+        switch self {
+        case .pointer(let action, let x, let y):
+            guard let (x, y) = position(x, y) else { return nil }
+            return .pointer(action, x: x, y: y)
+        case .scroll(let x, let y, let dx, let dy):
+            guard let (x, y) = position(x, y), dx.isFinite, dy.isFinite else { return nil }
+            return .scroll(x: x, y: y, dx: dx, dy: dy)
+        case .scrollGesture(let phase, let x, let y):
+            guard let (x, y) = position(x, y) else { return nil }
+            return .scrollGesture(phase, x: x, y: y)
+        case .key, .text: return self
+        }
+    }
 }
 
 public enum ScrollPhase: String, Codable {

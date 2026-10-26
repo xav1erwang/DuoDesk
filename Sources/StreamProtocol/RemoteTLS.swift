@@ -53,7 +53,44 @@ public enum RemoteTLS {
     public static func options(identity: sec_identity_t, role: Role, queue: DispatchQueue,
                                verify: @escaping (_ peerFingerprint: Data?, _ alpn: String?) -> Bool) -> NWProtocolTLS.Options {
         let options = NWProtocolTLS.Options()
-        let sp = options.securityProtocolOptions
+        configure(options.securityProtocolOptions, identity: identity, role: role, queue: queue, verify: verify)
+        return options
+    }
+
+    /// A reliable bidirectional QUIC stream. It carries exactly the same framed protocol and
+    /// mutual TLS pins as TCP; no datagrams, early data, tickets or session resumption. One client
+    /// stream is enough for a session. The server must accept it through an NWConnectionGroup,
+    /// and close the group with that stream so an authenticated idle tunnel cannot outlive it.
+    public static func quicOptions(identity: sec_identity_t, role: Role, queue: DispatchQueue,
+                                   verify: @escaping (_ peerFingerprint: Data?, _ alpn: String?) -> Bool) -> NWProtocolQUIC.Options {
+        let options = NWProtocolQUIC.Options()
+        options.direction = .bidirectional
+        switch role {
+        case .server: options.initialMaxStreamsBidirectional = 1
+        case .client: options.initialMaxStreamsBidirectional = 0
+        }
+        options.initialMaxStreamsUnidirectional = 0
+        options.initialMaxData = 8 << 20
+        options.initialMaxStreamDataBidirectionalLocal = 8 << 20
+        options.initialMaxStreamDataBidirectionalRemote = 8 << 20
+        options.idleTimeout = 15_000
+        configure(options.securityProtocolOptions, identity: identity, role: role, queue: queue, verify: verify)
+        return options
+    }
+
+    public static func quicParameters(options: NWProtocolQUIC.Options, peerToPeer: Bool = false) -> NWParameters {
+        let parameters = NWParameters(quic: options)
+        parameters.serviceClass = .interactiveVideo
+        parameters.includePeerToPeer = peerToPeer
+        // A changed network uses a fresh connection and repeats the origin and trust gates.
+        parameters.multipathServiceType = .disabled
+        return parameters
+    }
+
+    /// Both transports use this verification policy. In particular, QUIC must not replace the
+    /// door's ALPN-aware verify callback with a fingerprint-only check.
+    private static func configure(_ sp: sec_protocol_options_t, identity: sec_identity_t, role: Role,
+                                  queue: DispatchQueue, verify: @escaping (Data?, String?) -> Bool) {
         sec_protocol_options_set_min_tls_protocol_version(sp, .TLSv13)
         sec_protocol_options_set_max_tls_protocol_version(sp, .TLSv13)
         sec_protocol_options_set_local_identity(sp, identity)
@@ -77,7 +114,6 @@ public enum RemoteTLS {
             // matches.
             complete(verify(peerLeaf(metadata).flatMap { SPKI.fingerprint(of: $0) }, negotiatedALPN(metadata)))
         }, queue)
-        return options
     }
 
     /// The same, for a side that pins by key alone (a device dialing a saved Mac, a test client).
@@ -123,15 +159,23 @@ public enum RemoteTLS {
 
     /// The application protocol a ready connection negotiated; nil for none (or not TLS).
     public static func negotiatedALPN(_ connection: NWConnection) -> String? {
-        guard let m = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else { return nil }
-        return negotiatedALPN(m.securityProtocolMetadata)
+        guard let metadata = securityMetadata(connection) else { return nil }
+        return negotiatedALPN(metadata)
     }
 
     /// The fingerprint of a ready connection's peer certificate (its leaf); nil when there is none
     /// or its key is not P-256.
     public static func peerFingerprint(_ connection: NWConnection) -> Data? {
-        guard let m = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else { return nil }
-        return peerLeaf(m.securityProtocolMetadata).flatMap { SPKI.fingerprint(of: $0) }
+        guard let metadata = securityMetadata(connection) else { return nil }
+        return peerLeaf(metadata).flatMap { SPKI.fingerprint(of: $0) }
+    }
+
+    /// TLS metadata for either transport, including an accepted QUIC stream.
+    public static func securityMetadata(_ connection: NWConnection) -> sec_protocol_metadata_t? {
+        if let m = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata {
+            return m.securityProtocolMetadata
+        }
+        return (connection.metadata(definition: NWProtocolQUIC.definition) as? NWProtocolQUIC.Metadata)?.securityProtocolMetadata
     }
 
     /// The first certificate the peer sent (its own), exactly as the handshake carried it. Never

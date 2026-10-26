@@ -77,6 +77,7 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
     private let rereadQueue = DispatchQueue(label: "sill.pointer", qos: .utility)
 
     private let lock = NSLock()
+    private let traceInputTiming = ProcessInfo.processInfo.environment["SILL_TEST_INPUT_TIMING"] == "1"
     // Under `lock`:
     private var control = PointerControl()
     private var geometry: Geometry?
@@ -204,7 +205,12 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
         if synthetic {
             read = path == nil ? nil : scriptedPointer(now: now)
         } else {
+            let beganAt = traceInputTiming ? Date().timeIntervalSince1970 : nil
             read = readLocation()
+            if let beganAt {
+                let milliseconds = (Date().timeIntervalSince1970 - beganAt) * 1000
+                if milliseconds > 2 { print("Pointer sample timing: readMs=\(milliseconds)") }
+            }
         }
         guard let p = read else { lock.unlock(); return nil }
         let moved = lastRead.map { $0 != p } ?? true

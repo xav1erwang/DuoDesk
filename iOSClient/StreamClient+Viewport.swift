@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import Foundation
 import ObjectiveC
 import UIKit
@@ -56,17 +57,16 @@ extension StreamClient {
 
     /// The rate the host should stream at for this device: the panel's ceiling (120 on ProMotion
     /// iPads and iPhones, 60 on the iPad mini and other 60 Hz panels), or 60 while Low Power Mode
-    /// is on, which caps the panel at 60 anyway, or while `remote` (away from home through a VPN or
-    /// over the internet: `RemoteRoute.capsFrameRate`). `StreamScreen` re-sends the viewport when
-    /// the first two change, and the host restarts its capture and encoder at the new rate. A LAN
-    /// device at 120 beside a remote one still keeps the shared stream at 120.
+    /// is on, which caps the panel at 60 anyway. Public-IP and VPN sessions use the same ceiling.
+    /// `StreamScreen` re-sends the viewport when the panel or power state changes.
     static func wantedFPS(remote: Bool = false) -> Int {
-        let ceiling = screenMaximumFPS()
-        let rate = ProcessInfo.processInfo.isLowPowerModeEnabled ? min(60, ceiling) : ceiling
-        return remote ? min(60, rate) : rate
+        // A public-IP route can carry 120 fps too. Let the panel, low-power state and host limit
+        // decide; network congestion is handled by the existing bounded video queue and link report.
+        return DuoStreamPolicy.requestedFPS(panelMaximum: screenMaximumFPS(),
+                                            lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
     }
 
-    /// This session is away from home through a VPN or over the internet, so it asks for 60 fps.
+    /// Kept for the shared settings UI; this fork does not cap a route merely for being remote.
     var awayCapsFrameRate: Bool { remoteRoute?.capsFrameRate ?? false }
 
     /// The fastest rate this device's screen shows, Low Power Mode aside: 120 on ProMotion, 60 on

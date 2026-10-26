@@ -35,6 +35,7 @@ final class InputInjector {
     /// still applies to an injected click. Keyboard events below set their flags explicitly anyway.
     private let source = CGEventSource(stateID: .hidSystemState)
     private var lastMoveArrival: CFTimeInterval = 0   // jitter probe, see apply()
+    private let traceInputTiming = ProcessInfo.processInfo.environment["SILL_TEST_INPUT_TIMING"] == "1"
     private var left = ButtonState()
     private var right = ButtonState()
 
@@ -65,6 +66,18 @@ final class InputInjector {
     /// Where the last pointer event went: a synthetic host's pointer, which it never reads.
     private var lastPointerLocation: CGPoint = .zero
 
+    init() {
+        prepareForInput()
+    }
+
+    func prepareForInput() {
+        // Creating the first HID event can initialize Quartz on the input path. Prepare the
+        // event builders while the host starts; these objects are discarded and never posted.
+        _ = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                    mouseCursorPosition: .zero, mouseButton: .left)
+        _ = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
+    }
+
     // MARK: Entry point
 
     /// One device's input. `device` is its connection, whose keys KeyStrokes keeps down until they
@@ -72,7 +85,15 @@ final class InputInjector {
     /// input with nowhere to land that still goes (`isUpOfSomethingDown`: StreamCoordinator), a
     /// button's up then going where the pointer is.
     func apply(_ event: InputEvent, in rect: CGRect, from device: KeyStrokes.Device) {
+        guard let event = event.boundedCoordinates else { return }
+        let beganAt = traceInputTiming ? Date().timeIntervalSince1970 : nil
         if !dryRun { remindAboutAccessibilityIfNeeded() }
+        let checkedAt = beganAt.map { _ in Date().timeIntervalSince1970 }
+        defer {
+            if let beganAt, let checkedAt {
+                print("Input injector timing: began=\(beganAt) permissionChecked=\(checkedAt) finished=\(Date().timeIntervalSince1970)")
+            }
+        }
         switch event {
         case .pointer(let action, let x, let y):
             // Jitter probe: how evenly do pointer moves arrive? A Pencil or trackpad drag should
@@ -166,6 +187,7 @@ final class InputInjector {
     // MARK: Pointer
 
     private func pointer(_ action: PointerAction, at location: CGPoint) {
+        let beganAt = traceInputTiming ? Date().timeIntervalSince1970 : nil
         let type: CGEventType
         let button: CGMouseButton
         var clicks: Int64 = 1
@@ -193,12 +215,17 @@ final class InputInjector {
 
         guard let event = CGEvent(mouseEventSource: source, mouseType: type,
                                   mouseCursorPosition: location, mouseButton: button) else { return }
+        let createdAt = beganAt.map { _ in Date().timeIntervalSince1970 }
         if type != .mouseMoved { event.setIntegerValueField(.mouseEventClickState, value: clicks) }
         // One synthetic "finger": a constant event number keeps a down/drag/up sequence coherent.
         event.setIntegerValueField(.mouseEventNumber, value: 0)
         watch?.sillMoved(to: location)   // before the post (see `watch`); a dry run moves the scripted pointer
+        let watchedAt = beganAt.map { _ in Date().timeIntervalSince1970 }
         lastPointerLocation = location
         if post(event) { Stats.shared.bump("in.pointer") }
+        if let beganAt, let createdAt, let watchedAt {
+            print("Input pointer timing: began=\(beganAt) created=\(createdAt) watched=\(watchedAt) posted=\(Date().timeIntervalSince1970)")
+        }
     }
 
     /// Whether this input is the up of a key or a button the Mac has down, which still goes when the
@@ -487,12 +514,15 @@ final class InputInjector {
         post(keys.release(device), letGo: true)
     }
 
-    /// The host is going: every key any device holds down goes up (KeyStrokes.releaseAll), then a
-    /// button still down, where the pointer is, so nothing a device pressed outlives Sill on the Mac.
+    /// The host is going or a native picture is being invalidated: finish every remote key,
+    /// button and scroll, so an old interaction cannot outlive its desktop video.
     func releaseAll() {
         post(keys.releaseAll(), letGo: true)
         if left.isDown { pointer(.leftUp, at: pointerNow()) }
         if right.isDown { pointer(.rightUp, at: pointerNow()) }
+        closeScroll(at: lastScrollLocation)
+        scrollRemainder = .zero
+        scrollWatchdog?.cancel(); scrollWatchdog = nil
     }
 
     /// Shift, control, option and command: the modifiers that change a click or a scroll.

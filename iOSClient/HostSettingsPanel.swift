@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import SwiftUI
 import UIKit
 import StreamProtocol
@@ -239,7 +240,9 @@ struct HostSettingsPanel: View {
                 if state.softwareEncoder {
                     // Neither a restart nor a return is promised: hosts before 2026-09-25 keep the
                     // software encoder until they relaunch, newer ones go back by themselves.
-                    Callout(text: "\(mac)’s hardware encoder is busy or not responding, so for now streams run at up to 60 fps at Standard.")
+                    Callout(text: client.nativeDesktopResolution != nil
+                            ? "硬件编码器暂不可用，当前保留 Duo 原生分辨率，帧率可能下降。"
+                            : "\(mac)’s hardware encoder is busy or not responding, so for now streams run at up to 60 fps at Standard.")
                 }
                 if let problem = client.settingsProblem {
                     Callout(text: problem)
@@ -330,7 +333,6 @@ struct HostSettingsPanel: View {
             // After everything of the Mac's, whatever state its settings are in: while they load, and
             // for a Mac without them too. Both are this device's own: its gestures, then the tour.
             thisDevice
-            tour
         }
     }
 
@@ -370,12 +372,17 @@ struct HostSettingsPanel: View {
             }
             RowDivider()
             AdaptiveRow(title: "Resolution", since: client.settings.pendingSince(.captureScale)) {
-                Picker("Resolution", selection: binding(shown.captureScale) { HostSettingsChange(captureScale: $0) }) {
-                    Text("Retina").tag(2.0)
-                    Text("Standard").tag(1.0)
+                if let native = client.nativeDesktopResolution {
+                    Text("Duo 原生 · \(native.encodedWidth)×\(native.encodedHeight)")
+                        .font(.callout.monospacedDigit())
+                } else {
+                    Picker("Resolution", selection: binding(shown.captureScale) { HostSettingsChange(captureScale: $0) }) {
+                        Text("Retina").tag(2.0)
+                        Text("Standard").tag(1.0)
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
-                .pickerStyle(.segmented)
-                .fixedSize()
             }
             RowDivider()
             AdaptiveRow(title: "Frame Rate", since: client.settings.pendingSince(.maxFPS)) {
@@ -576,7 +583,7 @@ struct HostSettingsPanel: View {
     /// own (see `header`). A no-break space before each "·" keeps it with the value before it, so a
     /// wrap at larger text never starts a line with one.
     static func readout(_ stream: RunningStream?, route: DiscoveryPolicy.Method? = nil) -> String {
-        let values = stream.map { ["\($0.width)×\($0.height)", "\($0.fps)\u{00A0}fps", "\($0.mbps)\u{00A0}Mbps"] } ?? ["Not streaming"]
+        let values = stream.map { ["\($0.width)×\($0.height)", "目标 \($0.fps)\u{00A0}fps", "\($0.mbps)\u{00A0}Mbps"] } ?? ["Not streaming"]
         return (values + [route?.word].compactMap { $0 }).joined(separator: "\u{00A0}· ")
     }
 
@@ -595,7 +602,7 @@ struct HostSettingsPanel: View {
             link = ", connected \(remote.phrase)" + (rttMs.map { ", \($0) millisecond round trip" } ?? "")
         }
         guard let s = stream else { return "Not streaming" + link }
-        return "Streaming \(s.width) by \(s.height), \(s.fps) frames per second, \(s.mbps) megabits per second"
+        return "Streaming \(s.width) by \(s.height), target \(s.fps) frames per second, \(s.mbps) megabits per second"
             + (s.onVirtualDisplay ? ", on the virtual display" : "") + link
     }
 

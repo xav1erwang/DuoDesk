@@ -79,7 +79,7 @@ final class VirtualDisplay {
     let widthPt: Int
     let heightPt: Int
     let scale: Int
-    let refreshHz: Double
+    private(set) var refreshHz: Double
     let vendorID: UInt32
     let productID: UInt32
     let serialNum: UInt32
@@ -172,10 +172,7 @@ final class VirtualDisplay {
         // maxPixels is the 2× size). Measured on macOS 27: which of the two is current at
         // creation depends on what macOS remembered for this vendor/product/serial, so
         // `waitUntilOnline` selects the requested one explicitly with public API.
-        let mode = try Runtime.newMode(width: UInt32(widthPt), height: UInt32(heightPt), refreshRate: refreshHz)
-        let settings = try Runtime.newObject("CGVirtualDisplaySettings")
-        try Runtime.setUInt32(settings, "setHiDPI:", scale == 2 ? 1 : 0)
-        try Runtime.setObject(settings, "setModes:", [mode] as NSArray)
+        let settings = try Self.settings(widthPt: widthPt, heightPt: heightPt, scale: scale, refreshHz: refreshHz)
         guard try VirtualDisplay.applySettings(settings, to: display) else { throw Failure.applySettingsFailed }
 
         let id = try Runtime.getUInt32(display, "displayID")
@@ -186,10 +183,43 @@ final class VirtualDisplay {
 
     deinit { destroy() }
 
-    /// True when the current mode is the requested point size at the requested scale.
+    private static func settings(widthPt: Int, heightPt: Int, scale: Int, refreshHz: Double) throws -> AnyObject {
+        let mode = try Runtime.newMode(width: UInt32(widthPt), height: UInt32(heightPt), refreshRate: refreshHz)
+        let settings = try Runtime.newObject("CGVirtualDisplaySettings")
+        try Runtime.setUInt32(settings, "setHiDPI:", scale == 2 ? 1 : 0)
+        try Runtime.setObject(settings, "setModes:", [mode] as NSArray)
+        return settings
+    }
+
+    /// Keep the display identity and mirror group intact across a 60/120 FPS change. Releasing
+    /// and immediately recreating the same virtual display can race WindowServer's teardown.
+    @MainActor
+    func updateRefreshRate(_ wanted: Double) async throws {
+        guard wanted.isFinite, wanted >= 1, wanted <= 1000 else { throw Failure.invalidSize("invalid refresh rate") }
+        guard let object else { throw Failure.noDisplayID }
+        let old = refreshHz
+        let next = try Self.settings(widthPt: widthPt, heightPt: heightPt, scale: scale, refreshHz: wanted)
+        guard try Self.applySettings(next, to: object) else { throw Failure.applySettingsFailed }
+        refreshHz = wanted
+        let online = await waitUntilOnline()
+        guard self.object != nil, displayID != 0 else { throw Failure.noDisplayID }
+        guard online else {
+            if let previous = try? Self.settings(widthPt: widthPt, heightPt: heightPt, scale: scale, refreshHz: old),
+               (try? Self.applySettings(previous, to: object)) == true {
+                refreshHz = old
+                _ = await waitUntilOnline()
+            }
+            throw Failure.applySettingsFailed
+        }
+    }
+
+    /// True when the current point size, backing pixels and refresh rate match the request.
     var hasRequestedMode: Bool {
-        let b = bounds, px = pixelSize
-        return Int(b.width) == widthPt && Int(b.height) == heightPt && px.width == widthPt * scale
+        guard displayID != 0, let mode = CGDisplayCopyDisplayMode(displayID) else { return false }
+        let b = bounds
+        return Int(b.width) == widthPt && Int(b.height) == heightPt
+            && mode.pixelWidth == widthPt * scale && mode.pixelHeight == heightPt * scale
+            && abs(mode.refreshRate - refreshHz) < 0.5
     }
 
     /// Waits until the display is online at the requested point size and scale, selecting
@@ -202,6 +232,7 @@ final class VirtualDisplay {
         let deadline = Date().addingTimeInterval(timeout)
         var nextSelect = Date()
         while Date() < deadline {
+            guard isAlive else { return false }
             if hasRequestedMode { return true }
             if bounds.width > 0, Date() >= nextSelect {
                 selectRequestedMode()
@@ -219,7 +250,9 @@ final class VirtualDisplay {
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         guard let modes = CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode] else { return false }
         guard let want = modes.first(where: {
-            $0.width == widthPt && $0.height == heightPt && $0.pixelWidth == widthPt * scale
+            $0.width == widthPt && $0.height == heightPt
+                && $0.pixelWidth == widthPt * scale && $0.pixelHeight == heightPt * scale
+                && abs($0.refreshRate - refreshHz) < 0.5
         }) else { return false }
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success else { return false }

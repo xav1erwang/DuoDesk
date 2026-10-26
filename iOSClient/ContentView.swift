@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import SwiftUI
 import Network
 import StreamProtocol
@@ -315,7 +316,7 @@ struct ContentView: View {
 ///   rows), `methods` (a row ending in each word: Wired, Wi-Fi, none, Direct, and long names) or
 ///   `denied` (Local Network access denied: the status says what to do, no hint); `update` (a Mac
 ///   refused this version: "Update Sill on your iPad to keep using Mac mini. It needs version 1.2
-///   or later." as the status line above a Wi‑Fi row, and "Update Sill in the App Store" under it
+///   or later." as the status line above a Wi‑Fi row, and "更新 DUO你电脑客户端" under it
 ///   when `-SillAppStoreURL https://apps.apple.com/app/id000000000` gives the link an address) or
 ///   `notice` (a goodbye reason this build does not know: the Mac's two-line message, no link);
 ///   or remote access's: `remote` (Remote rows), `addmac`, `addcode`, `addcodeerror`, `pairing`,
@@ -1103,7 +1104,7 @@ struct ConnectScreen: View {
         // before Sill's App Store address is known (SillLinks): the words say what to do anyway.
         if let notice = client.notice, notice.storeLink, notice.text == client.status, let url = SillLinks.appStore {
             Link(destination: url) {
-                Text("Update Sill in the App Store")
+                Text("更新 DUO你电脑客户端")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Palette.accent)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -1139,7 +1140,7 @@ struct ConnectScreen: View {
         }
 
         if client.showsNearbyHint {
-            Text("Your Mac has to be on the same Wi\u{2011}Fi network as this \(device), or have Direct Wireless Connection turned on in Sill. Away from home, add it once with a code from your Mac.")
+            Text("Your Mac has to be on the same Wi\u{2011}Fi network as this \(device), or have Direct Wireless Connection turned on in DUO你电脑. Away from home, add it once with a code from your Mac.")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1246,23 +1247,11 @@ struct ConnectScreen: View {
     /// openURL), and VoiceOver reads it as a link. The addresses are SillLinks'.
     private func footer(_ layout: ConnectLayout) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Needs the free Sill app on your Mac.")
+            Text("在 Mac 上运行 DUO你电脑服务端，再配对这台 iPhone Duo。")
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            // All three on one line while they fit, else the download link over the other two,
-            // the lines far enough apart that their tap areas meet without overlapping. Upward the
-            // areas reach a little into the line above, which is plain text.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 0) {
-                    downloadLink
-                    linkSeparator
-                    supportAndPrivacy
-                }
-                VStack(alignment: .leading, spacing: 2 * Self.linkReach) {
-                    downloadLink
-                    supportAndPrivacy
-                }
-            }
+            Text("支持局域网与公网直连")
+                .foregroundStyle(Palette.muted)
         }
         .font(.footnote)
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)

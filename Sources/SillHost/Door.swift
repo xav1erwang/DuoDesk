@@ -84,12 +84,36 @@ final class Door {
         var interface: String?
         /// Home door: the listener that accepted it included peer-to-peer Wi-Fi (Direct Wireless on).
         var peerToPeer = false
+        var quic = false
         /// The door refused it (counted in the minute's summary already), so its end counts one
         /// failure for its source.
         var refused = false
         var deadline: DispatchWorkItem?
     }
     private var pending: [ObjectIdentifier: Pending] = [:]
+    /// QUIC tunnels are retained only until their one stream ends. Handshakes without a stream
+    /// share the TCP pending budget, per-source limit, backoff and ten-second admission deadline.
+    private final class QUICPeer {
+        let group: NWConnectionGroup
+        let endpoint: NWEndpoint
+        let source: String
+        let expires: CFAbsoluteTime
+        let peerToPeer: Bool
+        var stream: NWConnection?
+        var deadline: DispatchWorkItem?
+        var localEndpoint: NWEndpoint?
+        var pathKinds: [Bool]?
+        var streamReady = false
+        var origin: OriginPolicy.Origin?
+        init(group: NWConnectionGroup, endpoint: NWEndpoint, source: String, peerToPeer: Bool) {
+            self.group = group; self.endpoint = endpoint; self.source = source
+            self.peerToPeer = peerToPeer
+            expires = CFAbsoluteTimeGetCurrent() + Door.admissionDeadline
+        }
+    }
+    private var quicPeers: [ObjectIdentifier: QUICPeer] = [:]
+    private var quicStreams: [ObjectIdentifier: ObjectIdentifier] = [:]
+    private static let maxQUICTunnels = 64
     private var failures: [String: [CFAbsoluteTime]] = [:]
     private var backoffUntil: [String: CFAbsoluteTime] = [:]
     /// Home door: each source's plain tries within the last minute (DoorPolicy.olderSillTry).
@@ -99,17 +123,19 @@ final class Door {
         switch kind {
         case .remote:
             // Byte for byte as before this door was shared.
-            return RefusalSummary(queue: queue, categories: ["unpaired", "internet", "limit"]) { c in
+            return RefusalSummary(queue: queue, categories: ["unpaired", "internet", "limit", "handshake"]) { c in
                 let n = c.values.reduce(0, +)
+                let quic = c["handshake", default: 0] > 0 ? ", \(c["handshake", default: 0]) incomplete QUIC handshakes" : ""
                 return "Remote access refused \(n) connection\(n == 1 ? "" : "s") in the last minute: \(c["unpaired", default: 0]) unpaired, "
-                    + "\(c["internet", default: 0]) from the internet (internet access off), \(c["limit", default: 0]) over the limit."
+                    + "\(c["internet", default: 0]) from the internet (internet access off), \(c["limit", default: 0]) over the limit\(quic)."
             }
         case .home:
-            return RefusalSummary(queue: queue, categories: ["unpaired", "vpn", "internet", "older", "limit"]) { c in
+            return RefusalSummary(queue: queue, categories: ["unpaired", "vpn", "internet", "older", "limit", "handshake"]) { c in
                 let n = c.values.reduce(0, +)
+                let quic = c["handshake", default: 0] > 0 ? ", \(c["handshake", default: 0]) incomplete QUIC handshakes" : ""
                 return "Home door refused \(n) connection\(n == 1 ? "" : "s") in the last minute: \(c["unpaired", default: 0]) unpaired, "
                     + "\(c["vpn", default: 0]) through a VPN, \(c["internet", default: 0]) from the internet, "
-                    + "\(c["older", default: 0]) from an older Sill (not TLS), \(c["limit", default: 0]) over the limit."
+                    + "\(c["older", default: 0]) from an older Sill (not TLS), \(c["limit", default: 0]) over the limit\(quic)."
             }
         }
     }()
@@ -136,6 +162,12 @@ final class Door {
         }
     }
 
+    func quicOptions() -> NWProtocolQUIC.Options {
+        RemoteTLS.quicOptions(identity: identity.remote.tls, role: .server, queue: queue) { [weak self] fp, alpn in
+            self?.verify(fp, alpn) ?? false
+        }
+    }
+
     // MARK: Admission
 
     /// What DoorPolicy knows about a key, from the snapshot as it is now.
@@ -150,9 +182,15 @@ final class Door {
         DoorPolicy.trusts(kind, alpn: alpn, trustFor(fp, trust.snapshot))
     }
 
-    private func sourceText(_ c: NWConnection) -> String {
-        guard case .hostPort(let host, _) = c.endpoint else { return "\(c.endpoint)" }
+    private func sourceText(_ endpoint: NWEndpoint) -> String {
+        guard case .hostPort(let host, _) = endpoint else { return "\(endpoint)" }
         return StreamServer.addressText(host).text
+    }
+
+    private func hasPendingCapacity(source: String) -> Bool {
+        let groups = quicPeers.values.filter { $0.stream == nil }
+        return pending.count + groups.count < Self.maxPending
+            && pending.values.filter { $0.source == source }.count + groups.filter { $0.source == source }.count < Self.maxPendingPerSource
     }
 
     /// On `queue`: a new connection from the listener. `peerToPeer`: that listener included
@@ -160,9 +198,10 @@ final class Door {
     func accept(_ c: NWConnection, peerToPeer: Bool = false) {
         guard let server else { c.cancel(); return }
         let now = CFAbsoluteTimeGetCurrent()
-        let source = sourceText(c)
+        let source = sourceText(c.endpoint)
+        let quic = quicStreams[ObjectIdentifier(c)] != nil
         prune(now)
-        if let until = backoffUntil[source], now < until {
+        if let until = backoffUntil[failureKey(source, quic: quic)], now < until {
             c.cancel()
             refusals.count("limit")
             return
@@ -174,21 +213,140 @@ final class Door {
            let word = DoorPolicy.refusalBeforeStart(kind, origin: a.origin, internetAccess: trust.snapshot.internetAccess) {
             c.cancel()
             refusals.count(word)
-            countFailure(source, now)
+            countFailure(source, now, quic: quic)
             return
         }
-        let fromSource = pending.values.filter { $0.source == source }.count
-        guard pending.count < Self.maxPending, fromSource < Self.maxPendingPerSource else {
+        guard hasPendingCapacity(source: source) else {
             c.cancel()
             refusals.count("limit")
             return
         }
         let id = ObjectIdentifier(c)
         let deadline = DispatchWorkItem { [weak self] in self?.deadlinePassed(id) }
-        pending[id] = Pending(connection: c, source: source, peerToPeer: peerToPeer, deadline: deadline)
-        queue.asyncAfter(deadline: .now() + Self.admissionDeadline, execute: deadline)
+        let peer = quicStreams[id].flatMap { quicPeers[$0] }
+        pending[id] = Pending(connection: c, source: source, peerToPeer: peerToPeer, quic: peer != nil, deadline: deadline)
+        let timeout = peer.map { max(0, $0.expires - now) } ?? Self.admissionDeadline
+        queue.asyncAfter(deadline: .now() + timeout, execute: deadline)
         c.stateUpdateHandler = { [weak self] state in self?.stateChanged(id, c, state) }
+        if peer != nil {
+            c.pathUpdateHandler = { [weak self, weak c] path in
+                guard let self, let c, self.quicPathAllowed(c, path: path) else { c?.cancel(); return }
+            }
+        }
         c.start(queue: queue)
+    }
+
+    /// A QUIC listener accepts tunnels, then the client's stream 0. Refuse the source and reserve
+    /// its budget before starting the tunnel: starting first can disclose the host certificate.
+    func accept(_ group: NWConnectionGroup, peerToPeer: Bool = false) {
+        guard let server, group.descriptor is NWMultiplexGroup,
+              group.descriptor.members.count == 1, let endpoint = group.descriptor.members.first,
+              let arrival = server.arrivalBeforeStart(endpoint: endpoint, remoteDoor: kind == .remote) else {
+            group.cancel(); return
+        }
+        let now = CFAbsoluteTimeGetCurrent()
+        let source = sourceText(endpoint)
+        prune(now)
+        if let until = backoffUntil[failureKey(source, quic: true)], now < until { group.cancel(); refusals.count("limit"); return }
+        if let word = DoorPolicy.refusalBeforeStart(kind, origin: arrival.origin, internetAccess: trust.snapshot.internetAccess) {
+            group.cancel(); refusals.count(word); countFailure(source, now, quic: true); return
+        }
+        guard quicPeers.count < Self.maxQUICTunnels, hasPendingCapacity(source: source) else {
+            group.cancel(); refusals.count("limit"); return
+        }
+        let id = ObjectIdentifier(group)
+        let peer = QUICPeer(group: group, endpoint: endpoint, source: source, peerToPeer: peerToPeer)
+        quicPeers[id] = peer
+        let deadline = DispatchWorkItem { [weak self] in
+            guard let self, let peer = self.quicPeers[id], peer.stream == nil else { return }
+            self.refusals.count("handshake")
+            self.countFailure(peer.source, CFAbsoluteTimeGetCurrent(), quic: true)
+            self.endQUICTunnel(id)
+        }
+        peer.deadline = deadline
+        queue.asyncAfter(deadline: .now() + Self.admissionDeadline, execute: deadline)
+        group.newConnectionHandler = { [weak self] connection in
+            guard let self, let peer = self.quicPeers[id], peer.stream == nil,
+                  connection.endpoint == peer.endpoint else { connection.cancel(); return }
+            peer.stream = connection
+            self.quicStreams[ObjectIdentifier(connection)] = id
+            self.accept(connection, peerToPeer: peerToPeer)
+            if self.pending[ObjectIdentifier(connection)] == nil { self.endQUICTunnel(id) }
+            else { peer.deadline?.cancel(); peer.deadline = nil }
+        }
+        group.stateUpdateHandler = { [weak self] state in
+            guard let self, let peer = self.quicPeers[id] else { return }
+            switch state {
+            case .failed:
+                // Network.framework can collapse TLS rejection and peer abandonment into EINVAL,
+                // without certificate metadata. Bound all failures before the first stream, in a
+                // QUIC-specific source bucket. TCP remains available, and successful paired
+                // admission on either transport clears both buckets. Never guess which source
+                // a listener-wide verify callback belonged to.
+                if peer.stream == nil {
+                    self.refusals.count("handshake")
+                    self.countFailure(peer.source, CFAbsoluteTimeGetCurrent(), quic: true)
+                }
+                self.endQUICTunnel(id)
+            case .cancelled: self.endQUICTunnel(id)
+            default: break   // A transient .waiting is not a failed handshake; the deadline bounds it.
+            }
+        }
+        group.start(queue: queue)
+    }
+
+    private func endQUICTunnel(_ id: ObjectIdentifier) {
+        guard let peer = quicPeers.removeValue(forKey: id) else { return }
+        peer.deadline?.cancel()
+        if let connection = peer.stream {
+            quicStreams.removeValue(forKey: ObjectIdentifier(connection))
+            connection.cancel()
+        }
+        peer.group.newConnectionHandler = nil
+        peer.group.stateUpdateHandler = nil
+        peer.group.cancel()
+    }
+
+    private func endQUICStream(_ id: ObjectIdentifier) {
+        if let tunnel = quicStreams[id] { endQUICTunnel(tunnel) }
+    }
+
+    /// Do not let QUIC migration inherit a previous address's LAN/VPN/internet classification.
+    /// Reconnect on a changed endpoint or interface class, through the source gate again. Missing
+    /// path information is tolerated only while preparing, before any application data is admitted.
+    private func quicPathAllowed(_ connection: NWConnection, path: NWPath?) -> Bool {
+        guard let id = quicStreams[ObjectIdentifier(connection)], let peer = quicPeers[id] else { return false }
+        guard let path, path.status == .satisfied, let remote = path.remoteEndpoint, let local = path.localEndpoint else {
+            return peer.localEndpoint == nil && !peer.streamReady
+        }
+        guard remote == peer.endpoint else { return false }
+        let kinds = [NWInterface.InterfaceType.wifi, .wiredEthernet, .cellular, .loopback, .other].map { path.usesInterfaceType($0) }
+        if let bound = peer.localEndpoint { return local == bound && kinds == peer.pathKinds }
+        guard let server else { return false }
+        let arrival = server.arrival(of: connection, remoteDoor: kind == .remote)
+        guard DoorPolicy.admitsBeforeStart(kind, origin: arrival.origin, internetAccess: trust.snapshot.internetAccess) else { return false }
+        // Preparing paths can still refine their local endpoint/interface metadata. Admission
+        // and all app data wait for ready; bind that first complete path, then forbid changes.
+        guard peer.streamReady else { return true }
+        peer.localEndpoint = local; peer.pathKinds = kinds; peer.origin = arrival.origin
+        return true
+    }
+
+    private func quicLease(_ connection: NWConnection, fingerprint: Data, wasPaired: Bool) -> StreamServer.TransportLease? {
+        let streamID = ObjectIdentifier(connection)
+        guard let tunnel = quicStreams[streamID] else { return nil }
+        return StreamServer.TransportLease(validate: { [weak self, weak connection] path in
+            guard let self, let connection, self.quicPathAllowed(connection, path: path),
+                  let peer = self.quicPeers[tunnel], let origin = peer.origin else { return false }
+            let snapshot = self.trust.snapshot
+            if wasPaired && snapshot.paired[fingerprint] == nil { return false }
+            if self.kind == .remote && !snapshot.remoteAccess { return false }
+            return DoorPolicy.admitsBeforeStart(self.kind, origin: origin, internetAccess: snapshot.internetAccess)
+                && DoorPolicy.trusts(self.kind, alpn: RemoteTLS.sessionALPN, self.trustFor(fingerprint, snapshot))
+        }, validatePath: { [weak self, weak connection] path in
+            guard let self, let connection else { return false }
+            return self.quicPathAllowed(connection, path: path)
+        }, ended: { [weak self] in self?.endQUICTunnel(tunnel) })
     }
 
     /// On `queue`: cancels every connection still waiting for admission that `match` names (Direct
@@ -196,6 +354,9 @@ final class Door {
     /// refusal: nothing is counted.
     func cancelPending(where match: (NWConnection) -> Bool) {
         for p in pending.values where match(p.connection) { p.connection.cancel() }
+        // Direct Wireless was switched off. Tunnels that have not produced a stream have no
+        // per-stream path yet; retire the ones accepted by a peer-to-peer listener as well.
+        for (id, peer) in quicPeers where peer.stream == nil && peer.peerToPeer { endQUICTunnel(id) }
     }
 
     private func stateChanged(_ id: ObjectIdentifier, _ c: NWConnection, _ state: NWConnection.State) {
@@ -203,11 +364,16 @@ final class Door {
         case .preparing:
             _ = checkOrigin(id, c)
         case .ready:
+            if let tunnel = quicStreams[id], let peer = quicPeers[tunnel] { peer.streamReady = true }
             readyArrived(id, c)
         case .failed(let e):
+            c.stateUpdateHandler = nil
+            c.pathUpdateHandler = nil
             c.cancel()
             endedBeforeAdmission(id, error: e)
         case .cancelled:
+            c.stateUpdateHandler = nil
+            c.pathUpdateHandler = nil
             endedBeforeAdmission(id, error: nil)
         default:
             break
@@ -224,7 +390,8 @@ final class Door {
     /// `closeSessions` runs; after it, it is refused. False when refused, or no longer pending.
     private func checkOrigin(_ id: ObjectIdentifier, _ c: NWConnection) -> Bool {
         guard var p = pending[id], let server else { return false }
-        if p.origin == nil {
+        if p.quic, !quicPathAllowed(c, path: c.currentPath) { c.cancel(); return false }
+        if p.origin == nil || p.quic {
             let (origin, interface) = server.arrival(of: c, remoteDoor: kind == .remote)
             p.origin = origin
             p.interface = interface
@@ -241,6 +408,10 @@ final class Door {
 
     private func readyArrived(_ id: ObjectIdentifier, _ c: NWConnection) {
         guard pending[id] != nil, checkOrigin(id, c), let server else { return }
+        if quicStreams[id] != nil {
+            guard let metadata = c.metadata(definition: NWProtocolQUIC.definition) as? NWProtocolQUIC.Metadata,
+                  metadata.streamIdentifier == 0 else { refuse(id, "unpaired"); c.cancel(); return }
+        }
         let fp = RemoteTLS.peerFingerprint(c)
         let t = trust.snapshot
         switch DoorPolicy.atReady(kind, alpn: RemoteTLS.negotiatedALPN(c), trustFor(fp, t), remoteSessions: server.remoteSessionCount) {
@@ -281,6 +452,7 @@ final class Door {
         if name != nil { forgive(p.source) }
         if kind == .remote, name == nil { c.cancel(); return }    // atReady admits only a paired key here
         let origin = p.origin ?? .loopback
+        let transport = quicLease(c, fingerprint: fp, wasPaired: name != nil)
         // Home: the iPhone or iPad behind the cable, read once, as the session is admitted.
         let cable = kind == .home ? cableDevice(of: c).flatMap { $0.serial }.map(CableLink.deviceID) : nil
         server.gate(c) { [weak self] hello in
@@ -301,11 +473,11 @@ final class Door {
             case .remote:
                 guard let paired = snapshot.paired[fp] else { c.cancel(); return }
                 let label = OriginPolicy.label(origin, interface: p.interface, serviceName: p.interface.flatMap { snapshot.serviceNames[$0] }) ?? "by address"
-                server.serve(c, route: .remote(origin: origin, label: label, fingerprint: fp, name: paired), hello: hello,
+                server.serve(c, route: .remote(origin: origin, label: label, fingerprint: fp, name: paired), hello: hello, transport: transport,
                              admitted: { print("Remote client connected: \(paired) \(label) (\(endpoint))") })
             case .home:
                 let peer = ClientRoute.Peer(fingerprint: fp, name: snapshot.paired[fp], cableDevice: cable)
-                server.serve(c, route: .home(origin, peer: peer), hello: hello, admitted: { print("Client connected: \(endpoint)") })
+                server.serve(c, route: .home(origin, peer: peer), hello: hello, transport: transport, admitted: { print("Client connected: \(endpoint)") })
             }
         }
     }
@@ -447,6 +619,7 @@ final class Door {
     /// older Sill's plain try at the home door (-9836), which is counted and shown instead, so an
     /// iPad updated after a few plain retries is not refused for 5 minutes.
     private func endedBeforeAdmission(_ id: ObjectIdentifier, error: NWError?) {
+        defer { endQUICStream(id) }
         guard let p = pending.removeValue(forKey: id) else { return }
         p.deadline?.cancel()
         var refused = p.refused
@@ -464,18 +637,21 @@ final class Door {
                 break
             }
         }
-        if refused { countFailure(p.source, CFAbsoluteTimeGetCurrent()) }
+        if refused { countFailure(p.source, CFAbsoluteTimeGetCurrent(), quic: p.quic) }
     }
 
     /// One failure for `source`; the fifth within a minute starts its backoff.
-    private func countFailure(_ source: String, _ now: CFAbsoluteTime) {
-        var list = (failures[source] ?? []).filter { now - $0 < Self.failureWindow }
+    private func failureKey(_ source: String, quic: Bool) -> String { quic ? "QUIC|\(source)" : source }
+
+    private func countFailure(_ source: String, _ now: CFAbsoluteTime, quic: Bool = false) {
+        let key = failureKey(source, quic: quic)
+        var list = (failures[key] ?? []).filter { now - $0 < Self.failureWindow }
         list.append(now)
         if list.count >= Self.failuresForBackoff {
-            backoffUntil[source] = now + backoff
+            backoffUntil[key] = now + backoff
             list = []
         }
-        failures[source] = list
+        failures[key] = list
     }
 
     /// A source that proved itself (a paired key at `.ready`) starts clean: what its earlier
@@ -483,6 +659,8 @@ final class Door {
     private func forgive(_ source: String) {
         failures[source] = nil
         backoffUntil[source] = nil
+        failures[failureKey(source, quic: true)] = nil
+        backoffUntil[failureKey(source, quic: true)] = nil
     }
 
     /// Forgets stale per-source records, so a scan from many addresses cannot grow them for ever.

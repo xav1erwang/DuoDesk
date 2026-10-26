@@ -70,6 +70,8 @@ package final class RemoteAccess {
     package let keyPlace: String
     private let store: IdentityStore?
     private(set) var paired: [PairedDevice] = []
+    /// The app preloads the first policy read with the identity, away from the main actor.
+    private var initialRequirePairing: Bool?
 
     private var window = PairingWindow()
     let trust = TrustBox()
@@ -153,26 +155,24 @@ package final class RemoteAccess {
     /// `identityProblem` says why. That includes a trust list that cannot be read: kept with an
     /// empty list, the store would save the next pairing over it and every earlier pairing would be
     /// gone.
-    package init(store: IdentityStore) {
-        var identity: HostIdentity?
-        var problem: String?
-        var paired: [PairedDevice] = []
-        do {
-            let key = try store.loadOrCreateKey()
-            let recognition = try store.loadOrCreateRecognitionKey()
-            guard let id = HostIdentity(privateKey: key, recognitionKey: recognition) else {
-                throw IdentityStoreError("the key could not make a TLS identity")
-            }
-            paired = try store.loadPaired()
-            identity = id
-        } catch {
-            problem = "\(error)"
-        }
-        self.identity = identity
-        identityProblem = problem
-        keyPlace = store is KeychainIdentityStore ? "in the keychain" : store.summary
-        self.store = identity == nil ? nil : store
-        self.paired = paired
+    package convenience init(store: IdentityStore) {
+        self.init(loaded: HostIdentityBootstrap(store: store))
+    }
+
+    /// GUI startup must remain responsive while macOS asks to unlock or authorize a keychain
+    /// item. No listener is created until the identity, trust list and initial policy are ready.
+    package static func load(store: sending any IdentityStore) async -> RemoteAccess {
+        let loaded = await HostIdentityBootstrap.load(store: store)
+        return RemoteAccess(loaded: loaded)
+    }
+
+    private init(loaded: HostIdentityBootstrap) {
+        identity = loaded.identity
+        identityProblem = loaded.problem
+        keyPlace = loaded.keyPlace
+        store = loaded.store
+        paired = loaded.paired
+        initialRequirePairing = loaded.initialRequirePairing
     }
 
     /// Called by the coordinator's init, before the server starts: the TXT record (the tag, and
@@ -277,23 +277,17 @@ package final class RemoteAccess {
     /// saved, on, with a line, when it cannot be read, and on, with a line, when it is not this
     /// Mac's own (another app may have made the item: the security review, 2026-09-27).
     package func storedRequirePairing() -> Bool {
-        guard let store, let identity else { return true }
-        let record: Data?
-        do { record = try store.loadRequirePairing() } catch {
-            print("Require pairing: couldn’t read it \(keyPlace) (\(error)); pairing stays required.")
-            return true
+        if let initialRequirePairing {
+            self.initialRequirePairing = nil
+            return initialRequirePairing
         }
-        guard let record else { return true }
-        let on = RequirePairingValue.decode(record, macID: identity.macID, verify: { identity.verifyRecord($0, signature: $1) })
-        if on, record != RequirePairingValue.on {
-            print("Require pairing: the setting \(keyPlace) isn’t signed by this Mac’s key; pairing stays required.")
-        }
-        return on
+        return HostIdentityBootstrap.readRequirePairing(store: store, identity: identity, keyPlace: keyPlace)
     }
 
     /// Saves Require pairing with the trust list, off signed by this Mac's key. Nil when saved;
     /// otherwise why not, and the caller keeps it as it was.
     package func saveRequirePairing(_ on: Bool) -> String? {
+        initialRequirePairing = nil
         guard let store, let identity else { return identityProblem ?? "no identity" }
         guard let record = RequirePairingValue.encode(on, macID: identity.macID, sign: { identity.signRecord($0) }) else {
             print("Require pairing: couldn’t sign it with this Mac’s key \(keyPlace).")

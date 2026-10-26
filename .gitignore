@@ -3,6 +3,11 @@
 xcuserdata/
 *.xcuserstate
 DerivedData/
+Temp/
+Local/
+Build/
+.env
+.env.*
 .DS_Store
 
 # Signing and notary keys, certificates exported with their keys, provisioning profiles and

@@ -1,0 +1,218 @@
+// Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
+import AVFoundation
+import CoreMedia
+
+/// The receiver belongs to one actor. Enqueue waits for its internal capacity; the small stream
+/// keeps only recent images while it waits. Reset can reenter that actor to flush a suspended
+/// enqueue, so a hidden/slow display cannot hold a generation change or grow an unbounded queue.
+final class HardwareVideoPresenter: @unchecked Sendable {
+    private final class Fence: @unchecked Sendable {
+        let lock = NSLock()
+        var minimum: UInt64 = 0
+        var revision: UInt64 = 0
+        var ready: (generation: UInt64, revision: UInt64)?
+        var lastDropLog = -Double.infinity
+        func accepts(_ token: UInt64) -> Bool {
+            lock.lock(); defer { lock.unlock() }; return token >= minimum
+        }
+        func accepts(_ token: UInt64, revision: UInt64) -> Bool {
+            lock.lock(); defer { lock.unlock() }; return token >= minimum && self.revision == revision
+        }
+        func markReady(_ token: UInt64, revision: UInt64) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard token >= minimum, self.revision == revision else { return false }
+            ready = (token, revision); return true
+        }
+        func isReady(_ token: UInt64, revision: UInt64? = nil) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            return token >= minimum && ready?.generation == token && ready?.revision == self.revision
+                && (revision == nil || revision == self.revision)
+        }
+    }
+    private struct Event: @unchecked Sendable {
+        let image: CMSampleBuffer
+        let generation: UInt64
+        let revision: UInt64
+    }
+    private let events: AsyncStream<Event>.Continuation
+    private let worker: Task<Void, Never>
+    private let fence: Fence
+    private let pump: Pump
+
+    private actor Pump {
+        let receiver: AVSampleBufferVideoRenderer.Receiver
+        let synchronizer: AVSampleBufferRenderSynchronizer
+        let fence: Fence
+        let onFirstImage: @Sendable (CGSize, UInt64) -> Void
+        let onFailure: @Sendable (String, UInt64, UInt64) -> Void
+        var generation: UInt64 = 0
+        var revision: UInt64 = 0
+        var lastSequence: Int64 = -1
+        var hasImage = false
+        var enqueuing = false
+        var flushing = false
+        var stopped = false
+        var received = 0
+
+        init(receiver: sending AVSampleBufferVideoRenderer.Receiver,
+             synchronizer: sending AVSampleBufferRenderSynchronizer, fence: Fence,
+             onFirstImage: @escaping @Sendable (CGSize, UInt64) -> Void,
+             onFailure: @escaping @Sendable (String, UInt64, UInt64) -> Void) {
+            self.receiver = receiver
+            self.synchronizer = synchronizer
+            self.fence = fence; self.onFirstImage = onFirstImage; self.onFailure = onFailure
+        }
+
+        func reset(_ token: UInt64, revision: UInt64) async {
+            guard !stopped, token >= generation, revision > self.revision, fence.accepts(token, revision: revision) else { return }
+            self.revision = revision
+            generation = token; lastSequence = -1
+            let mustFlush = hasImage || enqueuing
+            hasImage = false
+            guard mustFlush, !flushing else { return }
+            flushing = true
+            // enqueue and flush inherit this actor's isolation in SDK 27. Flush deliberately
+            // cancels a suspended enqueue; all synchronous receiver access stays serialized.
+            await receiver.flush(removingDisplayedImage: true)
+            flushing = false
+        }
+
+        func present(_ event: Event) async {
+            let token = event.generation, image = event.image
+            let eventRevision = event.revision
+            guard !stopped, token >= generation, fence.accepts(token, revision: eventRevision) else { return }
+            if eventRevision > revision { await reset(token, revision: eventRevision) }
+            guard !stopped, !flushing, !enqueuing, token == generation, eventRevision == revision,
+                  fence.accepts(token, revision: eventRevision) else { return }
+            let sequence = CMSampleBufferGetPresentationTimeStamp(image).value
+            guard sequence > lastSequence else { return }
+            received += 1
+            if received % 120 == 0 {
+                print("Video presenter: received=\(received), sequence=\(sequence), previous=\(lastSequence), clock=\(synchronizer.currentTime().seconds), rate=\(synchronizer.rate)")
+            }
+            var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 120),
+                                           presentationTimeStamp: synchronizer.currentTime(), decodeTimeStamp: .invalid)
+            var copy: CMSampleBuffer?
+            guard CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: image,
+                sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy) == noErr,
+                let copy else { onFailure("无法准备视频画面，请重新连接。", token, eventRevision); return }
+            guard let attachments = CMSampleBufferGetSampleAttachmentsArray(copy, createIfNecessary: true),
+                  CFArrayGetCount(attachments) > 0 else {
+                onFailure("无法准备视频画面，请重新连接。", token, eventRevision); return
+            }
+            let attributes = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(attributes, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+            let imageSize = CMSampleBufferGetImageBuffer(image).map {
+                CGSize(width: CVPixelBufferGetWidth($0), height: CVPixelBufferGetHeight($0))
+            }
+            let ready = CMReadySampleBuffer<CMSampleBuffer.DynamicContent>(unsafeBuffer: copy)
+            enqueuing = true
+            defer { enqueuing = false }
+            do {
+                let result = try await receiver.enqueue(ready)
+                guard !stopped, token == generation, eventRevision == revision,
+                      fence.accepts(token, revision: eventRevision) else { return }
+                switch result {
+                case .enqueued:
+                    let first = !hasImage
+                    lastSequence = sequence; hasImage = true
+                    if fence.markReady(token, revision: eventRevision), first, let imageSize {
+                        onFirstImage(imageSize, token)
+                        print("Video presenter: first decoded image queued for generation \(token)")
+                    }
+                case .enqueuedWithDecodeFailures, .cancelledDueToError, .cancelledDueToFlushRequiredToResume:
+                    onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                case .cancelledDueToFlush: break
+                @unknown default: onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                }
+            } catch is CancellationError {
+                // The owning worker was stopped. No image or failure escapes a cancelled task.
+            } catch {
+                if !stopped, token == generation, eventRevision == revision, fence.accepts(token, revision: eventRevision) {
+                    onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                }
+            }
+        }
+
+        func run(_ stream: AsyncStream<Event>) async {
+            for await event in stream {
+                if Task.isCancelled { break }
+                await present(event)
+            }
+            await stop()
+        }
+
+        func stop() async {
+            stopped = true
+            if !flushing { await receiver.flush(removingDisplayedImage: true) }
+            hasImage = false
+        }
+    }
+
+    init(renderer: AVSampleBufferVideoRenderer, onFirstImage: @escaping @Sendable (CGSize, UInt64) -> Void,
+         onFailure: @escaping @Sendable (String, UInt64, UInt64) -> Void) {
+        let (stream, continuation) = AsyncStream<Event>.makeStream(bufferingPolicy: .bufferingNewest(2))
+        events = continuation
+        let fence = Fence()
+        self.fence = fence
+        let synchronizer = AVSampleBufferRenderSynchronizer()
+        synchronizer.delaysRateChangeUntilHasSufficientMediaData = false
+        let receiver = synchronizer.sampleBufferReceiver(adding: renderer)
+        synchronizer.setRate(1, time: .zero)
+        let pump = Pump(receiver: receiver, synchronizer: synchronizer, fence: fence,
+                        onFirstImage: onFirstImage, onFailure: onFailure)
+        self.pump = pump
+        worker = Task.detached(priority: .userInitiated) {
+            await pump.run(stream)
+        }
+    }
+
+    deinit {
+        fence.lock.lock(); fence.revision &+= 1; fence.ready = nil; fence.lock.unlock()
+        events.finish(); worker.cancel()
+    }
+    func reset(_ generation: UInt64) {
+        fence.lock.lock()
+        if generation > fence.minimum {
+            fence.minimum = generation; fence.revision &+= 1; fence.ready = nil
+        }
+        let revision = fence.revision
+        fence.lock.unlock()
+        Task { [pump] in await pump.reset(generation, revision: revision) }
+    }
+    /// UIKit may rehost the same video view without changing the codec generation. Flush the
+    /// previous surface's suspended enqueue and fence its images and queued input immediately.
+    func refreshSurface(_ generation: UInt64) {
+        fence.lock.lock()
+        guard generation >= fence.minimum else { fence.lock.unlock(); return }
+        fence.revision &+= 1; fence.ready = nil
+        let revision = fence.revision
+        fence.lock.unlock()
+        Task { [pump] in await pump.reset(generation, revision: revision) }
+    }
+    func isReady(_ generation: UInt64) -> Bool { fence.isReady(generation) }
+    /// Recheck a queued failure on the UI executor: a rehost can supersede it without changing
+    /// the decoder generation, even before the replacement surface has its first image.
+    func isCurrentSurface(_ generation: UInt64, revision: UInt64) -> Bool {
+        fence.accepts(generation, revision: revision)
+    }
+    func makeInputFence(_ generation: UInt64) -> @Sendable () -> Bool {
+        fence.lock.lock(); let revision = fence.revision; fence.lock.unlock()
+        return { [fence] in fence.isReady(generation, revision: revision) }
+    }
+    func enqueue(_ image: CMSampleBuffer, generation: UInt64) {
+        fence.lock.lock()
+        guard generation >= fence.minimum else { fence.lock.unlock(); return }
+        let result = events.yield(Event(image: image, generation: generation, revision: fence.revision))
+        let now = ProcessInfo.processInfo.systemUptime
+        let reportDrop: Bool
+        if case .dropped = result, now - fence.lastDropLog >= 1 {
+            fence.lastDropLog = now; reportDrop = true
+        } else { reportDrop = false }
+        fence.lock.unlock()
+        if reportDrop {
+            print("Video presentation queue full: discarded an obsolete decoded image")
+        }
+    }
+}

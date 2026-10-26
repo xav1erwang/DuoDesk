@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import AppKit
 import Observation
 import Security
@@ -19,6 +20,8 @@ final class AppModel {
     /// as with the CLI's flag. No onboarding in this mode.
     let synthetic = CommandLine.arguments.contains("--synthetic")
     private(set) var coordinator: StreamCoordinator?
+    /// The trust list is unread while macOS authorizes the identity store, never an empty list.
+    private(set) var identityLoading = true
     /// The coordinator could not be created (the listener refused its parameters). Shown in the
     /// menu; the app keeps running so the user can read it and quit.
     private(set) var startupError: String?
@@ -69,8 +72,11 @@ final class AppModel {
         let settings = HostSettings()
         self.settings = settings
         permissions = PermissionsModel(settings: settings)
-        let updates = UpdateChecker(configuration: DebugHooks.updateConfiguration(testPattern: CommandLine.arguments.contains("--synthetic")),
-                                    automatic: settings.updateCheck)
+        var updateConfiguration = DebugHooks.updateConfiguration(testPattern: CommandLine.arguments.contains("--synthetic"))
+        // This fork must never offer an upstream Sill binary as an update. A repository/feed can
+        // be enabled here after DUO你电脑 has its own published releases.
+        if Bundle.main.bundleIdentifier == "com.duodesk.host" { updateConfiguration.running = nil }
+        let updates = UpdateChecker(configuration: updateConfiguration, automatic: settings.updateCheck)
         self.updates = updates
         // The switch reaches the checker from launch on: Settings… is in the menu before the host
         // is up (up to a second or more), and -SillSetAfter counts from launch. Before `start()`
@@ -97,7 +103,8 @@ final class AppModel {
                 // pairing) goes into the first Bonjour registration, and the home door speaks TLS
                 // with it. A keychain failure leaves the home door closed and remote access
                 // unavailable, not the app (docs/home-pairing-plan.md §6.1).
-                let remote = makeRemoteAccess()
+                let remote = await makeRemoteAccess()
+                identityLoading = false
                 settings.config.requirePairing = launchRequirePairing(remote)
                 // The window lists carry this Sill's version, when it has one (the bare binary's
                 // "dev" does not parse): later devices can tell which Mac to update.
@@ -158,9 +165,8 @@ final class AppModel {
     /// binary with `--synthetic` (a test host) keeps them in SILL_TEST_REMOTE_DIR (a 0700 directory)
     /// instead; a real Sill.app ignores it with a line (a caller could hand it a trust list of its
     /// own).
-    private func makeRemoteAccess() -> RemoteAccess {
-        let store = makeIdentityStore()
-        let remote = RemoteAccess(store: store)
+    private func makeRemoteAccess() async -> RemoteAccess {
+        let remote = await RemoteAccess.load(store: makeIdentityStore())
         if let problem = remote.identityProblem { print("Remote access unavailable: \(problem)") }
         remote.restoreSeen(settings.remoteDevicesSeen())
         remote.onSeen = { [weak self, weak remote] prefix, at, route in
@@ -176,7 +182,7 @@ final class AppModel {
     /// The identity store IdentityStorePlan names for this launch (docs/keychain-plan.md), and one
     /// log line saying which keychain the identity is in and why. SILL_TEST_REMOTE_DIR is honoured
     /// only for a test host and otherwise ignored with a line, as before.
-    private func makeIdentityStore() -> IdentityStore {
+    private func makeIdentityStore() -> sending any IdentityStore {
         let dir = ProcessInfo.processInfo.environment["SILL_TEST_REMOTE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
         let choice = IdentityStorePlan.choose(bundled: Self.bundled, synthetic: synthetic,
                                               entitledAccessGroup: Self.entitledKeychainAccessGroup(), testRemoteDir: dir)

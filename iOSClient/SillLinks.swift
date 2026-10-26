@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import Foundation
 
 /// Where Sill sends people outside the app: Sill's addresses on the web, written once, and its App
@@ -21,7 +22,7 @@ enum SillLinks {
     /// notice (a goodbye "update"). The Apple ID is the App Store Connect record's, known once the
     /// record exists: the release checklist fills it in before the first upload. While the
     /// placeholder stays, no link shows (the update notice's own words say what to do).
-    static let appStoreText = "https://apps.apple.com/app/id6816359860"
+    static let appStoreText = ""
 
     /// An https URL from `appStoreText`, else nil. DEBUG: `-SillAppStoreURL <url>` replaces it.
     static var appStore: URL? {

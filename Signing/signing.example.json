@@ -1,0 +1,7 @@
+{
+  "team_id": "YOUR_TEAM_ID",
+  "device_id": "YOUR_IPHONE_DUO_DEVICE_ID",
+  "bundle_id": "com.yourname.duodesk",
+  "configuration": "Debug",
+  "renew_before_hours": 48
+}

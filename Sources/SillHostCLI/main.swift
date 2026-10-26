@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import StreamProtocol
 import SillHostCore
@@ -12,6 +13,17 @@ setvbuf(stdout, nil, _IOLBF, 0)
 // Sources/SillHost/HostConfig.swift now (`HostConfig.standard`), which is also where the menu bar
 // app's Settings start. Change, rebuild, measure.
 var config = HostConfig.standard
+// Match the Duo menu bar app's encoding-speed setting in controlled diagnostics without
+// changing the upstream CLI baseline used by older comparisons.
+config.prioritizeSpeed = CommandLine.arguments.contains("--prioritize-speed")
+
+// A read-only prerequisite check: automated desktop fixtures must not trigger an OS permission
+// prompt or send real input on a Mac whose permissions have not already been granted.
+if CommandLine.arguments.contains("--print-permissions") {
+    print("Screen capture: \(CGPreflightScreenCaptureAccess() ? "allowed" : "not allowed")")
+    print("Input control: \(AXIsProcessTrusted() ? "allowed" : "not allowed")")
+    exit(0)
+}
 
 // Optional. Streams the first window whose app name or title matches, before any client asks.
 // Normally left off: the client picks a window from its bar.
@@ -27,6 +39,10 @@ let synthetic = CommandLine.arguments.contains("--synthetic")
 // process never sees the display's modes (VirtualDisplay.swift, "Event loop").
 let virtualDisplay = CommandLine.arguments.contains("--virtual-display")
 config.virtualDisplay = virtualDisplay
+
+// Development diagnostic only. Existing full-screen Spaces can remain on physical displays;
+// the menu bar app deliberately keeps the complete mirrored-desktop path until that is solved.
+let independentDuoDesktop = CommandLine.arguments.contains("--native-primary-desktop")
 
 // `SillHost --direct-wireless`: also advertise over, and accept connections from, peer-to-peer
 // Wi-Fi (AWDL), so a device with no network in common can connect. Off by default: while it is on
@@ -120,13 +136,17 @@ if CommandLine.arguments.contains("--virtual-display-selftest") {
 
 // Lives as long as the process. A local inside the Task would be released when setup finished.
 var coordinator: StreamCoordinator?
+// The menu app manages this through AppModel. The windowless CLI needs the same scheduling
+// protection while it runs; this option leaves the user's idle system-sleep policy in place.
+let cliActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                      reason: "Interactive remote desktop host")
 
 func startHost() {
     Task { @MainActor in
         do {
             let remote = config.remoteAccess || pairingFlag ? makeRemoteAccess() : nil
-            let c = try StreamCoordinator(config: config, synthetic: synthetic, appKitLoop: virtualDisplay, remote: remote,
-                                          homePairing: pairingFlag, testHooks: true)
+            let c = try StreamCoordinator(config: config, synthetic: synthetic, appKitLoop: virtualDisplay || !synthetic, remote: remote,
+                                          homePairing: pairingFlag, testHooks: true, independentDuoDesktop: independentDuoDesktop)
             coordinator = c
             await c.start(preselect: preselect)
             if remote != nil, internetFlag {
@@ -134,6 +154,7 @@ func startHost() {
             }
             remote?.openPairing(requestedBy: nil)
             if synthetic { print("Synthetic mode: pick Desktop on the device (or from a test client) to stream a test pattern.") }
+            if independentDuoDesktop { print("EXPERIMENTAL native primary desktop: full-screen Space migration is not accepted; do not use as a completed desktop mode.") }
             if virtualDisplay { print("Virtual display mode: a picked window streams from its own HiDPI display; Ctrl-C puts it back.") }
             print("\(c.windowCount) windows on screen. Advertising _sill._tcp on the local network.")
             if c.active == .none { print("Nothing is streaming yet: pick a window from the iOS app. Ctrl-C to stop.") }
@@ -179,7 +200,7 @@ func makeRemoteAccess() -> RemoteAccess {
     return remote
 }
 
-if virtualDisplay {
+if virtualDisplay || !synthetic {
     // The window server delivers display reconfiguration through the app's event port, which
     // dispatchMain() never drains; only under NSApplication.run() does this process learn the
     // virtual display's modes. The main dispatch queue (Task { @MainActor }, Stats' timer, the

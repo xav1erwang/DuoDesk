@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import Foundation
 import Observation
 import SillHostCore
@@ -94,7 +95,14 @@ final class HostSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let standard = HostConfig.standard
+        var standard = HostConfig.standard
+        if Bundle.main.bundleIdentifier == "com.duodesk.host" {
+            // Duo clients negotiate their own native desktop canvas; no speed-driven downscaling.
+            standard.captureScale = 2
+            standard.awayCaptureScale = 2
+            standard.awayBitrate = 15_000_000
+            standard.prioritizeSpeed = true
+        }
         defaults.register(defaults: [
             Key.maxFPS: standard.maxFPS,
             Key.captureScale: Double(standard.captureScale),
@@ -110,7 +118,7 @@ final class HostSettings {
             Key.remotePort: standard.remotePort,
             Key.internetAccess: standard.internetAccess,
             Key.remoteAddressName: "",
-            Key.updateCheck: true,
+            Key.updateCheck: Bundle.main.bundleIdentifier != "com.duodesk.host",
             // On, like the CLI: each device has its own switch, and a password manager's copies never go.
             Key.shareClipboard: standard.shareClipboard,
         ])

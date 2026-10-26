@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import SwiftUI
 import Combine
 import StreamProtocol
@@ -312,6 +313,14 @@ struct StreamScreen: View {
             // The layouts and the overlays share this screen's space, and so its fold; the inner
             // display gives the picture the status bar's strip in every pose.
             .duoFold(posture, size: geo.size, screen: "stream screen")
+            .onChange(of: client.nativeDisplayMetrics, initial: true) { _, _ in
+                client.updateDuoNativeResolution(innerDisplay: posture.onInnerDisplay,
+                                                frame: geo.frame(in: .global), fold: posture.fold)
+            }
+            .onChange(of: posture) { _, now in
+                client.updateDuoNativeResolution(innerDisplay: now.onInnerDisplay,
+                                                frame: geo.frame(in: .global), fold: now.fold)
+            }
             .duoStatusBar(posture, size: geo.size)
             .environment(\.largerPictureOffered, offersLarger)
             #if DEBUG
@@ -356,6 +365,7 @@ struct StreamScreen: View {
             #endif
         }
         .onChange(of: client.active) { _, source in
+            if client.nativeDesktopResolution != nil, case .window = source { client.select(.desktop) }
             if source != .none { withAnimation(.easeOut(duration: 0.18)) { drawerOpen = false } }
             // The host sizes a window as it selects it, from the last viewport it has; this repeat
             // is for a host that restarted, or a window that was picked from the Mac's side.
@@ -370,6 +380,10 @@ struct StreamScreen: View {
         .onChange(of: keyboardTakers, initial: true) { _, takers in overlay.update(takers: takers) }
         // Rotation animates, and a Mac window resize restarts the stream, so let the size settle.
         .onChange(of: panelSize) { _, _ in sendViewport(after: 0.25) }
+        .onChange(of: client.nativeDesktopResolution) { _, resolution in
+            sendViewport()
+            if resolution != nil, case .window = client.active { client.select(.desktop) }
+        }
         // Same wait for Aa: cycling from Off to 0.8× passes three sizes nobody wants the Mac to try.
         .onChange(of: textScale) { _, _ in sendViewport(after: 0.25) }
         // The stream rate follows the panel (`StreamClient.wantedFPS`): re-send when Low Power Mode
@@ -470,7 +484,8 @@ struct StreamScreen: View {
             client.sendViewport(Viewport(width: Double(panelSize.width),
                                          height: Double(panelSize.height),
                                          scale: textScale,
-                                         fps: fps))
+                                         fps: fps,
+                                         desktopResolution: client.nativeDesktopResolution))
         }
     }
 
@@ -872,7 +887,7 @@ struct StreamScreen: View {
         let moment = TourMoment(now: now, pictureAt: pictureAt, layoutAt: layoutAt, decided: session.decided,
                                 lastActivityAt: activity, touchesDown: touches.down, busy: tourBusy != nil,
                                 offered: session.offered.contains(layout), voiceOver: tourVoiceOver,
-                                enabled: tourStore.automatic)
+                                enabled: false) // The upstream tour describes controls replaced by the Duo deck.
         switch TourPolicy.automatic(moment, layout, tourStore.memory) {
         case .wait(let until):
             guard let until else { return }

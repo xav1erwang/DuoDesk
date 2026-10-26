@@ -1,37 +1,13 @@
-# Security
+# 安全问题
 
-Sill lets an iPhone or iPad see and control a Mac, so a flaw in it matters.
-If you find one, please report it privately.
+DUO你电脑可读取和操作自己的 Mac 桌面。配对、TLS 身份验证、输入注入、钥匙串隔离和签名安装工具都属于安全报告范围。
 
-## Reporting a problem
+本项目尚未发布自己的 GitHub 仓库或设立私人报告地址。公开仓库启用后，使用其 Security 页的私密漏洞报告功能；在此之前请通过与你交换本项目代码的维护者已有私人渠道联系。不要把本分支的问题发送给 Sill 原作者，也不要在公开问题中附上配对码、私钥、设备标识或真实桌面内容。
 
-Email support@getsill.app. Say what you found, how to reproduce it, and which
-versions of Sill for Mac and of the iPhone and iPad app you tried (Sill for
-Mac's is at the foot of its Settings › General). Please don't open a public
-issue or pull request for it, and give a fix time to ship before you publish
-anything. You can also use "Report a vulnerability" on this repository's
-Security tab.
+正式 Mac 应用默认要求配对，公网访问需在设置中主动启用。开发用 CLI 未带 `--pairing` 时使用无加密测试连接，仅用于本机或隔离测试；不能暴露到公网。新 UI 和续签工具不会关闭系统签名、TLS 验证或设备信任检查。
 
-Fixes ship in the newest release: Sill for Mac from
-[getsill.app](https://getsill.app/download), whose update check tells everyone
-who has it, and the newest iPhone and iPad app.
+加密会话优先使用可靠 QUIC 流，备用 TCP 使用相同 TLS 1.3、双方证书、主机密钥固定和应用协议校验。配对证明只通过单次 TCP 尝试发送，不参与传输竞速或重放。首次目录确认前的 QUIC 失败可向同一地址、同一已验证主机密钥重试一次 TCP；收到明确拒绝消息或异常应用数据时不重试。系统可能保留 TLS 的取消配对原因，也可能只返回连接被拒绝，两者均不代表获准连接。
 
-## What is in scope
+QUIC 不启用 0-RTT、会话恢复、数据报或多路径；每条隧道只接受一条会话流。来源限制、并发上限、握手期限和远程访问开关由正式服务端统一检查。已连接流持续核对配对、访问策略和原始路径；路径改变时关闭并重新验证连接。握手失败的来源有独立的 QUIC 退避限制，避免网络失败无限占用资源，同时保留已配对设备的 TCP 恢复通道。
 
-- The connection on the Mac's own networks, over a USB cable and with Direct
-  Wireless Connection: what Sill for Mac accepts, and what a device can make
-  it do.
-- Remote Access's connection, and pairing, at home and away: the QR code, the
-  typed code, `sill://pair` links, a USB cable's automatic pairing, Require
-  pairing, and the paired devices and keys Sill for Mac keeps in the keychain.
-- The update check, which asks GitHub's releases feed about once a day and
-  downloads nothing.
-- The website, getsill.app.
-
-Known, and by design: with Require pairing off (Settings › Devices), any
-device on the Mac's own networks, one nearby while Direct Wireless Connection
-is on, and any app on the Mac itself connect without pairing, still
-encrypted. `SillHost`, the command-line host for development, keeps a plain
-home door, with no pairing and no encryption, unless it runs with
-`--pairing`. Sill for Mac 0.3.1 and earlier had no pairing and no encryption
-at home: update to the newest release.
+自动续签只运行本机源码，使用 Xcode 已登录的账户，不收集密码。证书、签名描述文件、设备配置与安装日志保存在 Git 忽略目录中，报告问题前需脱敏。

@@ -112,7 +112,7 @@ enum RemoteCopy {
         case .busy:
             return "\(mac) is already serving 8 devices."
         case .refused:
-            return "\(mac) answered, but Sill isn’t accepting remote connections there. Check that Sill is open and Remote Access is on. If you changed its port, connect at home once."
+            return "\(mac) refused the connection. Check that this \(device) is still paired and Remote Access is on in DUO你电脑 on the Mac. If you changed its port, connect at home once."
         case .vpnOff:
             let name = candidate.flatMap { vpnLabel($0) }
             return name.map { "\($0) looks off on this \(device). Turn it on, then tap \(mac)." }
@@ -290,8 +290,13 @@ extension StreamClient {
 
     /// Dials a saved Mac at its saved addresses (§7.5). A tap on its Remote row, Connect Remotely
     /// on its network row, the session after a pairing, the automatic reconnect, `-SillDialSaved`.
-    func dialSaved(_ macID: String, why: DialReason) {
+    func dialSaved(_ macID: String, why: DialReason,
+                   retryTCP: (candidate: RemoteDialPolicy.Candidate, pin: Data)? = nil) {
         guard let mac = savedMac(macID), let pin = mac.fingerprintData else { return }
+        if let retryTCP, retryTCP.pin != pin {
+            remoteDialFailed(macID: macID, why: why, failure: .wrongMac, candidate: retryTCP.candidate)
+            return
+        }
         let name = displayName(macID)
         guard let identity = DeviceIdentity.existing() else {
             status = "This \(Self.deviceWord) has no key for \(name). Pair it again."
@@ -304,8 +309,8 @@ extension StreamClient {
         }
         hostName = name
         status = why == .automatic ? "Reconnecting to \(name) remotely…" : "Connecting to \(name) remotely…"
-        let candidates = RemoteDialPolicy.order(mac.allAddresses, remotePort: mac.remotePort, lastWorked: mac.lastWorked,
-                                                localIPv4: Self.localIPv4Networks())
+        let candidates = retryTCP.map { [$0.candidate] } ?? RemoteDialPolicy.order(mac.allAddresses, remotePort: mac.remotePort,
+            lastWorked: mac.lastWorked, localIPv4: Self.localIPv4Networks())
         #if DEBUG
         print("remote: dialing \(name) (\(macID)) \(why): \(candidates.map(\.key))")
         #endif
@@ -313,13 +318,13 @@ extension StreamClient {
         // one machine, its newer record's key may answer for this one, and a handshake completed
         // with it retires this record (RemoteDialPolicy.successors, SavedMacs.superseding).
         var successors: [String: [Data]] = [:]
-        for c in candidates {
+        for c in candidates where retryTCP == nil {
             let keys = RemoteDialPolicy.successors(of: mac, at: c, in: savedMacs, allowLoopback: Self.keepsLoopback)
                 .compactMap(\.fingerprintData)
             if !keys.isEmpty { successors[c.key] = keys }
         }
         let connector = RemoteConnector(candidates: candidates, mode: .session(pin: pin), identity: identity, queue: queue,
-                                        successors: successors)
+                                        successors: successors, preferQUIC: retryTCP == nil)
         remoteDial = connector
         connector.onWinner = { [weak self, weak connector] winner in
             DispatchQueue.main.async {
@@ -389,7 +394,9 @@ extension StreamClient {
         print("remote: \(w.candidate.key) is ready (\(route.phrase)); waiting for the window list")
         #endif
         let c = w.connection
-        adopt(c, session: Session(route: .remote(route), macID: macID, bonjourName: nil, candidate: w.candidate, why: why))
+        let quicPin = c.metadata(definition: NWProtocolQUIC.definition) != nil ? w.fingerprint : nil
+        adopt(c, session: Session(route: .remote(route), macID: macID, bonjourName: nil, candidate: w.candidate,
+                                  why: why, remoteQUICPin: quicPin))
         let deadline = DispatchWorkItem { [weak self] in
             guard let self, self.connection === c, !self.connected else { return }
             self.connectionLost(c, end: .noWindowList)
@@ -483,6 +490,18 @@ extension StreamClient {
             return
         }
         if let s, s.route.isRemote, !connected, let id = s.macID {
+            // A QUIC client may reach ready before the server rejects its certificate. macOS
+            // can then report only ENOTCONN/EINVAL, hiding the TLS "removed" reason. One TCP
+            // retry also handles a stream that never receives its first list; it preserves the
+            // exact authenticated Mac and never repeats pairing proofs or an admitted session.
+            if let pin = s.remoteQUICPin, let candidate = s.candidate, goodbye == nil, end != .notSill {
+                #if DEBUG
+                print("remote: QUIC ended before admission; retrying the same Mac and address over TLS/TCP")
+                #endif
+                tearDown(status: status, restartSearch: false)
+                dialSaved(id, why: s.why ?? .tap, retryTCP: (candidate, pin))
+                return
+            }
             let how: RemoteDialPolicy.End = end ?? goodbye.map { .goodbye($0.reason) } ?? error.map { e in
                 if case .tls(let st) = e { return .tlsAfterReady(st) }
                 return RemoteConnector.end(of: e)
@@ -494,7 +513,7 @@ extension StreamClient {
         }
         // At home over TLS: removed, pairing now required, or another key as the saved Mac
         // (StreamClient+Home). Every other end goes on below.
-        if homeSessionEnded(s, error: error, goodbye: goodbye?.reason) { return }
+        if homeSessionEnded(s, error: error, goodbye: goodbye?.reason, terminalEnd: end) { return }
         // The automatic reconnect's own dial of a row ended before it connected, without a goodbye
         // (it waited 5 s, failed, or brought no window list): one dial of the listing that did not
         // connect, not a session's end. The reconnect keeps what it was (its loss, its remote dials'

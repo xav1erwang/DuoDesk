@@ -21,12 +21,15 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// the display's own coordinate system (origin at its top-left, SCStream.h), i.e. exactly the
     /// staged window's rectangle, so the device gets the window and nothing else. Nil (the default,
     /// and the whole default path) leaves the configuration exactly as it was.
-    func start(filter: SCContentFilter, width: Int, height: Int, fps: Int, showsCursor: Bool, sourceRect: CGRect? = nil) async throws {
+    /// `nativeCadence`: only for a display whose actual clock equals the negotiated FPS. A second
+    /// 1/fps throttle can miss a compositor deadline; zero follows that display's native clock.
+    func start(filter: SCContentFilter, width: Int, height: Int, fps: Int, showsCursor: Bool, sourceRect: CGRect? = nil,
+               nativeCadence: Bool = false) async throws {
         let config = SCStreamConfiguration()
         config.width = width
         config.height = height
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+        config.minimumFrameInterval = nativeCadence ? .zero : CMTime(value: 1, timescale: CMTimeScale(fps))
         config.queueDepth = 5   // headroom: a wedged encoder may keep one buffer forever
         config.showsCursor = showsCursor
         config.colorSpaceName = CGColorSpace.sRGB
@@ -49,7 +52,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             throw error
         }
         let crop = sourceRect.map { String(format: " sourceRect (%.0f,%.0f,%.0f,%.0f)", $0.minX, $0.minY, $0.width, $0.height) } ?? ""
-        print("Capture started: \(width)×\(height) @\(fps) fps, cursor \(showsCursor ? "in" : "out"), filter \(filter.contentRect.size) scale \(filter.pointPixelScale)" + crop)
+        print("Capture started: \(width)×\(height) @\(fps) fps, cadence \(nativeCadence ? "native display" : "limited"), cursor \(showsCursor ? "in" : "out"), filter \(filter.contentRect.size) scale \(filter.pointPixelScale)" + crop)
     }
 
     private var framesSeen = 0

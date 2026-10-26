@@ -12,76 +12,6 @@ import StreamProtocol
 // how a session at home over TLS ends. Main thread unless a function says otherwise; the stored
 // state lives in StreamClient.swift, and the pure rules in DiscoveryPolicy.
 
-/// Every connection this device opens to a Mac speaks TLS through here (§7.2), at home and away:
-/// TLS 1.3 from RemoteTLS with this device's certificate, the Mac's key checked against a pin, or
-/// any P-256 key where there is none yet (an open door's first connection, an ask, the typed
-/// pairing path from afar). Plain TCP remains only for a plain door, which only a DEBUG build ever
-/// dials (DiscoveryPolicy.homeDial).
-enum DeviceTLS {
-    /// The TLS options of one connection: `alpn` is `sill/1` for a session, `sill-pair/1` for
-    /// pairing; `pin` the Mac's key, or nil for any P-256 key (a key of another kind matches
-    /// nothing). RemoteConnector's dials from afar use them too. `onPinRefused` runs on `queue`
-    /// each time `pin` refuses the key that answered (-9808): a connection to a Bonjour service
-    /// whose pin fails is never reported as waiting or failed, it goes back to preparing and tries
-    /// again (the simulator against a synthetic host with another key, 2026-09-27: "Connecting to…"
-    /// for good, no state after `.preparing`), so a dial that must end at a refused pin hears it
-    /// here.
-    ///
-    /// `alsoAccept`: other saved Macs' keys that may answer in the pin's place at this address
-    /// (RemoteDialPolicy.successors: a Mac set up again, whose newer record this device holds too);
-    /// the caller reads which key completed the handshake off the ready connection.
-    static func options(identity: RemoteIdentity, alpn: String, pin: Data?, queue: DispatchQueue,
-                        alsoAccept: [Data] = [], onPinRefused: (() -> Void)? = nil) -> NWProtocolTLS.Options {
-        RemoteTLS.options(identity: identity.tls, role: .client(alpn: alpn), verify: { fp in
-            guard let pin else { return fp != nil }
-            if let fp, fp != pin, alsoAccept.contains(fp) { return true }
-            guard fp == pin else { onPinRefused?(); return false }
-            return true
-        }, queue: queue)
-    }
-
-    /// A connection to a Mac's home door: those TLS options over the device's home TCP (no Nagle;
-    /// a connect timeout for a pairing dial), the video service class, and peer-to-peer (AWDL) only
-    /// for a Direct row (RemoteTLS.parameters). `ipv6Only` for the ask's dial over a row's wired
-    /// interface: the cable counts only over IPv6 link-local, at both ends.
-    static func home(identity: RemoteIdentity, alpn: String, pin: Data?, peerToPeer: Bool, queue: DispatchQueue,
-                     ipv6Only: Bool = false, connectTimeout: Int? = nil, onPinRefused: (() -> Void)? = nil) -> NWParameters {
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        if let connectTimeout { tcp.connectionTimeout = connectTimeout }
-        let params = RemoteTLS.parameters(tls: options(identity: identity, alpn: alpn, pin: pin, queue: queue, onPinRefused: onPinRefused),
-                                          tcp: tcp, peerToPeer: peerToPeer)
-        if ipv6Only, let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options { ip.version = .v6 }
-        return params
-    }
-
-    /// A plain door's connection, as before pairing at home: TCP without Nagle, the interactive
-    /// video class, and peer-to-peer only for a Direct row. Only a DEBUG build dials one.
-    static func plain(peerToPeer: Bool) -> NWParameters {
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        let params = NWParameters(tls: nil, tcp: tcp)
-        params.includePeerToPeer = peerToPeer
-        // Wi-Fi QoS: video + pointer traffic is latency-sensitive; the access point and the radio
-        // treat this class (WMM video) with shorter queues than best-effort.
-        params.serviceClass = .interactiveVideo
-        return params
-    }
-
-    /// Parameters that never connect: TLS whose verify block trusts no key, so the handshake ends
-    /// before this device sends anything. For a connection of a TLS session should this device's
-    /// key be unreadable (it cannot be: the session's first connection was made with it, and the
-    /// identity stays in memory): that connection then fails as any failed one does, and nothing
-    /// ever goes out in plain.
-    static func refusing(peerToPeer: Bool, queue: DispatchQueue) -> NWParameters {
-        let tls = NWProtocolTLS.Options()
-        sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, _, complete in complete(false) }, queue)
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        return RemoteTLS.parameters(tls: tls, tcp: tcp, peerToPeer: peerToPeer)
-    }
-}
-
 /// A pairing connection to a Mac's home door (§7.5): TLS with `sill-pair/1`, pinned to `pin` or
 /// taking any P-256 key, to each target in turn until one is ready. A target is a row as a tap
 /// dials it: its wired interface first, IPv6 only (the cable counts only over IPv6 link-local, at
@@ -305,7 +235,7 @@ extension StreamClient {
     /// the trust says (DiscoveryPolicy.pin), or plain for a plain door. Nil, with the status line
     /// saying why, when a TLS dial finds no key and none can be made.
     func sessionParameters(_ trust: DiscoveryPolicy.HomeTrust, peerToPeer: Bool,
-                           onPinRefused: (() -> Void)? = nil) -> NWParameters? {
+                           quic: Bool = false, onPinRefused: (() -> Void)? = nil) -> NWParameters? {
         let pin: Data?
         switch DiscoveryPolicy.pin(trust) {
         case .plainTCP: return DeviceTLS.plain(peerToPeer: peerToPeer)
@@ -314,7 +244,7 @@ extension StreamClient {
         }
         guard let identity = deviceIdentity() else { return nil }
         return DeviceTLS.home(identity: identity, alpn: RemoteTLS.sessionALPN, pin: pin, peerToPeer: peerToPeer, queue: queue,
-                              onPinRefused: onPinRefused)
+                              quic: quic, onPinRefused: onPinRefused)
     }
 
     /// A browse result's home door, from its TXT record's `p` (HomeDoorTXT, entry by entry: a bare
@@ -380,7 +310,7 @@ extension StreamClient {
     /// dialed first, pinned: a stranger replaying its tag makes a row that looks like it, and the
     /// words would tell the user to forget the real Mac. A row the reconnect took by its Bonjour
     /// name alone is skipped from then on, without those words. Main thread.
-    func homeSessionEnded(_ s: Session?, error: NWError?, goodbye: String?) -> Bool {
+    func homeSessionEnded(_ s: Session?, error: NWError?, goodbye: String?, terminalEnd: RemoteDialPolicy.End? = nil) -> Bool {
         guard let s, !s.route.isRemote else { return false }
         let end = DiscoveryPolicy.homeEnd(trust: s.home, goodbye: goodbye, tls: error.flatMap { RemoteTLS.status(of: $0) })
         let saved = s.macID.flatMap { savedMac($0) }
@@ -390,6 +320,14 @@ extension StreamClient {
         #endif
         switch end {
         case .other:
+            if !connected, goodbye == nil, terminalEnd != .notSill, let retry = s.retryHomeTCP, let trust = s.home {
+                #if DEBUG
+                print("home: QUIC read ended before admission; retrying TLS/TCP with the observed pin")
+                #endif
+                tearDown(status: status, restartSearch: false)
+                retry(trust)
+                return true
+            }
             return false
         case .removed:
             // Revoked only when the saved Mac's own key answered this session (its connections
