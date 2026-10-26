@@ -158,12 +158,21 @@ func message(from connection: NWConnection) async throws -> (StreamHeader, Data)
 @MainActor
 func run() async throws {
     let typed = CommandLine.arguments.contains("--pair-code")
-    let args = CommandLine.arguments.filter { $0 != "--quic" && $0 != "--pair-code" }
+    let keyboardCases = CommandLine.arguments.contains("--keyboard-cases")
+    let args = CommandLine.arguments.filter { $0 != "--quic" && $0 != "--pair-code" && $0 != "--keyboard-cases" }
     let mode = args.count >= 4 ? args[3] : nil
+    let keyboardEventPath = ProcessInfo.processInfo.environment["DUODESK_PROBE_FIXTURE_EVENTS"]
+    if keyboardCases {
+        guard mode == "--fixture-input", let keyboardEventPath,
+              !FileManager.default.fileExists(atPath: keyboardEventPath) else {
+            throw ProbeError.failed("keyboard cases require --fixture-input and a fresh owned fixture event path")
+        }
+    }
+    var keyboardSentAt: Double?
     let dryInputEpochs = args.count == 5 && mode == "--rate-switch" && args[4] == "--dry-run-input-epochs"
     guard (args.count == 3 || (args.count == 4 && ["--fixture-input", "--window-pick", "--rate-switch", "--gpu-frame-code"].contains(mode ?? "")) || dryInputEpochs),
           let key = RemoteKey.generate(), let identity = RemoteIdentity(privateKey: key) else {
-        throw ProbeError.failed("usage: probe HOST PAIR_INPUT_FILE [--pair-code] [--quic] [--fixture-input|--window-pick|--rate-switch|--gpu-frame-code]")
+        throw ProbeError.failed("usage: probe HOST PAIR_INPUT_FILE [--pair-code] [--quic] [--fixture-input [--keyboard-cases]|--window-pick|--rate-switch|--gpu-frame-code]")
     }
     let pair = try ProbePairingInput(path: args[2], typed: typed)
     let frameAudit = mode == "--gpu-frame-code" ? try PixelMotionAudit() : nil
@@ -385,13 +394,33 @@ func run() async throws {
             print("Network probe: sent the owned fixture click; keyboard check waits for its image response")
         }
         if mode == "--fixture-input", measurement.lock.withLock({ measurement.inputImageRoundTripMs != nil && !measurement.fixtureKeysSent }) {
-            for usage: UInt16 in [0x04, 0x05, 0x06] {
-                sendControl(.input, Wire.encode(InputEvent.key(hidUsage: usage, down: true, modifiers: 0)))
-                sendControl(.input, Wire.encode(InputEvent.key(hidUsage: usage, down: false, modifiers: 0)))
+            if keyboardCases {
+                guard let epoch = measurement.lock.withLock({ measurement.activeWireEpoch }) else {
+                    throw ProbeError.failed("keyboard cases require a current native image epoch")
+                }
+                keyboardSentAt = Date().timeIntervalSince1970
+                for test in ProbeKeyboardCases.cases {
+                    guard measurement.lock.withLock({ measurement.activeWireEpoch == epoch }) else {
+                        throw ProbeError.failed("owned fixture video epoch changed during keyboard cases")
+                    }
+                    for event in test.events { sendControl(.input, Wire.encode(event), epoch: epoch) }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                print("Network probe: sent production Duo keyboard cases to the clicked owned fixture")
+            } else {
+                for usage: UInt16 in [0x04, 0x05, 0x06] {
+                    sendControl(.input, Wire.encode(InputEvent.key(hidUsage: usage, down: true, modifiers: 0)))
+                    sendControl(.input, Wire.encode(InputEvent.key(hidUsage: usage, down: false, modifiers: 0)))
+                }
             }
             measurement.lock.withLock { measurement.fixtureKeysSent = true }
-            print("Network probe: sent owned-fixture HID a/b/c after the click latency measurement")
+            print("Network probe: fixture keyboard events sent after the click image response")
         }
+        if keyboardCases, let keyboardSentAt, Date().timeIntervalSince1970 - keyboardSentAt >= 1.0 { break }
+        if keyboardCases, measurement.lock.withLock({
+            measurement.inputSentUnix.map { Date().timeIntervalSince1970 - $0 > 5 } == true
+                && measurement.inputImageRoundTripMs == nil
+        }) { throw ProbeError.failed("owned fixture click image did not respond; no keyboard cases sent") }
         if mode == "--window-pick", ProcessInfo.processInfo.systemUptime >= measuredFrom + 2,
            !measurement.lock.withLock({ measurement.windowPickSent }) {
             measurement.lock.withLock { measurement.windowPickSent = true }
@@ -422,7 +451,7 @@ func run() async throws {
     if let frameAudit {
         print(await frameAudit.report(from: measurement.lock.withLock { measurement.measuredFrom }, seconds: 30))
     }
-    let report: [String: Any] = ["nativeWidth": native.encodedWidth, "nativeHeight": native.encodedHeight,
+    var report: [String: Any] = ["nativeWidth": native.encodedWidth, "nativeHeight": native.encodedHeight,
         "durationSeconds": duration, "measurementWindowCompleted": duration >= 30, "decodedFrames": decoded, "decodedFPS": fps,
         "receivedFrames": measurement.lock.withLock { measurement.received },
         "frameCodeAudit": frameAudit != nil, "uniqueDecodedFPS": frameAudit?.changedFramesPerSecond ?? -1,
@@ -442,6 +471,17 @@ func run() async throws {
         "inputImageDecodedUnix": measurement.inputImageDecodedUnix ?? -1,
         "rttMedianMs": rtts.isEmpty ? -1 : rtts[rtts.count / 2], "rttMaxMs": rtts.last ?? -1,
         "hardwareRequired": true, "windowPickTest": measurement.windowPickSent, "failures": failures]
+    if keyboardCases {
+        report["inputOnlyDiagnostic"] = true
+        report["performanceAcceptance"] = false
+        guard let keyboardEventPath, let keyboardSentAt, failures.isEmpty, resets > 0,
+              measurement.inputImageRoundTripMs != nil else { throw ProbeError.failed("keyboard fixture setup failed") }
+        print("KEYBOARD SESSION: " + String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
+        report["keyboardInput"] = try ProbeKeyboardCases.validate(path: keyboardEventPath, after: keyboardSentAt)
+        print(String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
+        print("Network keyboard input probe PASS; this is not 120 FPS acceptance")
+        return
+    }
     print(String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
     try frameAudit?.validate()
     guard duration >= 30, fps >= 119.5, failures.isEmpty, (mode != "--fixture-input" || measurement.inputImageRoundTripMs != nil),

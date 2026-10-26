@@ -2,6 +2,10 @@
 import MetalKit
 
 final class MetalMotionView: MTKView, MTKViewDelegate, CAMetalDisplayLinkDelegate {
+    // Rendering is decorative. The fixture's parent owns the click marker and keyboard
+    // recorder, including acceptsFirstMouse; the Metal subview must not intercept that input.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     private let commands: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private var frameIndex: UInt32 = 0
