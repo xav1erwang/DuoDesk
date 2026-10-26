@@ -1,5 +1,6 @@
 // Test-only native Mac receiver: production TLS, HEVC decoder and video presenter.
-// Pairing material stays in memory and is never written to the keychain or printed.
+// Receiver device keys and server replies stay in memory, outside the keychain and logs.
+// Pairing input comes from a private file; the installed host uses its normal pairing flow.
 import AppKit
 import AVFoundation
 import CoreMedia
@@ -57,10 +58,12 @@ final class ConnectionAttempt: @unchecked Sendable {
     var pending: Bool { lock.withLock { !answered } }
 }
 
-func connect(host: String, port: Int, identity: RemoteIdentity, pin: Data, alpn: String) async throws -> NWConnection {
-    let tls = RemoteTLS.options(identity: identity.tls, role: .client(alpn: alpn),
-                                verify: { $0 == pin }, queue: networkQueue)
-    // Diagnostic comparison only: all options remain TLS 1.3 with both certificate pins. Never
+func connect(host: String, port: Int, identity: RemoteIdentity, pin: Data?, alpn: String) async throws -> NWConnection {
+    guard pin != nil || alpn == RemoteTLS.pairingALPN else {
+        throw ProbeError.failed("video sessions require the authenticated pairing pin")
+    }
+    let tls = DeviceTLS.options(identity: identity, alpn: alpn, pin: pin, queue: networkQueue)
+    // Diagnostic ciphers retain TLS 1.3 and the production pairing/session trust policy. Never
     // change production cipher policy based on a failing link without a reproducible cause.
     if let choice = ProcessInfo.processInfo.environment["DUODESK_PROBE_TLS_CIPHER"] {
         let suite: tls_ciphersuite_t
@@ -91,7 +94,8 @@ func connect(host: String, port: Int, identity: RemoteIdentity, pin: Data, alpn:
         connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                guard RemoteTLS.negotiatedALPN(connection) == alpn, RemoteTLS.peerFingerprint(connection) == pin else {
+                guard RemoteTLS.negotiatedALPN(connection) == alpn,
+                      let actual = RemoteTLS.peerFingerprint(connection), pin == nil || actual == pin else {
                     finish(.failure(ProbeError.failed("ready peer pin or ALPN mismatch"))); connection.cancel(); return
                 }
                 if let metadata = RemoteTLS.securityMetadata(connection) {
@@ -153,30 +157,35 @@ func message(from connection: NWConnection) async throws -> (StreamHeader, Data)
 
 @MainActor
 func run() async throws {
-    let args = CommandLine.arguments.filter { $0 != "--quic" }
+    let typed = CommandLine.arguments.contains("--pair-code")
+    let args = CommandLine.arguments.filter { $0 != "--quic" && $0 != "--pair-code" }
     let mode = args.count >= 4 ? args[3] : nil
     let dryInputEpochs = args.count == 5 && mode == "--rate-switch" && args[4] == "--dry-run-input-epochs"
     guard (args.count == 3 || (args.count == 4 && ["--fixture-input", "--window-pick", "--rate-switch", "--gpu-frame-code"].contains(mode ?? "")) || dryInputEpochs),
-          case .success(let pair) = PairLink.parse(try String(contentsOfFile: args[2], encoding: .utf8)),
           let key = RemoteKey.generate(), let identity = RemoteIdentity(privateKey: key) else {
-        throw ProbeError.failed("usage: probe HOST PAIR_URL_FILE [--quic] [--fixture-input|--window-pick|--rate-switch|--gpu-frame-code]")
+        throw ProbeError.failed("usage: probe HOST PAIR_INPUT_FILE [--pair-code] [--quic] [--fixture-input|--window-pick|--rate-switch|--gpu-frame-code]")
     }
+    let pair = try ProbePairingInput(path: args[2], typed: typed)
     let frameAudit = mode == "--gpu-frame-code" ? try PixelMotionAudit() : nil
-    let pairing = try await connect(host: args[1], port: pair.port, identity: identity, pin: pair.fingerprint, alpn: RemoteTLS.pairingALPN)
-    let proofKey = PairingProof.qrKey(secret: pair.secret)
-    let proof = PairingProof.deviceProof(key: proofKey, deviceFingerprint: identity.fingerprint, macFingerprint: pair.fingerprint)
-    send(.pairRequest, payload: Wire.encode(PairRequest(method: PairRequest.qr, proof: Base64URL.encode(proof),
-                                                       name: "Native hardware QA", model: "Mac")), on: pairing)
+    let pairing = try await connect(host: args[1], port: pair.port, identity: identity, pin: pair.pin, alpn: RemoteTLS.pairingALPN)
+    defer { pairing.cancel() }
+    guard let pin = RemoteTLS.peerFingerprint(pairing) else { throw ProbeError.failed("pairing peer has no P-256 fingerprint") }
+    let proofKey = try pair.proofKey(for: pin)
+    let proof = PairingProof.deviceProof(key: proofKey, deviceFingerprint: identity.fingerprint, macFingerprint: pin)
+    let deviceName = ProcessInfo.processInfo.environment["DUODESK_PROBE_DEVICE_NAME"] ?? "Native hardware QA"
+    send(.pairRequest, payload: Wire.encode(PairRequest(method: pair.method, proof: Base64URL.encode(proof),
+                                                       name: deviceName, model: "Mac")), on: pairing)
     let (header, payload) = try await message(from: pairing)
     pairing.cancel()
     guard header.kind == .pairResult, let answer = Wire.decode(PairResult.self, from: payload), answer.ok,
-          answer.macID == pair.macID, let proofText = answer.proof, let macProof = Base64URL.decode(proofText),
+          answer.macID == (pair.expectedMacID ?? MacID.make(fingerprint: pin)),
+          let proofText = answer.proof, let macProof = Base64URL.decode(proofText),
           let recognition = answer.recognitionKey.flatMap(Base64URL.decode), recognition.count == 32,
-          PairingProof.isValidMacProof(macProof, key: proofKey, macFingerprint: pair.fingerprint, deviceFingerprint: identity.fingerprint) else {
+          PairingProof.isValidMacProof(macProof, key: proofKey, macFingerprint: pin, deviceFingerprint: identity.fingerprint) else {
         throw ProbeError.failed("pairing proof rejected")
     }
     print("Network probe: mutual pairing proof verified")
-    let session = try await connect(host: args[1], port: pair.port, identity: identity, pin: pair.fingerprint, alpn: RemoteTLS.sessionALPN)
+    let session = try await connect(host: args[1], port: pair.port, identity: identity, pin: pin, alpn: RemoteTLS.sessionALPN)
     defer { session.cancel() }
     func sendControl(_ kind: StreamMessageKind, _ payload: Data, epoch supplied: UInt64? = nil) {
         guard !dryInputEpochs || measurement.lock.withLock({ measurement.dryInputConfirmed }) else {
