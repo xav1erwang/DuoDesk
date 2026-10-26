@@ -41,3 +41,12 @@ The collaboration repository must remain private. Never push to the Sill upstrea
 or upload Local/, Temp/, signing secrets, accounts, or pairing material. The local
 source index and existing uncommitted state are preserved; private snapshots use
 the separate a private snapshot branch ref and an ignored alternate index.
+
+## Capture performance direction
+
+The user has directed performance work toward capture sampling, without changing
+the physical screen's refresh rate. Do not continue physical refresh experiments.
+Keep the native desktop resolution requirement and its negotiated virtual desktop
+clock; optimize the sampling interval and actual frame delivery instead. Count
+different desktop images, preserve failed evidence, and do not claim 120 FPS from
+configuration alone.

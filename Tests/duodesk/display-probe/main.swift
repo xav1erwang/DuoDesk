@@ -140,10 +140,14 @@ Task { @MainActor in
         if let fixture { try spaceAudit?.record("before", window: fixture, expectedDisplay: target) }
         let test = DuoDesktopDisplay(mainDisplay: { target }, layout: nativePrimary ? .nativePrimary : .mirrored)
         session = test
+        guard !test.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
         let native = DuoDesktopResolution(width: 2007, height: 1427)
         var master = try await test.prepareGraphics(native, fps: switchesRate ? 60 : 120)
         let correctRole = nativePrimary ? CGDisplayMirrorsDisplay(target) == kCGNullDirectDisplay : CGDisplayMirrorsDisplay(target) == master
         guard test.activeModeMatches, master == target || correctRole else { throw DuoDesktopDisplay.Failure.modeRejected }
+        guard test.followsNativeCadence,
+              test.usesIndependentCaptureFilter == nativePrimary else { throw DuoDesktopDisplay.Failure.modeRejected }
+        print("Native sampling: exact negotiated desktop clock; no additional 1/fps interval; filter choice unchanged")
         if let window = fixture {
             var visible = false
             for _ in 0..<20 {
@@ -230,6 +234,7 @@ Task { @MainActor in
                 let actual = CGDisplayCopyDisplayMode(master)?.refreshRate ?? 0
                 print("Graphics rate switch: requested=\(rate), actual=\(actual), master=\(master)")
                 guard abs(actual - Double(rate)) < 0.5 else { throw DuoDesktopDisplay.Failure.modeRejected }
+                guard test.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
                 if previous != target, master != previous { throw DuoDesktopDisplay.Failure.modeRejected }
             }
         }
@@ -240,6 +245,7 @@ Task { @MainActor in
               restored.pixelWidth == baseline?.pixelWidth, restored.pixelHeight == baseline?.pixelHeight else {
             throw DuoDesktopDisplay.Failure.modeRejected
         }
+        guard !test.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
         // Virtual-master removal and WindowServer notifications must not later undo restoration.
         try await Task.sleep(for: .seconds(1.5))
         if usesPrimary, let window = fixture, let before = originalFixtureBounds {

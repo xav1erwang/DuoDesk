@@ -1515,7 +1515,7 @@ package final class StreamCoordinator {
                 }
                 if let own {
                     filter = SCContentFilter(display: d, excludingApplications: [own], exceptingWindows: [])
-                } else if duoDesktop.followsNativeCadence {
+                } else if duoDesktop.usesIndependentCaptureFilter {
                     filter = SCContentFilter(display: d, excludingApplications: [], exceptingWindows: [])
                 } else {
                     filter = SCContentFilter(display: d, excludingWindows: [])

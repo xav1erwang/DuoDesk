@@ -51,13 +51,16 @@ final class DuoDesktopDisplay {
     private(set) var resolution: DuoDesktopResolution?
     private var requestedFPS: Int?
     var captureBounds: CGRect? { capturedID == 0 ? nil : CGDisplayBounds(capturedID) }
-    /// Diagnostic independent desktops have an exact negotiated clock. Let SCK follow that
-    /// clock directly; never uncap an arbitrary physical display running above the stream rate.
+    /// SCK may follow an exact native clock on both the mirrored product desktop and the
+    /// independent diagnostic desktop. A second 1/fps limiter is unnecessary in either case.
+    /// This only changes sampling: never uncap a display running above the negotiated rate.
     var followsNativeCadence: Bool {
-        guard layout == .nativePrimary, activeModeMatches, let requestedFPS,
+        guard activeModeMatches, let requestedFPS,
               let mode = CGDisplayCopyDisplayMode(capturedID) else { return false }
         return abs(mode.refreshRate - Double(requestedFPS)) < 0.5
     }
+    /// Keep the diagnostic filter choice separate from the capture interval policy.
+    var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && followsNativeCadence }
     var activeModeMatches: Bool {
         guard let resolution, let requestedFPS, let mode = CGDisplayCopyDisplayMode(capturedID),
               mode.refreshRate >= Double(requestedFPS) - 0.5 else { return false }
