@@ -19,6 +19,7 @@ import StreamProtocol
 struct KeyModifiers: OptionSet {
     let rawValue: UInt64
 
+    static let capsLock = KeyModifiers(rawValue: 1 << 16)
     static let shift   = KeyModifiers(rawValue: 1 << 17)
     static let control = KeyModifiers(rawValue: 1 << 18)
     static let option  = KeyModifiers(rawValue: 1 << 19)

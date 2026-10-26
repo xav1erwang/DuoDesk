@@ -19,7 +19,8 @@ struct DuoControlDeck: View {
             VStack(spacing: 10) {
                 toolbar
                 if mode.hasKeyboard {
-                    DuoKeyboardView(latched: $latched, capsLock: $capsLock, send: client.sendFromKeyRow)
+                    DuoKeyboardView(latched: $latched, capsLock: $capsLock,
+                                    inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
                         .frame(height: keyHeight)
                         .accessibilityIdentifier("duo.keyboard")
                 }
@@ -45,6 +46,10 @@ struct DuoControlDeck: View {
             // No modifier may linger when the surface that shows it disappears.
             latched = []
             UISelectionFeedbackGenerator().selectionChanged()
+        }
+        .onChange(of: client.hasNativeDesktopVideo, initial: true) { _, _ in
+            // A surface mounted during a reset must not inherit a pre-reset one-shot latch.
+            latched = []
         }
     }
 
@@ -131,6 +136,7 @@ struct DuoControlDeck: View {
 private struct DuoKeyboardView: View {
     @Binding var latched: KeyModifiers
     @Binding var capsLock: Bool
+    let inputReady: Bool
     let send: (InputEvent) -> Void
 
     var body: some View {
@@ -168,13 +174,11 @@ private struct DuoKeyboardView: View {
         }
         .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 11))
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.45), lineWidth: 0.7))
+        .disabled(!inputReady)
     }
 
     private func legend(_ key: DuoKey) -> String {
-        if case .key(let usage) = key.action, (0x04...0x1D).contains(usage) {
-            return (latched.contains(.shift) != capsLock) ? key.legend.uppercased() : key.legend
-        }
-        return latched.contains(.shift) ? (key.shifted ?? key.legend) : key.legend
+        DuoKeyboardLayout.legend(for: key, latched: latched, capsLock: capsLock)
     }
     private func selected(_ key: DuoKey) -> Bool {
         switch key.action {
@@ -188,18 +192,19 @@ private struct DuoKeyboardView: View {
         return false
     }
     private func press(_ key: DuoKey) {
+        guard inputReady else { return }
         switch key.action {
         case .modifier(let bits):
             let flag = KeyModifiers(rawValue: bits)
             if latched.contains(flag) { latched.remove(flag) } else { latched.insert(flag) }
         case .capsLock:
             capsLock.toggle()
-            KeyChord.press(0x39, with: []).forEach(send)
+            DuoKeyboardLayout.keyEvents(0x39, latched: [], capsLock: capsLock).forEach(send)
         case .inputSource:
             KeyChord.press(0x2C, with: .control).forEach(send)
             latched = []
         case .key(let usage):
-            KeyChord.press(usage, with: latched).forEach(send)
+            DuoKeyboardLayout.keyEvents(usage, latched: latched, capsLock: capsLock).forEach(send)
             latched = []
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.45)

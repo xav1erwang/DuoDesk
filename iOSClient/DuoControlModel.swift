@@ -59,6 +59,22 @@ struct DuoKey: Identifiable, Equatable {
 /// ANSI positions are sent as HID keys, so the Mac's selected input source handles composition.
 /// Modifiers are one-shot latches; KeyChord releases every modifier after the key or pointer action.
 enum DuoKeyboardLayout {
+    /// Caps Lock is per-key metadata too: a green keycap alone cannot change what the Mac types.
+    /// Keep HID input so the Mac's own layout/input source performs the character translation.
+    static func keyEvents(_ usage: UInt16, latched: KeyModifiers, capsLock: Bool) -> [InputEvent] {
+        var modifiers = latched
+        if capsLock { modifiers.insert(.capsLock) } else { modifiers.remove(.capsLock) }
+        return KeyChord.press(usage, with: modifiers)
+    }
+
+    static func legend(for key: DuoKey, latched: KeyModifiers, capsLock: Bool) -> String {
+        if case .key(let usage) = key.action, (0x04...0x1D).contains(usage) {
+            // The Mac's US layout keeps letters uppercase with both Caps Lock and Shift.
+            return (latched.contains(.shift) || capsLock) ? key.legend.uppercased() : key.legend
+        }
+        return latched.contains(.shift) ? (key.shifted ?? key.legend) : key.legend
+    }
+
     private static func key(_ label: String, _ usage: UInt16, _ units: Double = 1,
                             shifted: String? = nil, name: String? = nil) -> DuoKey {
         DuoKey(id: "hid-\(usage)", legend: label, shifted: shifted,

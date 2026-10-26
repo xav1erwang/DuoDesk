@@ -12,6 +12,7 @@ let switchesRate = CommandLine.arguments.contains("--rate-switch")
 let slowNativeMode = CommandLine.arguments.contains("--slow-native")
 let nativePrimary = CommandLine.arguments.contains("--native-primary")
 let fullscreen = CommandLine.arguments.contains("--fullscreen")
+let inspectsSpaces = CommandLine.arguments.contains("--inspect-spaces")
 
 @MainActor
 final class FullscreenObserver: NSObject, NSWindowDelegate {
@@ -59,6 +60,7 @@ Task { @MainActor in
     var secondaryID: CGDirectDisplayID?
     var secondaryBounds: CGRect?
     var originalFixtureBounds: CGRect?
+    var spaceAudit: DisplaySpaceAudit?
     let fullscreenObserver = FullscreenObserver()
     let physical = CGMainDisplayID()
     let physicalMode = CGDisplayCopyDisplayMode(physical)
@@ -67,6 +69,8 @@ Task { @MainActor in
         guard let physicalMode else { throw DuoDesktopDisplay.Failure.noDisplay }
         guard !usesPrimary || !slowNativeMode else { throw DuoDesktopDisplay.Failure.invalidResolution }
         guard !fullscreen || usesPrimary else { throw DuoDesktopDisplay.Failure.invalidResolution }
+        guard !inspectsSpaces || (fullscreen && usesPrimary && nativePrimary) else { throw DuoDesktopDisplay.Failure.invalidResolution }
+        if inspectsSpaces { spaceAudit = try DisplaySpaceAudit() }
         print("Graphics baseline: main=\(physical), pixels=\(physicalMode.pixelWidth)×\(physicalMode.pixelHeight), origin=\(physicalOrigin), primaryTest=\(usesPrimary)")
         let target: CGDirectDisplayID
         if usesPrimary {
@@ -133,6 +137,7 @@ Task { @MainActor in
         }
         if let secondaryWindow { secondaryBounds = ownWindowBounds(secondaryWindow) }
         let baseline = CGDisplayCopyDisplayMode(target)
+        if let fixture { try spaceAudit?.record("before", window: fixture, expectedDisplay: target) }
         let test = DuoDesktopDisplay(mainDisplay: { target }, layout: nativePrimary ? .nativePrimary : .mirrored)
         session = test
         let native = DuoDesktopResolution(width: 2007, height: 1427)
@@ -150,9 +155,37 @@ Task { @MainActor in
                 try await Task.sleep(for: .milliseconds(50))
             }
             print("Graphics fixture: own window \(String(describing: ownWindowBounds(window))), native master \(CGDisplayBounds(master)), main=\(CGMainDisplayID())")
+            if let spaceAudit {
+                let ownership = try spaceAudit.record("prepared", window: window, expectedDisplay: master)
+                guard ownership.spaces == spaceAudit.originalSpaces else {
+                    throw DisplaySpaceAudit.Failure(message: "The original full-screen Space ID changed")
+                }
+                guard ownership.ownsExpectedDisplay else {
+                    throw DisplaySpaceAudit.Failure(message: "Original full-screen Space remains on another display; activation cannot migrate it")
+                }
+                if !window.isOnActiveSpace {
+                    // Only activate this process's window if its original Space already belongs
+                    // to the native target. Never substitute a new fullscreen Space or change
+                    // another process's windows with private Space mutation APIs.
+                    window.makeKeyAndOrderFront(nil)
+                    app.activate()
+                    try await waitForFullscreen(window, enabled: true, observer: fullscreenObserver)
+                    try spaceAudit.record("activated", window: window, expectedDisplay: master)
+                    if let bounds = ownWindowBounds(window) {
+                        let intersection = bounds.intersection(CGDisplayBounds(master))
+                        visible = !intersection.isNull && intersection.width * intersection.height >= bounds.width * bounds.height * 0.95
+                    }
+                }
+            }
             guard visible, CGMainDisplayID() == master else { throw DuoDesktopDisplay.Failure.displayUnavailable }
             if fullscreen {
                 guard window.styleMask.contains(.fullScreen), window.isOnActiveSpace else { throw DuoDesktopDisplay.Failure.displayUnavailable }
+                let restoredSpace = try spaceAudit?.record("restored", window: window, expectedDisplay: physical)
+                if let restoredSpace {
+                    guard restoredSpace.spaces == spaceAudit?.originalSpaces, restoredSpace.ownsExpectedDisplay else {
+                        throw DisplaySpaceAudit.Failure(message: "Original full-screen Space identity or owner did not restore")
+                    }
+                }
                 print("Fullscreen continuity: existing full-screen Space remains active on the native main desktop")
             }
         }
@@ -247,10 +280,15 @@ Task { @MainActor in
               abs(current.refreshRate - physicalMode.refreshRate) < 0.5,
               CGDisplayBounds(physical).origin == physicalOrigin, CGMainDisplayID() == physical else { throw DuoDesktopDisplay.Failure.modeRejected }
         print("DUO graphics PASS: exact native pixels, repeated prepare, original display restored; existing primary window \(usesPrimary ? "verified" : "not tested in disposable mode")")
+        try spaceAudit?.finish(passed: true, cleanupRestored: true)
         exit(0)
     } catch {
         let restored = session?.restore() ?? true
         if let fixture, fixture.styleMask.contains(.fullScreen) {
+            if let spaceAudit {
+                try? await waitForFullscreen(fixture, enabled: true, observer: fullscreenObserver)
+                _ = try? spaceAudit.record("failure-restored", window: fixture, expectedDisplay: physical)
+            }
             fixture.toggleFullScreen(nil)
             try? await waitForFullscreen(fixture, enabled: false, observer: fullscreenObserver)
         }
@@ -258,6 +296,10 @@ Task { @MainActor in
         minimized?.close(); newWindow?.close()
         secondaryWindow?.close()
         fakeMac?.destroy()
+        let restoredMode = CGDisplayCopyDisplayMode(physical)
+        let exact = restored && restoredMode?.ioDisplayModeID == physicalMode?.ioDisplayModeID
+            && CGDisplayBounds(physical).origin == physicalOrigin && CGMainDisplayID() == physical
+        try? spaceAudit?.finish(passed: false, cleanupRestored: exact, error: error.localizedDescription)
         print("DUO graphics FAILED: \(error.localizedDescription); cleanup restored=\(restored)")
         exit(1)
     }
