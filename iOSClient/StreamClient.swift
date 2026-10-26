@@ -3345,6 +3345,13 @@ final class StreamClient: ObservableObject {
         link.send(message.serialized())
     }
 
+    /// A local IME can span a reconnect or video reset. Its confirmation must still target the
+    /// image where composition began, before sendInput takes its ordinary per-event fence.
+    func makeTextInputFence() -> () -> Bool {
+        guard hasNativeDesktopVideo else { return { false } }
+        return displayView.makeInputFence()
+    }
+
     func sendInput(_ event: InputEvent) {
         // Releases still end a drag or modifier during a video restart.
         guard event.isRelease || hasNativeDesktopVideo else { return }

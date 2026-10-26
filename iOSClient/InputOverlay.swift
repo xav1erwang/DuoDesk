@@ -9,15 +9,20 @@ import StreamProtocol
 /// position is a fraction of the *video frame*, not of this view — the video is drawn aspect-fit by
 /// `HEVCDisplayView`, so the letterbox has to be taken out before normalizing.
 ///
-/// It is also where the keyboard goes: keys and typed text reach the Mac only while this view is first
-/// responder, which its `InputOverlayProxy` decides (HardwareKeyboardPolicy: by itself whenever a
+/// Its native text-input child holds the keyboard: keys and confirmed text reach the Mac only while
+/// that child is first responder, which `InputOverlayProxy` decides (HardwareKeyboardPolicy: whenever a
 /// hardware keyboard is attached, else with the Keyboard button), and a trackpad's or a mouse's
 /// scrolling over the picture comes here too (docs/hardware-keyboard-plan.md).
-final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
+final class InputOverlayView: UIView, UIGestureRecognizerDelegate {
     /// Pixel size of the streamed frame. Zero until the host's parameter sets arrive; input is
     /// ignored until then, since there is nothing on screen to aim at.
     var videoSize: CGSize = .zero
     var send: (InputEvent) -> Void = { _ in }
+    var makeTextInputFence: () -> (() -> Bool) = { { false } } {
+        didSet { textInput.makeInputFence = makeTextInputFence }
+    }
+    let textInput = StreamTextInputView()
+    var holdsKeyboard: Bool { textInput.isFirstResponder }
     /// Who decides when this view holds the keyboard, told when it joins or leaves a window and when it
     /// becomes or resigns first responder (only the proxy's current view counts).
     weak var keyboardProxy: InputOverlayProxy?
@@ -27,8 +32,6 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// What the proxy asked for (`take`), while UIKit makes this view first responder; nil when UIKit
     /// does it by itself.
     private var askedAutomatic: Bool?
-    /// The input view while the hardware keyboard holds the keyboard: nothing, zero tall.
-    private lazy var emptyInputView = UIView(frame: .zero)
     /// The assistant item's groups, put back when the person's own keyboard holds it.
     private var assistantGroups: (leading: [UIBarButtonItemGroup], trailing: [UIBarButtonItemGroup])?
 
@@ -80,6 +83,32 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         backgroundColor = .clear
         isOpaque = false
         isMultipleTouchEnabled = true
+        addSubview(textInput)
+        textInput.frame = CGRect(x: 0, y: 0, width: 2, height: 2)
+        textInput.commit = { [weak self] in self?.insertText($0) }
+        textInput.remoteDelete = { [weak self] in self?.deleteBackward() }
+        textInput.prepareToBecome = { [weak self] in
+            guard let self else { return false }
+            let before = self.holdsForHardwareKeyboard
+            let automatic = self.askedAutomatic ?? (self.keyboardProxy?.unpromptedKindIsAutomatic(for: self) ?? false)
+            self.applyInputViews(automatic: automatic)
+            return before
+        }
+        textInput.didBecome = { [weak self] became, before in
+            guard let self else { return }
+            if became { self.keyboardProxy?.became(self, automatic: self.askedAutomatic) }
+            else { self.applyInputViews(automatic: before) }
+        }
+        textInput.didResign = { [weak self] in
+            guard let self else { return }
+            self.releaseForwardedKeys()
+            self.keyboardProxy?.resigned(self)
+        }
+        textInput.routePresses = { [weak self] presses, down, channel in
+            guard let self else { return presses }
+            if down, presses.contains(where: { $0.key != nil }) { self.setOwnPointer(nil, .none) }
+            return self.forward(presses, down: down, via: channel)
+        }
 
         // Every finger recognizer is direct-touch only. Two reasons: a Pencil drag must never also
         // scroll, and a recognizer that does not track a touch does not cancel it, so Pencil touches
@@ -345,7 +374,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { momentum.stop(); releaseForwardedKeys() }
+        if window == nil { momentum.stop(); releaseForwardedKeys(); textInput.discardComposition() }
         // A session's start, a rotation's other layout, a reconnect's new screen: the proxy takes the
         // keyboard for a hardware keyboard (on the next turn, once this view is settled in the window).
         if window != nil { keyboardProxy?.joined(self) } else { keyboardProxy?.left(self) }
@@ -416,7 +445,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             for flags: UIKeyModifierFlags in [[], .shift] {
                 let name = flags.isEmpty ? "Esc" : "⇧Esc"
                 print("input test: \(name) " + (self.scriptEscape(flags) ? "through the key command"
-                    : "not taken: " + (self.isFirstResponder ? "an EscapeKey is on screen in its window" : "this view does not hold the keyboard")))
+                    : "not taken: " + (self.holdsKeyboard ? "an EscapeKey is on screen in its window" : "this view does not hold the keyboard")))
             }
         }
         at(5.0) { [weak self] in
@@ -510,23 +539,10 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     // MARK: - Keyboard
 
-    override var canBecomeFirstResponder: Bool { true }
-
     /// None of iPadOS's three-finger editing gestures (undo and redo, copy, cut and paste, the edit
-    /// bar): three fingers here are the Mac's (docs/trackpad-gestures-plan.md §6.5). This view is the
-    /// one responder Sill makes first, in every layout, and holds no text of its own; the Mac's undo
-    /// is ⌘Z.
+    /// bar): three fingers here are the Mac's (docs/trackpad-gestures-plan.md §6.5). The native input
+    /// child disables these too; the remote document's undo is ⌘Z.
     override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
-
-    @objc var keyboardType: UIKeyboardType = .default
-    @objc var autocorrectionType: UITextAutocorrectionType = .no
-    @objc var autocapitalizationType: UITextAutocapitalizationType = .none
-    @objc var smartQuotesType: UITextSmartQuotesType = .no
-    @objc var smartDashesType: UITextSmartDashesType = .no
-
-    /// Always true: there is text on the Mac, and the delete key has to keep working even though
-    /// this view holds no text of its own.
-    var hasText: Bool { true }
 
     // The latched-modifier rule, which decides which of the two keyboard paths a character takes:
     //
@@ -591,7 +607,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// The proxy's `take`: first responder, for the hardware keyboard (`automatic`) or as the person's.
     func take(automatic: Bool) {
         askedAutomatic = automatic
-        _ = becomeFirstResponder()
+        _ = textInput.becomeFirstResponder()
         askedAutomatic = nil
     }
 
@@ -601,40 +617,18 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     func setHoldsForHardwareKeyboard(_ automatic: Bool) {
         guard automatic != holdsForHardwareKeyboard else { return }
         applyInputViews(automatic: automatic)
-        if isFirstResponder { reloadInputViews() }
+        if holdsKeyboard { textInput.reloadInputViews() }
     }
 
-    override func becomeFirstResponder() -> Bool {
-        // Before UIKit reads `inputView`: what this holding is, asked or (UIKit's own) as the rule says.
-        let automatic = askedAutomatic ?? (keyboardProxy?.unpromptedKindIsAutomatic(for: self) ?? false)
-        let before = holdsForHardwareKeyboard
-        applyInputViews(automatic: automatic)
-        let became = super.becomeFirstResponder()
-        if became {
-            keyboardProxy?.became(self, automatic: askedAutomatic)
-        } else {
-            applyInputViews(automatic: before)
-        }
-        return became
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let resigned = super.resignFirstResponder()
-        if resigned {
-            releaseForwardedKeys()
-            keyboardProxy?.resigned(self)
-        }
-        return resigned
-    }
+    func letGoOfKeyboard() { _ = textInput.resignFirstResponder() }
 
     /// Nothing drawn while the hardware keyboard holds the keyboard: an empty input view (iPadOS then
     /// shows no software keyboard, even for a keyboard it counts as gone a moment before GameController
     /// does) and no assistant groups; the system keyboard and its groups for the person's own.
-    override var inputView: UIView? { holdsForHardwareKeyboard ? emptyInputView : nil }
-
     private func applyInputViews(automatic: Bool) {
         holdsForHardwareKeyboard = automatic
-        let item = inputAssistantItem
+        textInput.suppressKeyboard = automatic
+        let item = textInput.inputAssistantItem
         if automatic {
             if assistantGroups == nil { assistantGroups = (item.leadingBarButtonGroups, item.trailingBarButtonGroups) }
             item.leadingBarButtonGroups = []
@@ -664,12 +658,12 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         return command
     }
 
-    /// This view takes Esc: it is first responder (it holds the keyboard), and no EscapeKey is on screen
-    /// in its window (the tour, the pairing overlay, the Settings panel, whose Esc closes them). Only its
-    /// own window's: Settings open in another Sill window, behind this one, never sees a key pressed
-    /// here. A leaf view is in the responder chain only while it is first responder, so this says again
-    /// what the chain does.
-    private var takesEscape: Bool { isFirstResponder && !EscapeKey.onScreen(in: window) }
+    /// Esc reaches the Mac while the native child holds the keyboard and is not composing. These
+    /// commands belong to its responder chain; a local IME keeps Esc for cancelling its candidate.
+    /// An EscapeKey in this window (tour, pairing or settings) takes priority over the Mac.
+    private var takesEscape: Bool {
+        holdsKeyboard && textInput.markedTextRange == nil && !EscapeKey.onScreen(in: window)
+    }
 
     override var keyCommands: [UIKeyCommand]? {
         guard takesEscape else { return super.keyCommands }
@@ -752,9 +746,11 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
                 continue
             }
             #endif
-            let outcome = down ? forwarded.pressed(usage, modifiers: modifiers, at: press.timestamp) : forwarded.released(usage)
+            let outcome = down ? forwarded.pressed(usage, modifiers: modifiers, at: press.timestamp,
+                locallyComposing: textInput.markedTextRange != nil) : forwarded.released(usage)
             switch outcome {
             case .send(let event):
+                if down { textInput.discardComposition() }
                 send(event)
                 Self.hwkey(usage, down: down, via: channel, modifiers: modifiers, to: "to the Mac")
             case .text:
@@ -770,25 +766,6 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     #if DEBUG
     private static let escViaCommand = UserDefaults.standard.bool(forKey: "SillEscViaCommand")
     #endif
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        // A hardware key hides this device's pointer, as typing does (`setOwnPointer`).
-        if presses.contains(where: { $0.key != nil }) { setOwnPointer(nil, .none) }
-        let unhandled = forward(presses, down: true, via: "pressesBegan")
-        if !unhandled.isEmpty { super.pressesBegan(unhandled, with: event) }
-    }
-
-    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let unhandled = forward(presses, down: false, via: "pressesEnded")
-        if !unhandled.isEmpty { super.pressesEnded(unhandled, with: event) }
-    }
-
-    /// A press cancelled (the app going to the background, the keyboard disconnected): its key comes
-    /// up on the Mac as if released, so neither it nor a modifier stays down there.
-    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let unhandled = forward(presses, down: false, via: "pressesCancelled")
-        if !unhandled.isEmpty { super.pressesCancelled(unhandled, with: event) }
-    }
 
     /// Every hardware key still down on the Mac comes up: this view no longer takes keys (the Settings
     /// panel took the keyboard, the tour showed) or is leaving the screen, and UIKit sends it no
@@ -877,7 +854,7 @@ final class InputOverlayProxy {
             case .take(let automatic): view?.take(automatic: automatic)
             case .makeOwn: view?.setHoldsForHardwareKeyboard(false)
             case .makeAutomatic: view?.setHoldsForHardwareKeyboard(true)
-            case .letGo: if view?.isFirstResponder == true { _ = view?.resignFirstResponder() }
+            case .letGo: if view?.holdsKeyboard == true { view?.letGoOfKeyboard() }
             }
         }
         if policy.isOwn != reportedOwn {
@@ -941,6 +918,7 @@ final class HardwareKeyboardMonitor: ObservableObject {
 struct InputOverlay: UIViewRepresentable {
     let videoSize: CGSize
     let send: (InputEvent) -> Void
+    let makeTextInputFence: () -> (() -> Bool)
     /// `StreamClient.setOwnPointer`; see `InputOverlayView.setOwnPointer`.
     let setOwnPointer: (CGPoint?, PointerPresence.Origin) -> Void
     let proxy: InputOverlayProxy
@@ -961,6 +939,7 @@ struct InputOverlay: UIViewRepresentable {
     func updateUIView(_ uiView: InputOverlayView, context: Context) {
         uiView.videoSize = videoSize
         uiView.send = send
+        uiView.makeTextInputFence = makeTextInputFence
         uiView.setOwnPointer = setOwnPointer
         uiView.latchedModifiers = latchedModifiers
         uiView.sendGesture = sendGesture

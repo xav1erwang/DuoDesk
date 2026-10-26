@@ -483,6 +483,7 @@ struct PortraitStreamScreen: View {
                 .opacity(client.hasNativeDesktopVideo ? 1 : 0)
             InputOverlay(videoSize: client.videoSize,
                          send: { client.sendInput($0) },
+                         makeTextInputFence: { client.makeTextInputFence() },
                          setOwnPointer: { client.setOwnPointer($0, from: $1) },
                          proxy: overlay,
                          isKeyboardShown: $keyboardShown,

@@ -195,10 +195,16 @@ struct ForwardedKeys {
     /// A key pressed (pressesBegan), with UIKit's modifier flags and its press's timestamp: `began`'s
     /// answer, unless a key command sent the same key press already (the same key, pressed no later than
     /// the command fired), which is swallowed, and its up with it.
-    mutating func pressed(_ usage: UInt16, modifiers: UInt64, at time: Double) -> Press {
+    mutating func pressed(_ usage: UInt16, modifiers: UInt64, at time: Double, locallyComposing: Bool = false) -> Press {
         if let sent = commandedAt[usage], time <= sent {
             swallowed.insert(usage)
             return .swallow
+        }
+        // Candidate navigation and cancellation belong to the local IME until it confirms text.
+        // Its release stays local too: no corresponding down was placed in `down`.
+        if locallyComposing, modifiers & KeyModifiers.shortcutMakers.rawValue == 0,
+           [0x28, 0x29, 0x2B, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52].contains(usage) {
+            return .text
         }
         return began(usage, modifiers: modifiers).map { .send($0) } ?? .text
     }
