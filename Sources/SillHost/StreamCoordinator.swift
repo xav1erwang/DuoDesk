@@ -167,6 +167,9 @@ package final class StreamCoordinator {
     private var rectCache: (id: CGWindowID, rect: CGRect, at: CFAbsoluteTime)?
     private var pendingLaunch: String?
     private var switching = false
+    /// A current SCK failure can arrive after startCapture returns but before select settles.
+    /// select drops reentrant calls, so retain this event until it can stop the failed pipeline.
+    private var captureStopWhileSwitching: WindowCapture.Stop?
     /// A restart of the active source is in flight (a settings change, a resize, a rate change,
     /// the encoder fallback, a lost display): the source being restarted. Nil during a switch to
     /// another source.
@@ -476,9 +479,7 @@ package final class StreamCoordinator {
         }
         capture.onStopped = { [weak self] stopped in
             Task { @MainActor in
-                guard let self, self.capture.isCurrent(stopped), !self.shuttingDown else { return }
-                print("Capture stopped: \(stopped.error.localizedDescription)")
-                await self.select(.none)
+                await self?.captureStopped(stopped)
             }
         }
         // Status for the menu bar app. The server's callbacks hop here from its network queue; the
@@ -1240,6 +1241,24 @@ package final class StreamCoordinator {
         await select(source, bringForward: true)
     }
 
+    private func captureStopped(_ stopped: WindowCapture.Stop) async {
+        guard capture.isCurrent(stopped), !shuttingDown else { return }
+        if switching {
+            captureStopWhileSwitching = stopped
+            return
+        }
+        print("Capture stopped: \(stopped.error.localizedDescription)")
+        await select(.none)
+    }
+
+    @discardableResult
+    private func resumeDeferredCaptureStop() -> Task<Void, Never>? {
+        guard let stopped = captureStopWhileSwitching else { return nil }
+        captureStopWhileSwitching = nil
+        // A new selection may have replaced the failed stream before this hop runs.
+        return Task { @MainActor in await self.captureStopped(stopped) }
+    }
+
     /// Streams `source` in place of whatever streams now. Also how the host restarts the current
     /// source (a resize, a rate change, the encoder fallback, a lost virtual display).
     /// `bringForward` marks a pick instead: the device's switcher, the command line, an app
@@ -1271,6 +1290,7 @@ package final class StreamCoordinator {
         defer {
             switching = false
             restartOf = nil
+            resumeDeferredCaptureStop()
             var pick = pickArrivedWhileSwitching
             pickArrivedWhileSwitching = nil
             // Requests that arrived mid-switch, applied now that `switching` is clear again (every
