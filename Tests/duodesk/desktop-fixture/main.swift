@@ -23,6 +23,8 @@ final class Fixture: NSView {
     var tickCount = 0
     var tickStart = ProcessInfo.processInfo.systemUptime
     var metal: MetalMotionView?
+    var imeText: IMETextView?
+    var imeMarker: IMEFixtureMarker?
     let serverAnimation = ProcessInfo.processInfo.environment["DUODESK_FIXTURE_SERVER_ANIMATION"] == "1"
     func startClock() {
         if metal != nil || serverAnimation { return }
@@ -52,11 +54,22 @@ final class Fixture: NSView {
             metal = surface; addSubview(surface)
             markerRing.zPosition = 100; marker.zPosition = 101
         }
+        if let text = IMETextView.makeIfRequested() {
+            imeText = text; addSubview(text)
+            let overlay = IMEFixtureMarker(frame: bounds)
+            overlay.wantsLayer = true
+            imeMarker = overlay; addSubview(overlay, positioned: .above, relativeTo: nil)
+            markerRing.isHidden = true; marker.isHidden = true
+            text.onActualClick = { [weak overlay] in overlay?.clicked = true }
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
     override func layout() {
         super.layout()
         metal?.frame = bounds
+        imeText?.frame = NSRect(x: 30, y: 35, width: max(100, bounds.width - 60), height: max(40, bounds.height * 0.18))
+        imeMarker?.frame = bounds
+        imeMarker?.needsDisplay = true
         CATransaction.begin(); CATransaction.setDisableActions(true)
         markerRing.frame = NSRect(x: bounds.midX - 110, y: bounds.midY - 110, width: 220, height: 220)
         marker.frame = NSRect(x: bounds.midX - 55, y: bounds.midY - 55, width: 110, height: 110)
@@ -98,9 +111,10 @@ final class Fixture: NSView {
         print("Fixture \(kind) keyCode=\(code)")
     }
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
+        if let imeText { imeText.focusForTest() } else { window?.makeFirstResponder(self) }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         marker.backgroundColor = NSColor.white.cgColor; CATransaction.commit()
+        imeMarker?.clicked = true
         record("mouseDown", event)
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -126,8 +140,16 @@ window.level = unobscured ? .screenSaver : .modalPanel
 func fit() {
     guard let screen = NSScreen.screens.first else { return }
     window.setFrame(unobscured ? screen.frame : screen.visibleFrame.insetBy(dx: 20, dy: 20), display: true)
-    window.makeFirstResponder(view)
+    // Manual subview frames and marker layers must be recomputed after a display resize,
+    // including when NSTextView changes AppKit's automatic layout scheduling.
+    view.needsLayout = true
+    view.layoutSubtreeIfNeeded()
+    view.imeText?.geometryChanged()
+    if view.imeText == nil || window.firstResponder !== view.imeText { window.makeFirstResponder(view) }
     print("Fixture desktop bounds \(screen.frame), window \(window.frame), screen=\(screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? 0), maxFPS=\(screen.maximumFramesPerSecond)")
+    if let marker = view.imeMarker {
+        print("IME fixture content \(view.bounds), marker view \(marker.frame), text view \(String(describing: view.imeText?.frame))")
+    }
 }
 let observer = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { fit() }

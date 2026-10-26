@@ -11,5 +11,6 @@ swiftc -O -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
     Tests/duodesk/capture-probe/PixelMotionAudit.swift \
     Tests/duodesk/network-codec-probe/ProbePairingInput.swift \
     Tests/duodesk/network-codec-probe/ProbeKeyboardCases.swift \
+    Tests/duodesk/network-codec-probe/ProbeIMECases.swift \
     Tests/duodesk/network-codec-probe/main.swift -o "$out/probe"
 if [[ "${1:-}" != "--build-only" ]]; then "$out/probe" "$@"; fi
