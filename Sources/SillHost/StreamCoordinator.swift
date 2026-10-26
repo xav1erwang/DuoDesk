@@ -474,9 +474,12 @@ package final class StreamCoordinator {
             self?.server.broadcast(StreamMessage(kind: .appIcon, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                                                  payload: ImageBlob.encodeIcon(bundleID: id, png: png)))
         }
-        capture.onStopped = { [weak self] error in
-            print("Capture stopped: \(error.localizedDescription)")
-            Task { @MainActor in await self?.select(.none) }
+        capture.onStopped = { [weak self] stopped in
+            Task { @MainActor in
+                guard let self, self.capture.isCurrent(stopped), !self.shuttingDown else { return }
+                print("Capture stopped: \(stopped.error.localizedDescription)")
+                await self.select(.none)
+            }
         }
         // Status for the menu bar app. The server's callbacks hop here from its network queue; the
         // stats tick runs on the main queue, which under the CLI's dispatchMain is drained by a
@@ -1573,8 +1576,15 @@ package final class StreamCoordinator {
         }
         if let filter {
             capture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }
-            try await capture.start(filter: filter, width: width, height: height, fps: fps, showsCursor: false, sourceRect: sourceRect,
-                                    nativeCadence: source == .desktop && desktopResolution != nil && duoDesktop.followsNativeCadence)
+            do {
+                try await capture.start(filter: filter, width: width, height: height, fps: fps, showsCursor: false, sourceRect: sourceRect,
+                                        nativeCadence: source == .desktop && desktopResolution != nil && duoDesktop.followsNativeCadence)
+            } catch {
+                await capture.stop()
+                capture.onFrame = nil
+                enc.abandon()
+                throw error
+            }
         } else {
             syntheticCapture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }
             syntheticCapture.start(width: width, height: height, fps: fps)

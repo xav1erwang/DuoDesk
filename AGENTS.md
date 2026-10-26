@@ -18,3 +18,26 @@ to the original workstation.
 Preserve existing validation evidence. Repeat a check only when a relevant code
 change, failure or unresolved concern requires it. Prioritize implementation;
 do not keep rerunning measurements that establish the same known limitation.
+
+## Air session and authorization policy (2026-10-26)
+
+Continue in this dedicated Air session only. Do not create other chats or
+sub-agents, or contact existing sessions. Preserve all source changes, original
+validation evidence, and Apache-2.0/Sill attribution.
+
+The user has authorized development and the Air app's recording/input access,
+and explicitly requires no further user authorization or system authentication
+requests. Do not ask the user to grant permissions, enter passwords, log in, or
+complete another security confirmation. Do not bypass TCC or modify its database.
+When a step requires human authentication, stop that step and continue useful
+independent work.
+
+Keep the previously authorized installed Mac build available. A changed ad-hoc
+signature invalidates its TCC grants on this Air: stage candidates under Build/
+instead of repeatedly replacing the authorized installation. Do not copy another
+Mac's signing keys, account credentials, or pairing material.
+
+The collaboration repository must remain private. Never push to the Sill upstream
+or upload Local/, Temp/, signing secrets, accounts, or pairing material. The local
+source index and existing uncommitted state are preserved; private snapshots use
+the separate a private snapshot branch ref and an ignored alternate index.

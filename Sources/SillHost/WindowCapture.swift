@@ -5,11 +5,25 @@ import CoreMedia
 /// Runs one ScreenCaptureKit stream (a window or a display) and hands out 420f pixel buffers.
 /// The coordinator stops and restarts it whenever the client picks a different source.
 final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
+    struct Stop: Sendable {
+        let error: any Error
+        fileprivate let generation: UUID
+    }
+
+    // SCK's delegate and output queues may race an awaited start/stop on the coordinator.
+    private let stateLock = NSLock()
     private var stream: SCStream?
+    private var generation = UUID()
+    private var startupFailure: (any Error)?
     private let queue = DispatchQueue(label: "sill.capture", qos: .userInteractive)
     var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
     /// The stream ended on its own (window closed, permission revoked). Called on an SCK thread.
-    var onStopped: ((Error) -> Void)?
+    var onStopped: ((Stop) -> Void)?
+
+    /// Recheck after an executor hop: a failure from the previous stream cannot stop its successor.
+    func isCurrent(_ stop: Stop) -> Bool {
+        stateLock.withLock { generation == stop.generation }
+    }
 
     /// `showsCursor`: draw the Mac cursor into the frames. The host passes false: the client draws
     /// the pointer itself (with the Mac's current shape, sent separately), so the video never
@@ -43,12 +57,25 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         // Register before starting: a stop error that arrives during start must not be swallowed
         // by the identity check in didStopWithError.
-        self.stream = stream
-        framesSeen = 0
+        stateLock.withLock {
+            self.stream = stream
+            generation = UUID()
+            startupFailure = nil
+            framesSeen = 0
+        }
         do {
             try await stream.startCapture()
+            // A delegate error may have arrived while startCapture was suspended.
+            let failure: (any Error)? = stateLock.withLock {
+                self.stream === stream ? nil : (startupFailure ?? CancellationError())
+            }
+            if let failure { throw failure }
         } catch {
-            if self.stream === stream { self.stream = nil }
+            stateLock.withLock {
+                if self.stream === stream { self.stream = nil }
+            }
+            try? await stream.stopCapture()
+            await drainOutputQueue()
             throw error
         }
         let crop = sourceRect.map { String(format: " sourceRect (%.0f,%.0f,%.0f,%.0f)", $0.minX, $0.minY, $0.width, $0.height) } ?? ""
@@ -61,11 +88,20 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private static let black = CGColor(gray: 0, alpha: 1)
 
     func stop() async {
-        guard let stream else { return }
-        self.stream = nil
-        try? await stream.stopCapture()
+        let previous = stateLock.withLock {
+            let previous = stream
+            stream = nil
+            generation = UUID()
+            startupFailure = nil
+            return previous
+        }
+        if let previous { try? await previous.stopCapture() }
         // stopCapture returning does not mean the sample-handler queue has drained. Wait for it,
-        // so no late frame reaches the next encoder at the old size.
+        // even when didStopWithError already cleared the stream.
+        await drainOutputQueue()
+    }
+
+    private func drainOutputQueue() async {
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in queue.async { c.resume() } }
     }
 
@@ -78,18 +114,27 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // .idle frames (nothing changed) are skipped, which is what we want.
         guard status == .complete else { Stats.shared.bump(status == .idle ? "cap.idle" : "cap.status\(statusRaw)"); return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { Stats.shared.bump("cap.noPixels"); return }
+        let delivery = stateLock.withLock { () -> (current: Bool, first: Bool) in
+            guard self.stream === stream else { return (false, false) }
+            framesSeen += 1
+            return (true, framesSeen == 1)
+        }
+        guard delivery.current else { return }
         Stats.shared.bump("cap.complete")
-        framesSeen += 1
-        if framesSeen == 1 { print("Capture: first frame \(CVPixelBufferGetWidth(pixelBuffer))×\(CVPixelBufferGetHeight(pixelBuffer))") }
+        if delivery.first { print("Capture: first frame \(CVPixelBufferGetWidth(pixelBuffer))×\(CVPixelBufferGetHeight(pixelBuffer))") }
         onFrame?(pixelBuffer, CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        let current = stream === self.stream
-        print("Capture stream stopped (\(current ? "current" : "replaced")): \(error) — \((error as NSError).userInfo)")
-        guard current else { return }   // a stream we already replaced
-        self.stream = nil
-        onStopped?(error)
+        let stopped: Stop? = stateLock.withLock {
+            guard stream === self.stream else { return nil }
+            self.stream = nil
+            startupFailure = error
+            return Stop(error: error, generation: generation)
+        }
+        print("Capture stream stopped (\(stopped == nil ? "replaced" : "current")): \(error) — \((error as NSError).userInfo)")
+        guard let stopped else { return }
+        onStopped?(stopped)
     }
 }
 
