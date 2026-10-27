@@ -13,18 +13,32 @@ public struct VideoDecodeBacklog: Sendable {
     public private(set) var waitingForKeyframe = true
     public let frameLimit: Int
     public let byteLimit: Int
+    public let maxFrameBytes: Int
 
-    public init(frameLimit: Int = 32, byteLimit: Int = 8 * 1024 * 1024) {
-        self.frameLimit = max(1, frameLimit); self.byteLimit = max(1, byteLimit)
+    /// Keep the normal queue small, but optionally allow a single larger access unit when it is
+    /// the only queued frame. The caller still bounds queued plus in-flight compressed bytes.
+    public init(frameLimit: Int = 32, byteLimit: Int = 8 * 1024 * 1024, maxFrameBytes: Int? = nil) {
+        self.frameLimit = max(1, frameLimit)
+        self.byteLimit = max(1, byteLimit)
+        self.maxFrameBytes = max(self.byteLimit, maxFrameBytes ?? self.byteLimit)
     }
     public mutating func reset() {
         epoch &+= 1; waitingForKeyframe = true
         // Old tickets own their slots until their tasks complete.
     }
+    /// A later frame was dropped, but already admitted earlier frames are still independently
+    /// ordered before that gap and may finish. No later delta may enter until a new keyframe.
+    public mutating func waitForKeyframeAfterGap() { waitingForKeyframe = true }
     public mutating func admit(bytes count: Int, keyframe: Bool) -> Ticket? {
-        guard count > 0, count <= byteLimit else { reset(); return nil }
+        guard count > 0, count <= maxFrameBytes else { reset(); return nil }
         guard !waitingForKeyframe || keyframe else { return nil }
-        guard frames < frameLimit, bytes <= byteLimit - count else { reset(); return nil }
+        let queueLimit = max(byteLimit, count)
+        guard frames < frameLimit, bytes <= queueLimit - count else {
+            // Preserve a large keyframe already being transferred to the hardware. Invalidating
+            // it whenever the next delta arrives could starve the only usable recovery picture.
+            if bytes > byteLimit { waitForKeyframeAfterGap() } else { reset() }
+            return nil
+        }
         waitingForKeyframe = false
         frames += 1; bytes += count
         return Ticket(epoch: epoch, bytes: count)

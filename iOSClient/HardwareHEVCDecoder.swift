@@ -30,8 +30,12 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     // It must not mint a new generation after clear() has already fenced that connection out.
     private var inputEpoch: UInt64 = 0
     private var required: DuoDesktopResolution?
-    private var backlog = VideoDecodeBacklog()
+    private var backlog = VideoDecodeBacklog(maxFrameBytes: StreamMessage.maxFramePayload)
     private var inFlight = 0
+    // Compressed bytes submitted to this generation of VideoToolbox but not yet returned.
+    // Admission accounts for these together with queued input, without counting a transfer twice.
+    private var inFlightBytes = 0
+    private static let compressedBytesLimit = StreamMessage.maxFramePayload
     // The remaining state belongs exclusively to queue.
     private var session: VTDecompressionSession?
     private var description: CMVideoFormatDescription?
@@ -56,9 +60,12 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         let ticket: VideoDecodeBacklog.Ticket
         let sequence: Int64
         let started: TimeInterval
+        let compressedBytes: Int
         var completed = false // guarded by the decoder lock
-        init(generation: UInt64, ticket: VideoDecodeBacklog.Ticket, sequence: Int64, started: TimeInterval) {
+        init(generation: UInt64, ticket: VideoDecodeBacklog.Ticket, sequence: Int64, started: TimeInterval,
+             compressedBytes: Int = 0) {
             self.generation = generation; self.ticket = ticket; self.sequence = sequence; self.started = started
+            self.compressedBytes = compressedBytes
         }
     }
 
@@ -79,7 +86,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     private func advance(ifInputEpoch epoch: UInt64) -> UInt64? {
         lock.lock(); defer { lock.unlock() }
         guard inputEpoch == epoch else { return nil }
-        generation &+= 1; inFlight = 0; latestOutputSequence = 0; lastRecoveryRequest = -.infinity
+        generation &+= 1; inFlight = 0; inFlightBytes = 0; latestOutputSequence = 0; lastRecoveryRequest = -.infinity
         cancelRecoveryTimerLocked()
         return generation
     }
@@ -88,7 +95,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     func require(_ value: DuoDesktopResolution?) -> UInt64 {
         lock.lock()
         guard required != value else { let token = generation; lock.unlock(); return token }
-        required = value; inputEpoch &+= 1; generation &+= 1; inFlight = 0; backlog.reset()
+        required = value; inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
         latestOutputSequence = 0; lastRecoveryRequest = -.infinity; cancelRecoveryTimerLocked()
         let token = generation
         queue.async { [self] in if isCurrent(token) { invalidate() } }
@@ -99,7 +106,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     @discardableResult
     func clear() -> UInt64 {
         lock.lock()
-        inputEpoch &+= 1; generation &+= 1; inFlight = 0; backlog.reset()
+        inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
         latestOutputSequence = 0; lastRecoveryRequest = -.infinity; cancelRecoveryTimerLocked()
         let token = generation
         queue.async { [self] in if isCurrent(token) { invalidate() } }
@@ -182,7 +189,25 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         lock.lock()
         // Even an empty or oversized access unit is a gap in the reference chain. Let the
         // bounded admission state fence old work and request recovery instead of silently
-        // returning before it can observe the discarded frame.
+        // returning before it can observe the discarded frame. The queue and this generation's
+        // in-flight compressed data share one wire-sized budget.
+        let count = data.count, limit = Self.compressedBytesLimit
+        guard count > 0, count <= limit else {
+            backlog.reset()
+            let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
+            lock.unlock()
+            if let request { print("Video backlog: waiting for a fresh keyframe"); onNeedsKeyframe(request) }
+            return
+        }
+        guard inFlightBytes <= limit - count, backlog.bytes <= limit - count - inFlightBytes else {
+            // The frame that did not fit is later than all existing tickets. Preserve those
+            // earlier outputs (especially a large recovery keyframe), but reject future deltas.
+            backlog.waitForKeyframeAfterGap()
+            let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
+            lock.unlock()
+            if let request { print("Video backlog: waiting for a fresh keyframe"); onNeedsKeyframe(request) }
+            return
+        }
         let ticket = backlog.admit(bytes: data.count, keyframe: isKeyframe)
         guard let ticket else {
             let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
@@ -193,7 +218,8 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         if isKeyframe, recoveryTimer != nil { cancelRecoveryTimerLocked() }
         let epoch = inputEpoch
         queue.async { [self] in
-            defer { lock.lock(); backlog.complete(ticket); lock.unlock() }
+            var queued = true
+            defer { if queued { lock.lock(); backlog.complete(ticket); lock.unlock() } }
             lock.lock(); let current = inputEpoch == epoch && backlog.isCurrent(ticket); lock.unlock()
             guard current else { return }
             guard !failed, let session, let description, isCurrent(sessionGeneration) else { return }
@@ -216,11 +242,21 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
                 sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample)
             guard ready == noErr, let sample else { fail(ready, generation: sessionGeneration); return }
             let token = sessionGeneration
-            lock.lock(); let available = generation == token && inFlight < 32
-            if available { inFlight += 1 }; lock.unlock()
+            lock.lock()
+            let readyForSession = generation == token && backlog.isCurrent(ticket)
+            let available = readyForSession && inFlight < 32 && inFlightBytes <= Self.compressedBytesLimit - data.count
+            if available {
+                // Move the reservation to VT under the same lock; an arriving frame sees it
+                // exactly once, and an older fenced ticket cannot enter the decoder.
+                inFlight += 1; inFlightBytes += data.count
+                backlog.complete(ticket); queued = false
+            }
+            lock.unlock()
+            guard readyForSession else { return }
             guard available else { fail(kVTVideoDecoderNotAvailableNowErr, generation: token, reason: "decoder callbacks stalled"); return }
             let started = ProcessInfo.processInfo.systemUptime
-            let flight = Flight(generation: token, ticket: ticket, sequence: frameIndex, started: started)
+            let flight = Flight(generation: token, ticket: ticket, sequence: frameIndex, started: started,
+                                compressedBytes: data.count)
             var info: VTDecodeInfoFlags = []
             let decoded = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample,
                 flags: [._EnableAsynchronousDecompression], infoFlagsOut: &info) { [weak self] status, flags, image, pts, _ in
@@ -245,7 +281,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         flight.completed = true
         let token = flight.generation
         guard generation == token else { lock.unlock(); return }
-        inFlight -= 1
+        inFlight -= 1; inFlightBytes -= flight.compressedBytes
         let current = backlog.isCurrent(flight.ticket)
         lock.unlock()
         guard current else { return }

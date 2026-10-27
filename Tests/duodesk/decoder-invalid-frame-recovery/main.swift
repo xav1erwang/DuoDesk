@@ -21,7 +21,7 @@ func pixel() -> CVPixelBuffer {
     return value
 }
 
-func check(_ label: String, size: Int, keyframe: Bool) -> Bool {
+func check(_ label: String, size: Int, keyframe: Bool, occupied: Bool = false) -> Bool {
     let results = Results()
     let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in results.sample() },
         onFailure: { _, _ in }, onNeedsKeyframe: { results.request($0) })
@@ -34,21 +34,23 @@ func check(_ label: String, size: Int, keyframe: Bool) -> Bool {
         return HardwareHEVCDecoder.Flight(generation: token, ticket: ticket, sequence: 1,
                                            started: ProcessInfo.processInfo.systemUptime)
     }
+    let waiting = decoder.lock.withLock { occupied ? decoder.backlog.admit(bytes: 1, keyframe: false) : nil }
     decoder.enqueue(Data(count: size), isKeyframe: keyframe)
     let fenced = decoder.lock.withLock { decoder.backlog.waitingForKeyframe && !decoder.backlog.isCurrent(prior.ticket) }
     decoder.decoded(pixel(), status: noErr, flags: [], flight: prior, pts: .zero)
     let after = results.snapshot
     let passed = fenced && after.0 == [token] && after.1 == 0
     print("\(passed ? "PASS" : "FAIL") \(label): fenced=\(fenced), requests=\(after.0.count), oldImages=\(after.1)")
+    if let waiting { decoder.lock.withLock { decoder.backlog.complete(waiting) } }
     _ = decoder.clear()
     return passed
 }
 
 let results = [
     check("empty delta", size: 0, keyframe: false),
-    check("delta above admission limit", size: 8 * 1024 * 1024 + 1, keyframe: false),
-    check("delta above former 16 MiB guard", size: 16 * 1024 * 1024 + 1, keyframe: false),
-    check("keyframe at the 32 MiB wire limit", size: StreamMessage.maxFramePayload, keyframe: true)
+    check("large frame while queue occupied", size: 8 * 1024 * 1024 + 1, keyframe: false, occupied: true),
+    check("delta above 32 MiB wire limit", size: StreamMessage.maxFramePayload + 1, keyframe: false),
+    check("keyframe above 32 MiB wire limit", size: StreamMessage.maxFramePayload + 1, keyframe: true)
 ]
 print("\(results.filter { $0 }.count)/\(results.count) passed; no codec session, capture, network or input")
 exit(results.allSatisfy { $0 } ? 0 : 1)
