@@ -79,6 +79,7 @@ struct Check {
         try await wait("initial decoded image") { !results.state.samples.isEmpty || !results.state.errors.isEmpty }
         guard let initial = results.state.samples.first, results.state.errors.isEmpty else { throw Failure.unavailable("initial output") }
         let (old, oldID) = router.lock.withLock { (router.decoder!, router.identity) }
+        let oldPermit = old.admissionPermit(for: initial.1)!
         let gate = DispatchSemaphore(value: 0), entered = Flag()
         defer { gate.signal() }
         old.queue.async { entered.mark(); gate.wait() }
@@ -105,7 +106,7 @@ struct Check {
             throw Failure.unavailable("fresh image and old-generation fence")
         }
         let beforeStale = fresh.samples.count
-        router.sample(initial.0, token: initial.1, identity: oldID)
+        router.sample(initial.0, token: initial.1, identity: oldID, permit: oldPermit)
         old.enqueue(data, isKeyframe: true); old.apply(ps)
         guard results.state.samples.count == beforeStale else { throw Failure.unavailable("stale callback escaped") }
 

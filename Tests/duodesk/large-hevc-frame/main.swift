@@ -67,7 +67,7 @@ func withFiller(_ encoded: Data, target: Int) throws -> Data {
 struct Check {
     static func main() async {
         let results = Results()
-        let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _ in results.receive(sample) },
+        let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _, _ in results.receive(sample) },
             onFailure: { message, _ in results.fail(message) }, onNeedsKeyframe: { _ in results.request() })
         decoder.require(DuoDesktopResolution(width: 2007, height: 1427))
         if CommandLine.arguments.contains("--wide-control") {

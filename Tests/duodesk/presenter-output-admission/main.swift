@@ -89,45 +89,56 @@ enum Check {
                 try await wait("initial decoder retirement") { router.lock.withLock { router.retiring.isEmpty } }
                 presenter.reset(old)
                 let (decoder, id) = router.lock.withLock { (router.decoder!, router.identity) }
+                let oldPermit = decoder.admissionPermit(for: old)!
+                let epochGap = CommandLine.arguments.contains("--epoch")
                 let first = SampleBox(try sample(1))
                 DispatchQueue.global(qos: .userInitiated).async {
-                    router.sample(first.value, token: old, identity: id); returned.mark()
+                    router.sample(first.value, token: old, identity: id, permit: oldPermit); returned.mark()
                 }
                 try await wait("old callback held") { entered.value }
-                decoder.fail(kVTVideoDecoderBadDataErr, generation: old)
-                guard observations.state.failures == 1 else { throw Failure.invalid("failure was not delivered") }
+                if epochGap {
+                    decoder.enqueue(Data(), isKeyframe: false)
+                    guard !oldPermit.isValid, decoder.canOutput(old) else { throw Failure.invalid("epoch permit was not revoked") }
+                } else {
+                    decoder.fail(kVTVideoDecoderBadDataErr, generation: old)
+                    guard observations.state.failures == 1 else { throw Failure.invalid("failure was not delivered") }
+                }
                 release.signal()
                 try await wait("old callback returned") { returned.value }
                 try await Task.sleep(for: .milliseconds(300))
                 guard !presenter.isReady(old), observations.state.first.isEmpty else {
                     throw Failure.invalid("old image admitted after decoder failure")
                 }
-                let next = router.clear(), nextID = router.lock.withLock { router.identity }
+                let next = epochGap ? old : router.clear(), nextID = router.lock.withLock { router.identity }
                 presenter.reset(next)
-                router.sample(try sample(2), token: next, identity: nextID)
+                let nextPermit = router.lock.withLock { router.decoder!.admissionPermit(for: next)! }
+                router.sample(try sample(2), token: next, identity: nextID, permit: nextPermit)
                 try await wait("fresh presenter image") { presenter.isReady(next) || !observations.state.errors.isEmpty }
-                guard observations.state.errors.isEmpty, observations.state.first == [next], next > old else {
+                guard observations.state.errors.isEmpty, observations.state.first == [next],
+                      epochGap ? next == old : next > old else {
                     throw Failure.invalid("fresh generation failed to present")
                 }
                 let previousInput = presenter.makeInputFence(next)
                 guard previousInput() else { throw Failure.invalid("fresh input fence") }
                 let active = router.lock.withLock { router.decoder! }
                 active.fail(kVTVideoDecoderBadDataErr, generation: next)
-                guard observations.state.failures == 2, !previousInput(), !presenter.isReady(next), !router.canOutput(next) else {
+                guard observations.state.failures == (epochGap ? 1 : 2), !previousInput(),
+                      !presenter.isReady(next), !router.canOutput(next) else {
                     throw Failure.invalid("failure did not invalidate displayed input")
                 }
                 let recovered = router.clear(), recoveredID = router.lock.withLock { router.identity }
                 presenter.reset(recovered)
+                let recoveredPermit = router.lock.withLock { router.decoder!.admissionPermit(for: recovered)! }
                 for sequence in 3..<18 {
                     if presenter.isReady(recovered) { break }
-                    router.sample(try sample(Int64(sequence)), token: recovered, identity: recoveredID)
+                    router.sample(try sample(Int64(sequence)), token: recovered, identity: recoveredID, permit: recoveredPermit)
                     try await Task.sleep(for: .milliseconds(20))
                 }
                 try await wait("presenter after failure flush") { presenter.isReady(recovered) || !observations.state.errors.isEmpty }
                 guard observations.state.errors.isEmpty, observations.state.first == [next, recovered], !previousInput() else {
                     throw Failure.invalid("failure flush or input fence recovery")
                 }
-                print("PRESENTER OUTPUT ADMISSION PASS: delayed old image denied; fresh native-size samples admitted, failure invalidates input, next generation resumes")
+                print("PRESENTER OUTPUT ADMISSION PASS: delayed old image denied after \(epochGap ? "epoch gap" : "failure"); fresh native-size samples admitted, failure invalidates input, next generation resumes")
                 print("SCOPE: owned window, synthetic image and injected delay; no capture, network or real Duo")
                 _ = router.clear(); app.terminate(nil)
             } catch {

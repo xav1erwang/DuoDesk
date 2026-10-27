@@ -43,8 +43,9 @@ while !router.lock.withLock({ router.retiring.isEmpty }) && ProcessInfo.processI
 }
 guard router.lock.withLock({ router.retiring.isEmpty }) else { fatalError("initial retirement did not finish") }
 let (decoder, id) = router.lock.withLock { (router.decoder!, router.identity) }
+let permit = decoder.admissionPermit(for: token)!
 let image = sample()
-DispatchQueue.global(qos: .userInitiated).async { router.sample(image, token: token, identity: id); done.signal() }
+DispatchQueue.global(qos: .userInitiated).async { router.sample(image, token: token, identity: id, permit: permit); done.signal() }
 let held = entered.wait(timeout: .now() + 2) == .success
 decoder.fail(kVTVideoDecoderBadDataErr, generation: token)
 let failedBeforeRelease = results.state.failures == 1
@@ -52,14 +53,15 @@ release.signal()
 let returned = done.wait(timeout: .now() + 2) == .success
 let fenced = held && failedBeforeRelease && returned && results.state.admitted == 0
 let fresh = router.clear(), freshID = router.lock.withLock { router.identity }
-router.sample(image, token: fresh, identity: freshID)
+let freshPermit = router.lock.withLock { router.decoder!.admissionPermit(for: fresh)! }
+router.sample(image, token: fresh, identity: freshID, permit: freshPermit)
 let beforeResize = router.lock.withLock { router.decoder!.admissionPermit(for: fresh) }
 let resized = router.require(DuoDesktopResolution(width: 2005, height: 1425))
 let resizeFenced = resized > fresh && beforeResize?.isValid == false
 let beforeReset = router.lock.withLock { router.decoder!.admissionPermit(for: resized) }
 let reset = router.clear()
 let resetFenced = reset > resized && beforeReset?.isValid == false
-var disposable: HardwareHEVCDecoder? = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in }, onFailure: { _, _ in })
+var disposable: HardwareHEVCDecoder? = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in }, onFailure: { _, _ in })
 let finalPermit = disposable?.admissionPermit(for: 0)
 weak var releasedDecoder = disposable
 disposable = nil

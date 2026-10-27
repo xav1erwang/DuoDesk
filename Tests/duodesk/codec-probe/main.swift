@@ -18,7 +18,7 @@ let results = Results()
 let native = DuoDesktopResolution(width: 2007, height: 1427)
 let decoder = HardwareHEVCDecoder(onFormat: { size, _ in
     print("Codec canvas verified: \(size)")
-}, onSample: { sample, _ in
+}, onSample: { sample, _, _ in
     let now = ProcessInfo.processInfo.systemUptime
     results.lock.lock(); defer { results.lock.unlock() }
     guard let image = CMSampleBufferGetImageBuffer(sample),

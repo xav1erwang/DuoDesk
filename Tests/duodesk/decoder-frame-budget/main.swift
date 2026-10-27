@@ -59,7 +59,7 @@ check("existing custom limit remains strict", custom.admit(bytes: 101, keyframe:
 
 let native = DuoDesktopResolution(width: 2007, height: 1427)
 let requests = Requests()
-let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in }, onFailure: { _, _ in },
+let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in }, onFailure: { _, _ in },
                                   onNeedsKeyframe: { requests.add($0) })
 _ = decoder.require(native); decoder.queue.sync { }
 let gate = DispatchSemaphore(value: 0), entered = DispatchSemaphore(value: 0)
@@ -78,7 +78,7 @@ gate.signal(); decoder.queue.sync { }
 _ = decoder.clear(); decoder.queue.sync { }
 
 let callbackRequests = Requests()
-let callbacks = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in }, onFailure: { _, _ in },
+let callbacks = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in }, onFailure: { _, _ in },
                                     onNeedsKeyframe: { callbackRequests.add($0) })
 let token = callbacks.require(native); callbacks.queue.sync { }
 let flight = callbacks.lock.withLock { () -> HardwareHEVCDecoder.Flight in
@@ -86,7 +86,7 @@ let flight = callbacks.lock.withLock { () -> HardwareHEVCDecoder.Flight in
     callbacks.backlog.complete(ticket)
     callbacks.inFlight = 1; callbacks.inFlightBytes = 9 * mib
     return HardwareHEVCDecoder.Flight(generation: token, ticket: ticket, sequence: 1,
-        started: ProcessInfo.processInfo.systemUptime, compressedBytes: 9 * mib)
+        started: ProcessInfo.processInfo.systemUptime, outputPermit: callbacks.outputPermit!, compressedBytes: 9 * mib)
 }
 callbacks.decoded(nil, status: noErr, flags: [], flight: flight, pts: .invalid)
 callbacks.decoded(nil, status: noErr, flags: [], flight: flight, pts: .invalid)
@@ -96,7 +96,7 @@ check("callback releases compressed reservation exactly once", callbacks.lock.wi
 _ = callbacks.clear(); callbacks.queue.sync { }
 
 let pressureRequests = Requests(), pressureSamples = Samples()
-let pressure = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in pressureSamples.add() },
+let pressure = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in pressureSamples.add() },
     onFailure: { _, _ in }, onNeedsKeyframe: { pressureRequests.add($0) })
 let pressureToken = pressure.require(native); pressure.queue.sync { }
 let pressureFlight = pressure.lock.withLock { () -> HardwareHEVCDecoder.Flight in
@@ -104,10 +104,11 @@ let pressureFlight = pressure.lock.withLock { () -> HardwareHEVCDecoder.Flight i
     pressure.backlog.complete(ticket)
     pressure.inFlight = 1; pressure.inFlightBytes = wire
     return HardwareHEVCDecoder.Flight(generation: pressureToken, ticket: ticket, sequence: 1,
-        started: ProcessInfo.processInfo.systemUptime, compressedBytes: wire)
+        started: ProcessInfo.processInfo.systemUptime, outputPermit: pressure.outputPermit!, compressedBytes: wire)
 }
 pressure.enqueue(Data([1]), isKeyframe: false)
-let earlierValid = pressure.lock.withLock { pressure.backlog.waitingForKeyframe && pressure.backlog.isCurrent(pressureFlight.ticket) }
+let earlierValid = pressure.lock.withLock { pressure.backlog.waitingForKeyframe && pressure.backlog.isCurrent(pressureFlight.ticket)
+    && pressureFlight.outputPermit.isValid }
 pressure.decoded(pixel(), status: noErr, flags: [], flight: pressureFlight, pts: .invalid)
 check("budget pressure preserves an earlier in-flight keyframe", earlierValid && pressureSamples.count == 1
       && pressureRequests.count == 1 && pressure.lock.withLock { pressure.inFlightBytes == 0 })
@@ -119,7 +120,7 @@ check("a new keyframe resumes after the large frame completes", pressure.lock.wi
 _ = pressure.clear(); pressure.queue.sync { }
 
 let staleRequests = Requests()
-let stale = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in }, onFailure: { _, _ in },
+let stale = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in }, onFailure: { _, _ in },
                                 onNeedsKeyframe: { staleRequests.add($0) })
 let oldToken = stale.require(native); stale.queue.sync { }
 let oldFlight = stale.lock.withLock { () -> HardwareHEVCDecoder.Flight in
@@ -127,7 +128,7 @@ let oldFlight = stale.lock.withLock { () -> HardwareHEVCDecoder.Flight in
     stale.backlog.complete(ticket)
     stale.inFlight = 1; stale.inFlightBytes = 9 * mib
     return HardwareHEVCDecoder.Flight(generation: oldToken, ticket: ticket, sequence: 1,
-        started: ProcessInfo.processInfo.systemUptime, compressedBytes: 9 * mib)
+        started: ProcessInfo.processInfo.systemUptime, outputPermit: stale.outputPermit!, compressedBytes: 9 * mib)
 }
 _ = stale.clear(); stale.queue.sync { }
 stale.lock.withLock { stale.inFlight = 1; stale.inFlightBytes = 5 * mib }

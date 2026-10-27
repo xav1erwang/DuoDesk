@@ -208,7 +208,7 @@ func runCapture() async {
                     if size != CGSize(width: 2008, height: 1428) {
                         received.stopped(DuoDesktopDisplay.Failure.invalidResolution)
                     }
-                }, onSample: { sample, _ in
+                }, onSample: { sample, _, _ in
                     if let image = CMSampleBufferGetImageBuffer(sample) { received.receive(image) }
                 }, onFailure: { message, _ in
                     received.stopped(NSError(domain: "DuoHardwareDecoder", code: 1,

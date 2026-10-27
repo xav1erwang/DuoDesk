@@ -13,4 +13,4 @@ swiftc -swift-version 5 -O -whole-module-optimization -warnings-as-errors -parse
   -Xfrontend -disable-access-control -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
   iOSClient/HardwareHEVCDecoder.swift iOSClient/HardwareDecoderRouter.swift iOSClient/HardwareVideoPresenter.swift \
   Tests/duodesk/presenter-output-admission/main.swift -o "$out/check"
-"$out/check"
+"$out/check" "$@"

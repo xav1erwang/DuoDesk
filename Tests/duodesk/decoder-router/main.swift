@@ -49,6 +49,7 @@ let results = Results(), router = makeRouter(results)
 let first = router.require(native)
 check("initial retirement completes", wait { router.lock.withLock { router.retiring.isEmpty } })
 let (old, oldID) = router.lock.withLock { (router.decoder!, router.identity) }
+let oldPermit = old.admissionPermit(for: first)!
 let gate = DispatchSemaphore(value: 0), entered = DispatchSemaphore(value: 0)
 old.queue.async { entered.signal(); gate.wait() }
 let blocked = entered.wait(timeout: .now() + 2) == .success
@@ -56,7 +57,7 @@ let invalid = ParameterSets(nalUnitHeaderLength: 4, sets: [Data([1]), Data([2]),
 router.apply(invalid); router.enqueue(Data([1]), isKeyframe: true)
 let second = router.clear()
 let (replacement, replacementID, retiring) = router.lock.withLock { (router.decoder!, router.identity, router.retiring.count) }
-router.sample(sample(), token: first, identity: oldID)
+router.sample(sample(), token: first, identity: oldID, permit: oldPermit)
 router.format(CGSize(width: 16, height: 16), token: first, identity: oldID)
 router.failed("old", token: first, identity: oldID)
 check("blocked predecessor is replaced and old callbacks are fenced", blocked && replacement !== old && second > first

@@ -21,7 +21,7 @@ func image() -> CVPixelBuffer {
     return result
 }
 func makeDecoder(_ results: Results) -> HardwareHEVCDecoder {
-    HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _ in results.sample(sample) },
+    HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _, _ in results.sample(sample) },
         onFailure: { _, token in results.failure(token) }, onNeedsKeyframe: { _ in results.request() })
 }
 func addFlight(_ decoder: HardwareHEVCDecoder, token: UInt64, sequence: Int64, keyframe: Bool) -> HardwareHEVCDecoder.Flight {
@@ -29,7 +29,7 @@ func addFlight(_ decoder: HardwareHEVCDecoder, token: UInt64, sequence: Int64, k
         let ticket = decoder.backlog.admit(bytes: 1, keyframe: keyframe)!
         decoder.backlog.complete(ticket); decoder.inFlight += 1; decoder.inFlightBytes += 1
         return HardwareHEVCDecoder.Flight(generation: token, ticket: ticket, sequence: sequence,
-                                          started: ProcessInfo.processInfo.systemUptime, compressedBytes: 1)
+            started: ProcessInfo.processInfo.systemUptime, outputPermit: decoder.outputPermit!, compressedBytes: 1)
     }
 }
 func setClock(_ decoder: HardwareHEVCDecoder, progressAgo: TimeInterval, tickAgo: TimeInterval = 0) {

@@ -23,7 +23,7 @@ func pixel() -> CVPixelBuffer {
 
 func check(_ label: String, size: Int, keyframe: Bool, occupied: Bool = false) -> Bool {
     let results = Results()
-    let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in results.sample() },
+    let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in results.sample() },
         onFailure: { _, _ in }, onNeedsKeyframe: { results.request($0) })
     let token = decoder.require(DuoDesktopResolution(width: 2007, height: 1427))
     decoder.queue.sync { }
@@ -32,7 +32,7 @@ func check(_ label: String, size: Int, keyframe: Bool, occupied: Bool = false) -
         decoder.backlog.complete(ticket)
         decoder.inFlight += 1
         return HardwareHEVCDecoder.Flight(generation: token, ticket: ticket, sequence: 1,
-                                           started: ProcessInfo.processInfo.systemUptime)
+            started: ProcessInfo.processInfo.systemUptime, outputPermit: decoder.outputPermit!)
     }
     let waiting = decoder.lock.withLock { occupied ? decoder.backlog.admit(bytes: 1, keyframe: false) : nil }
     decoder.enqueue(Data(count: size), isKeyframe: keyframe)

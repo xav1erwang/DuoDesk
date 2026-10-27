@@ -75,7 +75,7 @@ func withFiller(_ encoded: Data, target: Int) throws -> Data {
 struct Check {
     static func run() async throws {
         let results = Results(), mib = 1024 * 1024
-        let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _ in results.sample() },
+        let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in results.sample() },
             onFailure: { message, token in results.failure(message, token) }, onNeedsKeyframe: { _ in results.request() })
         decoder.require(DuoDesktopResolution(width: 2007, height: 1427))
         let encoder = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 20_000_000,

@@ -19,7 +19,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         #endif
     }
     let onFormat: (CGSize, UInt64) -> Void
-    let onSample: (CMSampleBuffer, UInt64) -> Void
+    let onSample: (CMSampleBuffer, UInt64, VideoOutputPermit) -> Void
     let onFailure: (String, UInt64) -> Void
     let onNeedsKeyframe: (UInt64) -> Void
     private let queue = DispatchQueue(label: "duodesk.hardware-decoder", qos: .userInteractive)
@@ -77,15 +77,17 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         let sequence: Int64
         let started: TimeInterval
         let compressedBytes: Int
+        let outputPermit: VideoOutputPermit
         var completed = false // guarded by the decoder lock
         init(generation: UInt64, ticket: VideoDecodeBacklog.Ticket, sequence: Int64, started: TimeInterval,
-             compressedBytes: Int = 0) {
+             outputPermit: VideoOutputPermit, compressedBytes: Int = 0) {
             self.generation = generation; self.ticket = ticket; self.sequence = sequence; self.started = started
-            self.compressedBytes = compressedBytes
+            self.outputPermit = outputPermit; self.compressedBytes = compressedBytes
         }
     }
 
-    init(initialGeneration: UInt64 = 0, onFormat: @escaping (CGSize, UInt64) -> Void, onSample: @escaping (CMSampleBuffer, UInt64) -> Void,
+    init(initialGeneration: UInt64 = 0, onFormat: @escaping (CGSize, UInt64) -> Void,
+         onSample: @escaping (CMSampleBuffer, UInt64, VideoOutputPermit) -> Void,
          onFailure: @escaping (String, UInt64) -> Void, onNeedsKeyframe: @escaping (UInt64) -> Void = { _ in }) {
         self.generation = initialGeneration
         self.onFormat = onFormat; self.onSample = onSample; self.onFailure = onFailure
@@ -120,6 +122,13 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     private func replaceOutputPermitLocked(allow: Bool) {
         outputPermit?.invalidate()
         outputPermit = allow ? VideoOutputPermit() : nil
+    }
+
+    /// A reset invalidates tickets already admitted in this generation. Revoke their output
+    /// permit as well, but retain it when an earlier frame survives a later budget gap.
+    private func resetBacklogLocked() {
+        backlog.reset()
+        replaceOutputPermitLocked(allow: !failed && !retired)
     }
 
     private func advance(ifInputEpoch epoch: UInt64) -> UInt64? {
@@ -336,7 +345,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         // in-flight compressed data share one wire-sized budget.
         let count = data.count, limit = Self.compressedBytesLimit
         guard count > 0, count <= limit else {
-            backlog.reset()
+            resetBacklogLocked()
             let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
             lock.unlock()
             if let request { print("Video backlog: waiting for a fresh keyframe"); onNeedsKeyframe(request) }
@@ -351,7 +360,9 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
             if let request { print("Video backlog: waiting for a fresh keyframe"); onNeedsKeyframe(request) }
             return
         }
+        let previousEpoch = backlog.epoch
         let ticket = backlog.admit(bytes: data.count, keyframe: isKeyframe)
+        if backlog.epoch != previousEpoch { replaceOutputPermitLocked(allow: true) }
         guard let ticket else {
             let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
             lock.unlock()
@@ -387,7 +398,8 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
             let token = sessionGeneration
             lock.lock()
             let readyForSession = generation == token && !failed && backlog.isCurrent(ticket)
-            let available = readyForSession && inFlight < 32 && inFlightBytes <= Self.compressedBytesLimit - data.count
+            let permit = outputPermit
+            let available = readyForSession && permit != nil && inFlight < 32 && inFlightBytes <= Self.compressedBytesLimit - data.count
             if available {
                 // Move the reservation to VT under the same lock; an arriving frame sees it
                 // exactly once, and an older fenced ticket cannot enter the decoder.
@@ -397,10 +409,10 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
             }
             lock.unlock()
             guard readyForSession else { return }
-            guard available else { fail(kVTVideoDecoderNotAvailableNowErr, generation: token, reason: "decoder callbacks stalled"); return }
+            guard available, let permit else { fail(kVTVideoDecoderNotAvailableNowErr, generation: token, reason: "decoder callbacks stalled"); return }
             let started = ProcessInfo.processInfo.systemUptime
             let flight = Flight(generation: token, ticket: ticket, sequence: frameIndex, started: started,
-                                compressedBytes: data.count)
+                                outputPermit: permit, compressedBytes: data.count)
             var info: VTDecodeInfoFlags = []
             let decoded = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample,
                 flags: [._EnableAsynchronousDecompression], infoFlagsOut: &info) { [weak self] status, flags, image, pts, _ in
@@ -453,9 +465,9 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         if newer { latestOutputSequence = flight.sequence }
         lock.unlock()
         guard newer else { return }
-        // The presenter fences generations too. Call outside the state lock so a callback may
-        // clear/disconnect without deadlocking, and a late old image can never replace a new one.
-        if canOutput(token) { onSample(sample, token) }
+        // Carry the permit captured with this ticket. Re-reading the current permit here would
+        // let an old image cross an intervening backlog reset in the same generation.
+        if canOutput(token) { onSample(sample, token, flight.outputPermit) }
         let ms = (ProcessInfo.processInfo.systemUptime - flight.started) * 1000
         queue.async { [self] in
             guard isCurrent(token) else { return }
@@ -474,7 +486,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         guard generation == flight.generation, !failed, backlog.isCurrent(flight.ticket), flight.sequence > latestOutputSequence else {
             lock.unlock(); return
         }
-        backlog.reset()
+        resetBacklogLocked()
         let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
         lock.unlock()
         if let request { onNeedsKeyframe(request) }

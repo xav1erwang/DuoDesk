@@ -35,8 +35,8 @@ final class HardwareDecoderRouter: @unchecked Sendable {
     private func makeDecoder(initialGeneration: UInt64, identity id: UUID) -> HardwareHEVCDecoder {
         HardwareHEVCDecoder(initialGeneration: initialGeneration, onFormat: { [weak self] size, token in
             self?.format(size, token: token, identity: id)
-        }, onSample: { [weak self] image, token in
-            self?.sample(image, token: token, identity: id)
+        }, onSample: { [weak self] image, token, permit in
+            self?.sample(image, token: token, identity: id, permit: permit)
         }, onFailure: { [weak self] message, token in
             self?.failed(message, token: token, identity: id)
         }, onNeedsKeyframe: { [weak self] token in
@@ -135,9 +135,9 @@ final class HardwareDecoderRouter: @unchecked Sendable {
         if request { self.request(token, identity: id) }
     }
 
-    private func sample(_ image: CMSampleBuffer, token: UInt64, identity id: UUID) {
-        lock.lock(); let permit = identity == id ? decoder?.admissionPermit(for: token) : nil; lock.unlock()
-        if let permit { onSample(image, token, permit) }
+    private func sample(_ image: CMSampleBuffer, token: UInt64, identity id: UUID, permit: VideoOutputPermit) {
+        lock.lock(); let current = identity == id && decoder?.canOutput(token) == true; lock.unlock()
+        if current { onSample(image, token, permit) }
     }
 
     private func request(_ token: UInt64, identity id: UUID) {

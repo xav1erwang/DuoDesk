@@ -59,7 +59,7 @@ func makeFrame(_ luminance: UInt8) throws -> CVPixelBuffer {
 struct Check {
     static func run() async throws {
             let results = Results()
-            let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _ in results.receive(sample) },
+            let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _, _ in results.receive(sample) },
                 onFailure: { message, _ in results.fail(message) }, onNeedsKeyframe: { _ in results.request() })
             decoder.require(DuoDesktopResolution(width: 2007, height: 1427))
             let encoder = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 20_000_000,
@@ -81,7 +81,8 @@ struct Check {
                             decoder.backlog.complete(ticket)
                             decoder.inFlight += 1
                             return HardwareHEVCDecoder.Flight(generation: decoder.generation, ticket: ticket,
-                                sequence: decoder.latestOutputSequence + 1, started: ProcessInfo.processInfo.systemUptime)
+                                sequence: decoder.latestOutputSequence + 1, started: ProcessInfo.processInfo.systemUptime,
+                                outputPermit: decoder.outputPermit!)
                         }
                         guard let flight else { results.fail("could not inject decoder output loss"); return }
                         // Simulate loss of the output and do not forward the real delta.

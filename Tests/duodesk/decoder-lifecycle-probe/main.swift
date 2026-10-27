@@ -19,7 +19,7 @@ let results = Results()
 let native = DuoDesktopResolution(width: 2007, height: 1427)
 let decoder = HardwareHEVCDecoder(onFormat: { _, token in
     results.lock.withLock { results.callbacks.append(token) }
-}, onSample: { _, token in
+}, onSample: { _, token, _ in
     results.lock.withLock { results.callbacks.append(token); results.samples.append(token) }
 }, onFailure: { message, _ in
     results.lock.withLock { results.failures.append(message) }

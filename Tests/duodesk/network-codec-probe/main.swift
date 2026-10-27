@@ -236,12 +236,12 @@ func run() async throws {
     let presenter = HardwareVideoPresenter(renderer: layer.sampleBufferRenderer, onFirstImage: { size, _ in
         print("Network probe: native image queued \(size)")
     }, onFailure: { text, _, _ in measurement.failure(text) })
-    let decoder = HardwareHEVCDecoder(onFormat: { _, token in presenter.reset(token) }, onSample: { sample, token in
+    let decoder = HardwareHEVCDecoder(onFormat: { _, token in presenter.reset(token) }, onSample: { sample, token, permit in
         guard let image = CMSampleBufferGetImageBuffer(sample),
               native.accepts(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image)) else {
             measurement.failure("native canvas mismatch"); return
         }
-        presenter.enqueue(sample, generation: token)
+        presenter.enqueue(sample, generation: token, permit: permit)
         let now = ProcessInfo.processInfo.systemUptime
         let decodedUnix = Date().timeIntervalSince1970
         measurement.lock.lock()

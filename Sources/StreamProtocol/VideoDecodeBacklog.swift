@@ -3,8 +3,8 @@ import Foundation
 
 /// A decoded image may be delayed between its decoder's last check and presentation admission.
 /// Invalidation and the short admission operation share one lock, so an old image cannot enter
-/// the presentation queue after its generation has been invalidated. Never wait or call back
-/// into the decoder inside the admission closure.
+/// the presentation queue after its generation or backlog epoch has been invalidated. Never
+/// wait or call back into the decoder inside the admission closure.
 public final class VideoOutputPermit: @unchecked Sendable {
     private let lock = NSLock()
     private var valid = true

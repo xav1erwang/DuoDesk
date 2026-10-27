@@ -446,7 +446,7 @@ func run() async {
             let recovery = RecoveryBox()
             let received = HardwareHEVCDecoder(onFormat: { size, _ in
                 if size != CGSize(width: 2008, height: 1428) { frames.fail("unexpected hardware-decoder dimensions") }
-            }, onSample: { sample, _ in
+            }, onSample: { sample, _, _ in
                 if let image = CMSampleBufferGetImageBuffer(sample) { flow?.record(.decode); frames.receive(image) }
             }, onFailure: { message, _ in frames.fail(message) }, onNeedsKeyframe: { _ in recovery.request() })
             received.require(DuoDesktopResolution(width: 2007, height: 1427))

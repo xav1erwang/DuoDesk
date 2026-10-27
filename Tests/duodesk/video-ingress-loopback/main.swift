@@ -50,7 +50,7 @@ func frame(_ luminance: UInt8) throws -> CVPixelBuffer {
 struct Check {
     static func run() async throws {
         let results = Results()
-        let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _ in results.receive(sample) },
+        let decoder = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _, _ in results.receive(sample) },
                                           onFailure: { message, _ in results.fail(message) })
         decoder.require(DuoDesktopResolution(width: 2007, height: 1427))
         let encoder = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 20_000_000,

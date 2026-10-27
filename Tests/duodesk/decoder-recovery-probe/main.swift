@@ -28,7 +28,7 @@ func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 1) -> Bool {
     return condition()
 }
 func decoder(_ requests: Requests, samples: Samples = Samples()) -> HardwareHEVCDecoder {
-    HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _ in samples.add(sample) }, onFailure: { _, _ in },
+    HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { sample, _, _ in samples.add(sample) }, onFailure: { _, _ in },
                         onNeedsKeyframe: { requests.add($0) })
 }
 func flight(_ decoder: HardwareHEVCDecoder, _ token: UInt64, _ sequence: Int64) -> HardwareHEVCDecoder.Flight {
@@ -37,7 +37,7 @@ func flight(_ decoder: HardwareHEVCDecoder, _ token: UInt64, _ sequence: Int64) 
         decoder.backlog.complete(ticket)
         decoder.inFlight += 1
         return HardwareHEVCDecoder.Flight(generation: token, ticket: ticket, sequence: sequence,
-                                           started: ProcessInfo.processInfo.systemUptime)
+            started: ProcessInfo.processInfo.systemUptime, outputPermit: decoder.outputPermit!)
     }
 }
 func image() -> CVPixelBuffer {
