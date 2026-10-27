@@ -11,9 +11,12 @@ final class MetalMotionView: MTKView, MTKViewDelegate, CAMetalDisplayLinkDelegat
     private var frameIndex: UInt32 = 0
     private let began = ProcessInfo.processInfo.systemUptime
     private var displayClock: CAMetalDisplayLink?
+    private var screenClock: CADisplayLink?
+    private var screenObserver: NSObjectProtocol?
     private var lastTarget: CFTimeInterval?
     private var targetIntervalMs: Double = 0
     private let usesMetalClock = ProcessInfo.processInfo.environment["DUODESK_FIXTURE_METAL_LINK"] == "1"
+    private let usesScreenClock = ProcessInfo.processInfo.environment["DUODESK_FIXTURE_SCREEN_LINK"] == "1"
     private let requestedFPS = min(240, max(30, Int(ProcessInfo.processInfo.environment["DUODESK_FIXTURE_FPS"] ?? "120") ?? 120))
     private let usesFrameCode = ProcessInfo.processInfo.environment["DUODESK_FIXTURE_FRAME_CODE"] == "1"
     private let presentations = PresentationAudit()
@@ -60,12 +63,23 @@ final class MetalMotionView: MTKView, MTKViewDelegate, CAMetalDisplayLinkDelegat
             print("Fixture diagnostic: Metal display synchronization disabled")
         }
         delegate = self
-        if usesMetalClock { isPaused = true }
+        if usesMetalClock || usesScreenClock { isPaused = true }
         print("Fixture uses Metal GPU rendering")
     }
     required init(coder: NSCoder) { fatalError() }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
+        if usesScreenClock {
+            screenClock?.invalidate(); screenClock = nil
+            guard let window else { return }
+            screenObserver = NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification,
+                                                                    object: window, queue: .main) { [weak self] _ in
+                self?.bindScreenClock()
+            }
+            DispatchQueue.main.async { [weak self] in self?.bindScreenClock() }
+            return
+        }
         guard usesMetalClock, let surface = layer as? CAMetalLayer else { return }
         if window == nil {
             displayClock?.invalidate(); displayClock = nil
@@ -79,6 +93,21 @@ final class MetalMotionView: MTKView, MTKViewDelegate, CAMetalDisplayLinkDelegat
             displayClock = clock
             print("Fixture uses CAMetalDisplayLink at requested \(requestedFPS) FPS")
         }
+    }
+    private func bindScreenClock() {
+        screenClock?.invalidate(); screenClock = nil
+        guard let screen = window?.screen else { return }
+        let clock = screen.displayLink(target: self, selector: #selector(screenTick(_:)))
+        let rate = Float(requestedFPS)
+        clock.preferredFrameRateRange = CAFrameRateRange(minimum: rate, maximum: rate, preferred: rate)
+        clock.add(to: .main, forMode: .common)
+        screenClock = clock
+        let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? 0
+        print("Fixture uses explicit NSScreen display link: screen=\(number), maxFPS=\(screen.maximumFramesPerSecond), requested=\(requestedFPS)")
+    }
+    @objc private func screenTick(_ clock: CADisplayLink) {
+        targetIntervalMs = (clock.targetTimestamp - clock.timestamp) * 1000
+        draw()
     }
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
     func draw(in view: MTKView) {

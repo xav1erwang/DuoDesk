@@ -1,5 +1,6 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 import Foundation
+import AppKit
 import CoreGraphics
 import ScreenCaptureKit
 import StreamProtocol
@@ -38,15 +39,45 @@ final class DuoDesktopDisplay {
     }
     private var originals: [Original] = []
     private var temporary: VirtualDisplay?
+    private var pendingMirror = false
     private var capturedID: CGDirectDisplayID = 0
     private var originalMainID: CGDirectDisplayID = 0
     private var originalSystemMainID: CGDirectDisplayID = 0
     private var primaryOrigins: [CGDirectDisplayID: CGPoint] = [:]
-    private let mainDisplay: () -> CGDirectDisplayID
+    private let mainDisplay: @MainActor () -> CGDirectDisplayID
     private let layout: Layout
-    init(mainDisplay: @escaping () -> CGDirectDisplayID = { CGMainDisplayID() }, layout: Layout = .mirrored) {
+    init(mainDisplay: @escaping @MainActor () -> CGDirectDisplayID = { DuoDesktopDisplay.availableMainDisplayID() }, layout: Layout = .mirrored) {
         self.mainDisplay = mainDisplay
         self.layout = layout
+    }
+    /// A Screen Sharing display handover can leave CGMainDisplayID pointing at a removed
+    /// display. AppKit already knows the replacement. Only accept an unambiguous, online
+    /// desktop; never move an arbitrary secondary display when the main display is unknown.
+    private static func availableMainDisplayID() -> CGDirectDisplayID {
+        let main = CGMainDisplayID()
+        if CGDisplayIsOnline(main) != 0 { return main }
+        let live = NSScreen.screens.compactMap { screen -> CGDirectDisplayID? in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+            let id = number.uint32Value
+            return CGDisplayIsOnline(id) != 0 ? id : nil
+        }
+        let atOrigin = live.filter { CGDisplayBounds($0).origin == .zero && CGDisplayMirrorsDisplay($0) == 0 }
+        if atOrigin.count == 1 { return atOrigin[0] }
+        return live.count == 1 ? live[0] : main
+    }
+    /// Keep a stable identity for each source desktop, rather than sharing serial 1 with
+    /// every source and virtual-display utility. A Screen Sharing handover can retain the
+    /// previous source's identity after its display has left the online list.
+    private static func virtualDesktopSerial(source: CGDirectDisplayID) -> UInt32 {
+        let words: [UInt32] = [0x44554F32, CGDisplayVendorNumber(source),
+                               CGDisplayModelNumber(source), CGDisplaySerialNumber(source)]
+        var hash: UInt32 = 2_166_136_261
+        for word in words {
+            for shift in stride(from: 0, to: 32, by: 8) {
+                hash = (hash ^ ((word >> shift) & 0xFF)) &* 16_777_619
+            }
+        }
+        return hash > 1 ? hash : 0x44554F32
     }
     private(set) var resolution: DuoDesktopResolution?
     private var requestedFPS: Int?
@@ -62,7 +93,7 @@ final class DuoDesktopDisplay {
     /// Keep the diagnostic filter choice separate from the capture interval policy.
     var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && followsNativeCadence }
     var activeModeMatches: Bool {
-        guard let resolution, let requestedFPS, let mode = CGDisplayCopyDisplayMode(capturedID),
+        guard !pendingMirror, let resolution, let requestedFPS, let mode = CGDisplayCopyDisplayMode(capturedID),
               mode.refreshRate >= Double(requestedFPS) - 0.5 else { return false }
         if temporary != nil {
             guard abs(mode.refreshRate - Double(requestedFPS)) < 0.5 else { return false }
@@ -97,9 +128,10 @@ final class DuoDesktopDisplay {
 
     /// Separated for a graphics-only test whose injected main display is itself disposable.
     /// The production entry point above always requires Screen Recording before changing a mode.
-    func prepareGraphics(_ wanted: DuoDesktopResolution, fps: Int) async throws -> CGDirectDisplayID {
+    func prepareGraphics(_ wanted: DuoDesktopResolution, fps: Int, deferMirror: Bool = false) async throws -> CGDirectDisplayID {
         guard wanted.isValid else { throw Failure.invalidResolution }
         guard (1...240).contains(fps) else { throw Failure.invalidFrameRate }
+        guard !deferMirror || layout == .mirrored else { throw Failure.invalidResolution }
         if resolution == wanted, requestedFPS == fps, activeModeMatches { return capturedID }
         if resolution == wanted, activeModeMatches, let temporary {
             do {
@@ -141,22 +173,21 @@ final class DuoDesktopDisplay {
                                                  widthPt: wanted.encodedWidth / 2,
                                                  heightPt: wanted.encodedHeight / 2,
                                                  scale: 2, refreshHz: Double(fps),
-                                                 vendorID: 0x4455, productID: 0x4F01, serialNum: 1)
+                                                 vendorID: 0x4455, productID: 0x4F01,
+                                                 serialNum: Self.virtualDesktopSerial(source: main))
                 temporary = display
                 guard await display.waitUntilOnline(),
                       wanted.accepts(width: display.pixelSize.width, height: display.pixelSize.height) else {
                     throw Failure.modeRejected
                 }
-                // The virtual desktop supplies the negotiated clock; preserve the physical
-                // panel's timing rather than adding an unrelated mode change.
-                try configure { config in
-                    let origin = CGConfigureDisplayOrigin(config, display.displayID, Int32(home.origin.x), Int32(home.origin.y))
-                    guard origin == .success else { return origin }
-                    return CGConfigureDisplayMirrorOfDisplay(config, main, display.displayID)
-                }
-                guard CGDisplayMirrorsDisplay(main) == display.displayID else { throw Failure.modeRejected }
                 capturedID = display.displayID
-                print("Duo mirror timing: desktop \(fps) Hz; panel \(CGDisplayCopyDisplayMode(main)?.refreshRate ?? 0) Hz")
+                if deferMirror {
+                    // Keep the current desktop stable while the system picker is on screen.
+                    // The selected filter continues to identify this same display after attach.
+                    pendingMirror = true
+                } else {
+                    try attachMirror(display, home: home)
+                }
                 if layout == .nativePrimary {
                     try configure { config in
                         guard let nx = Int32(exactly: home.origin.x), let ny = Int32(exactly: home.origin.y) else { return .illegalArgument }
@@ -170,14 +201,36 @@ final class DuoDesktopDisplay {
             }
             resolution = wanted
             requestedFPS = fps
-            guard activeModeMatches else { throw Failure.modeRejected }
+            guard pendingMirror || activeModeMatches else { throw Failure.modeRejected }
             let kind = temporary == nil ? "physical mode" : layout == .mirrored ? "mirrored HiDPI mode" : "independent native primary"
-            print("Duo desktop: \(wanted.width)×\(wanted.height) native; Mac renders \(wanted.encodedWidth)×\(wanted.encodedHeight) pixels; \(kind)")
+            print("Duo desktop: \(wanted.width)×\(wanted.height) native; canvas \(wanted.encodedWidth)×\(wanted.encodedHeight) pixels; \(pendingMirror ? "awaiting desktop attachment" : kind)")
             return capturedID
         } catch {
             _ = restore()
             throw error
         }
+    }
+
+    func attachPreparedMirror() throws {
+        guard pendingMirror else { return }
+        guard let display = temporary, let home = originals.first(where: { $0.id == originalMainID }),
+              CGDisplayIsOnline(home.id) != 0, CGDisplayIsOnline(display.displayID) != 0 else {
+            throw Failure.displayUnavailable
+        }
+        try attachMirror(display, home: home)
+        pendingMirror = false
+        guard activeModeMatches else { throw Failure.modeRejected }
+    }
+
+    private func attachMirror(_ display: VirtualDisplay, home: Original) throws {
+        // The virtual desktop supplies the negotiated clock. Do not select a new panel mode.
+        try configure { config in
+            let origin = CGConfigureDisplayOrigin(config, display.displayID, Int32(home.origin.x), Int32(home.origin.y))
+            guard origin == .success else { return origin }
+            return CGConfigureDisplayMirrorOfDisplay(config, home.id, display.displayID)
+        }
+        guard CGDisplayMirrorsDisplay(home.id) == display.displayID else { throw Failure.modeRejected }
+        print("Duo mirror timing: desktop \(display.refreshHz) Hz; source \(CGDisplayCopyDisplayMode(home.id)?.refreshRate ?? 0) Hz")
     }
 
     /// Synchronous for the app's Quit/signal path. Never writes persistent display preferences.
@@ -201,6 +254,7 @@ final class DuoDesktopDisplay {
         }
         temporary?.destroy()
         temporary = nil
+        pendingMirror = false
         if !live.isEmpty {
             do {
                 try configure { config in

@@ -146,6 +146,9 @@ final class VirtualDisplay {
         try Runtime.setUInt32(descriptor, "setVendorID:", vendorID)
         try Runtime.setUInt32(descriptor, "setProductID:", productID)
         try Runtime.setUInt32(descriptor, "setSerialNum:", serialNum)
+        // Populate both descriptor fields, as Chromium's current macOS helper does. The
+        // Objective-C setter's signature is checked before calling it.
+        try Runtime.setUInt32(descriptor, "setSerialNumber:", serialNum)
         // sRGB-ish primaries (same values Chromium uses); without them some macOS versions
         // build a display with a degenerate colour profile.
         try? Runtime.setPoint(descriptor, "setRedPrimary:", CGPoint(x: 0.6797, y: 0.3203))
@@ -280,6 +283,7 @@ final class VirtualDisplay {
         ("CGVirtualDisplayDescriptor", "setVendorID:", "v@:I"),
         ("CGVirtualDisplayDescriptor", "setProductID:", "v@:I"),
         ("CGVirtualDisplayDescriptor", "setSerialNum:", "v@:I"),
+        ("CGVirtualDisplayDescriptor", "setSerialNumber:", "v@:I"),
         ("CGVirtualDisplayDescriptor", "setQueue:", "v@:@"),
         ("CGVirtualDisplayDescriptor", "setTerminationHandler:", "v@:@?"),
         ("CGVirtualDisplay", "initWithDescriptor:", "@@:@"),
