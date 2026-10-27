@@ -1,34 +1,40 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
-// Test-only measurement of the actual desktop image. No pixels are written to disk.
+// Test-only comparison of actual luma pixels. No pixels are written to disk.
 import CoreVideo
 import Metal
 
-/// Reduces every luma pixel into 16×16 tile sums and centered spatial moments on the GPU. The center region is inside the
-/// normal document window; comparing it as well as the complete frame prevents background-only
-/// activity from being counted as document scrolling. No synthetic frame codes are used.
+/// Compares every luma pixel with the preceding frame on the GPU. The center region is inside the
+/// normal document window; requiring changes there prevents background-only motion from counting.
+/// Differences below three luma levels are ignored to make the audit resistant to small codec noise.
 final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
-    private final class Submission: @unchecked Sendable {
+    private final class Surface: @unchecked Sendable {
         let image: CVPixelBuffer
-        let surface: CVMetalTexture
+        let texture: CVMetalTexture
+        init(image: CVPixelBuffer, texture: CVMetalTexture) { self.image = image; self.texture = texture }
+    }
+    private final class Submission: @unchecked Sendable {
+        let current: Surface
+        let previous: Surface
         let result: any MTLBuffer
-        init(image: CVPixelBuffer, surface: CVMetalTexture, result: any MTLBuffer) {
-            self.image = image; self.surface = surface; self.result = result
+        init(current: Surface, previous: Surface, result: any MTLBuffer) {
+            self.current = current; self.previous = previous; self.result = result
         }
     }
     private struct Result {
         let time: Double
-        let tiles: [Int32]?
+        let tiles: [UInt32]?
         let width: Int
         let height: Int
     }
     private let queue: any MTLCommandQueue
     private let pipeline: any MTLComputePipelineState
     private let cache: CVMetalTextureCache
+    private let submissionQueue = DispatchQueue(label: "duodesk.desktop-content-audit", qos: .userInteractive)
+    private var previous: Surface?  // submissionQueue only
     private let pending = DispatchGroup()
     private let lock = NSLock()
     private var inFlight = 0, sequence = 0, next = 1, failed = 0, dropped = 0
     private var ready: [Int: Result] = [:]
-    private var prior: [Int32]?
     private var comparisons: [(Double, Double, Double, Int)] = []
     private var validationPassed = false
     private var reportedFPS: Double?
@@ -45,23 +51,24 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
         let library = try device.makeLibrary(source: """
         #include <metal_stdlib>
         using namespace metal;
-        kernel void tileSums(texture2d<float, access::read> image [[texture(0)]],
-                             device int *sums [[buffer(0)]], uint2 tile [[thread_position_in_grid]]) {
-            uint2 count = (uint2(image.get_width(), image.get_height()) + 15u) / 16u;
+        kernel void compareTiles(texture2d<float, access::read> current [[texture(0)]],
+                                 texture2d<float, access::read> previous [[texture(1)]],
+                                 device uint *results [[buffer(0)]], uint2 tile [[thread_position_in_grid]]) {
+            uint2 count = (uint2(current.get_width(), current.get_height()) + 15u) / 16u;
             if (tile.x >= count.x || tile.y >= count.y) return;
-            int sum = 0, xMoment = 0, yMoment = 0;
-            for (uint y = tile.y * 16u; y < min((tile.y + 1u) * 16u, image.get_height()); ++y)
-                for (uint x = tile.x * 16u; x < min((tile.x + 1u) * 16u, image.get_width()); ++x) {
-                    int pixel = int(round(image.read(uint2(x, y)).r * 255.0));
-                    sum += pixel;
-                    xMoment += pixel * (int(x % 16u) * 2 - 15);
-                    yMoment += pixel * (int(y % 16u) * 2 - 15);
+            uint sum = 0, changed = 0;
+            for (uint y = tile.y * 16u; y < min((tile.y + 1u) * 16u, current.get_height()); ++y)
+                for (uint x = tile.x * 16u; x < min((tile.x + 1u) * 16u, current.get_width()); ++x) {
+                    int a = int(round(current.read(uint2(x, y)).r * 255.0));
+                    int b = int(round(previous.read(uint2(x, y)).r * 255.0));
+                    uint delta = uint(abs(a - b));
+                    if (delta >= 3u) { sum += delta; ++changed; }
                 }
-            uint offset = (tile.y * count.x + tile.x) * 3u;
-            sums[offset] = sum; sums[offset + 1u] = xMoment; sums[offset + 2u] = yMoment;
+            uint offset = (tile.y * count.x + tile.x) * 2u;
+            results[offset] = sum; results[offset + 1u] = changed;
         }
         """, options: nil)
-        guard let function = library.makeFunction(name: "tileSums") else { throw PixelMotionAudit.Failure.unavailable }
+        guard let function = library.makeFunction(name: "compareTiles") else { throw PixelMotionAudit.Failure.unavailable }
         self.pipeline = try device.makeComputePipelineState(function: function)
         self.queue = queue; self.cache = cache
     }
@@ -72,35 +79,48 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
             inFlight += 1; sequence += 1; return sequence
         }
         guard let number else { return }
+        pending.enter()
+        submissionQueue.async { [self, image] in submit(image, number: number, time: time) }
+    }
+
+    private func submit(_ image: CVPixelBuffer, number: Int, time: Double) {
         let width = CVPixelBufferGetWidth(image), height = CVPixelBufferGetHeight(image)
         let columns = (width + 15) / 16, rows = (height + 15) / 16
-        pending.enter()
         do {
             guard CVPixelBufferIsPlanar(image), CVPixelBufferGetPlaneCount(image) == 2 else { throw PixelMotionAudit.Failure.texture }
             var surface: CVMetalTexture?
             let status = CVMetalTextureCacheCreateTextureFromImage(nil, cache, image, nil, .r8Unorm,
                 CVPixelBufferGetWidthOfPlane(image, 0), CVPixelBufferGetHeightOfPlane(image, 0), 0, &surface)
-            guard status == kCVReturnSuccess, let surface, let texture = CVMetalTextureGetTexture(surface),
-                  let result = queue.device.makeBuffer(length: columns * rows * 3 * MemoryLayout<Int32>.size, options: .storageModeShared),
+            guard status == kCVReturnSuccess, let surface, let texture = CVMetalTextureGetTexture(surface) else {
+                throw PixelMotionAudit.Failure.texture
+            }
+            let current = Surface(image: image, texture: surface)
+            let prior = previous ?? current
+            guard CVPixelBufferGetWidth(prior.image) == width, CVPixelBufferGetHeight(prior.image) == height,
+                  let previousTexture = CVMetalTextureGetTexture(prior.texture),
+                  let result = queue.device.makeBuffer(length: columns * rows * 2 * MemoryLayout<UInt32>.size, options: .storageModeShared),
                   let command = queue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else {
                 throw PixelMotionAudit.Failure.submission
             }
-            encoder.setComputePipelineState(pipeline); encoder.setTexture(texture, index: 0)
+            previous = current
+            encoder.setComputePipelineState(pipeline)
+            encoder.setTexture(texture, index: 0); encoder.setTexture(previousTexture, index: 1)
             encoder.setBuffer(result, offset: 0, index: 0)
             encoder.dispatchThreads(MTLSize(width: columns, height: rows, depth: 1),
                                     threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
             encoder.endEncoding()
-            let submission = Submission(image: image, surface: surface, result: result)
+            let submission = Submission(current: current, previous: prior, result: result)
             command.addCompletedHandler { [self, submission] command in
-                let values: [Int32]? = withExtendedLifetime(submission) {
+                let values: [UInt32]? = withExtendedLifetime(submission) {
                     guard command.status == .completed else { return nil }
-                    return Array(UnsafeBufferPointer(start: submission.result.contents().assumingMemoryBound(to: Int32.self),
-                                                     count: columns * rows * 3))
+                    return Array(UnsafeBufferPointer(start: submission.result.contents().assumingMemoryBound(to: UInt32.self),
+                                                     count: columns * rows * 2))
                 }
                 finish(number, Result(time: time, tiles: values, width: width, height: height))
             }
             command.commit()
         } catch {
+            previous = nil
             finish(number, Result(time: time, tiles: nil, width: width, height: height))
         }
     }
@@ -110,29 +130,26 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
             inFlight -= 1
             ready[number] = result
             while let result = ready.removeValue(forKey: next) {
-                next += 1
-                guard let values = result.tiles else { failed += 1; prior = nil; continue }
-                defer { prior = values }
-                guard let prior, prior.count == values.count else { continue }
+                let index = next; next += 1
+                guard let values = result.tiles else { failed += 1; continue }
+                guard index > 1 else { continue }
                 let columns = (result.width + 15) / 16, rows = (result.height + 15) / 16
                 var fullDelta: UInt64 = 0, centerDelta: UInt64 = 0
-                var centerPixels = 0, movingTiles = 0
+                var centerPixels = 0, changedPixels = 0
                 for y in 0..<rows {
                     for x in 0..<columns {
-                        let i = (y * columns + x) * 3
-                        let difference = UInt64(abs(Int(values[i + 1]) - Int(prior[i + 1]))
-                                                + abs(Int(values[i + 2]) - Int(prior[i + 2])))
-                        fullDelta += difference
+                        let i = (y * columns + x) * 2
+                        fullDelta += UInt64(values[i])
                         if x * 16 >= result.width * 3 / 10, (x + 1) * 16 <= result.width * 7 / 10,
                            y * 16 >= result.height * 3 / 10, (y + 1) * 16 <= result.height * 7 / 10 {
-                            centerDelta += difference; centerPixels += 256
-                            if difference >= 922 { movingTiles += 1 }
+                            centerDelta += UInt64(values[i]); centerPixels += 256
+                            changedPixels += Int(values[i + 1])
                         }
                     }
                 }
-                let fullMean = Double(fullDelta) / Double(result.width * result.height * 30)
-                let centerMean = centerPixels == 0 ? 0 : Double(centerDelta) / Double(centerPixels * 30)
-                comparisons.append((result.time, fullMean, centerMean, movingTiles))
+                let fullMean = Double(fullDelta) / Double(result.width * result.height)
+                let centerMean = centerPixels == 0 ? 0 : Double(centerDelta) / Double(centerPixels)
+                comparisons.append((result.time, fullMean, centerMean, changedPixels))
             }
         }
         pending.leave()
@@ -143,9 +160,11 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
             pending.notify(queue: .global()) { continuation.resume() }
         }
         return lock.withLock {
-            // The first second is stationary; the controlling process then starts real text scrolling.
+            func meaningful(_ item: (Double, Double, Double, Int)) -> Bool {
+                item.1 >= 0.01 && item.2 >= 0.12 && item.3 >= 500
+            }
             let active = comparisons.filter { $0.0 >= start + 1 && $0.0 < start + Double(seconds) }
-            let changed = active.filter { $0.1 >= 0.01 && $0.2 >= 0.12 && $0.3 >= 20 }
+            let changed = active.filter(meaningful)
             var perSecond = [Int](repeating: 0, count: seconds)
             for item in changed {
                 let second = Int(item.0 - start)
@@ -153,17 +172,16 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
             }
             let values = active.map(\.2).sorted()
             let stationary = comparisons.filter { $0.0 >= start && $0.0 < start + 1 }
-            let stationaryChanging = stationary.filter { $0.1 >= 0.01 && $0.2 >= 0.12 && $0.3 >= 20 }.count
+            let stationaryChanging = stationary.filter(meaningful).count
             let baselineMax = stationary.map(\.2).max() ?? 0
             let p50 = values.isEmpty ? 0 : values[values.count / 2]
             let p95 = values.isEmpty ? 0 : values[Int(Double(values.count - 1) * 0.95)]
             validationPassed = sequence > 0 && failed == 0 && dropped == 0 && ready.isEmpty
-                && !active.isEmpty && stationaryChanging == 0
+                && !active.isEmpty && !stationary.isEmpty && stationaryChanging == 0
             reportedFPS = Double(changed.count) / Double(max(1, seconds - 1))
-            return String(format: "DESKTOP CONTENT: submitted=%d comparisons=%d changing=%d activeFPS=%.3f failed=%d auditDropped=%d; fullImage and centerText spatial-moment thresholds=0.01/0.12 plus 20 moving tiles; stationaryPairs=%d stationaryChanging=%d stationaryMax=%.3f activeCenterP50=%.3f p95=%.3f; perSecond=%@",
+            return String(format: "DESKTOP CONTENT: submitted=%d comparisons=%d changing=%d activeFPS=%.3f failed=%d auditDropped=%d; per-pixel luma delta>=3; full/center thresholds=0.01/0.12 and 500 changed center pixels; stationaryPairs=%d stationaryChanging=%d stationaryMax=%.3f activeCenterP50=%.3f p95=%.3f; perSecond=%@",
                           sequence, active.count, changed.count, reportedFPS ?? 0, failed, dropped, stationary.count,
-                          stationaryChanging, baselineMax, p50, p95,
-                          String(describing: perSecond))
+                          stationaryChanging, baselineMax, p50, p95, String(describing: perSecond))
         }
     }
 

@@ -90,6 +90,13 @@ final class DuoDesktopDisplay {
               let mode = CGDisplayCopyDisplayMode(capturedID) else { return false }
         return abs(mode.refreshRate - Double(requestedFPS)) < 0.5
     }
+    /// Only a faster, known clock needs software-side frame selection after an unthrottled SCK
+    /// sample. The virtual desktop already runs at its negotiated clock and uses native cadence.
+    var needsCadenceResampling: Bool {
+        guard activeModeMatches, let requestedFPS,
+              let mode = CGDisplayCopyDisplayMode(capturedID) else { return false }
+        return mode.refreshRate > Double(requestedFPS) + 0.5
+    }
     /// Keep the diagnostic filter choice separate from the capture interval policy.
     var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && followsNativeCadence }
     /// A physical resolution may change, but its reported refresh must stay exactly as it was.

@@ -4,7 +4,7 @@ cd "$(dirname "$0")/../../.."
 if [[ -f Local/developer-env.sh ]]; then source Local/developer-env.sh; fi
 app="$PWD/.build/duodesk-native-document/DUO Document Workload.app"
 mkdir -p "$app/Contents/MacOS"
-swiftc -O Tests/duodesk/native-document-workload/main.swift -o "$app/Contents/MacOS/DocumentWorkload"
+swiftc -O Tests/duodesk/native-document-workload/*.swift -o "$app/Contents/MacOS/DocumentWorkload"
 python3 - "$app/Contents/Info.plist" <<'PY'
 import plistlib, sys
 from pathlib import Path

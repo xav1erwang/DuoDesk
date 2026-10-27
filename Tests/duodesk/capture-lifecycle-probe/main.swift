@@ -40,7 +40,7 @@ struct Checks {
         }
     }
 
-    static func sample() throws -> CMSampleBuffer {
+    static func sample(_ timestamp: CMTime = CMTime(value: 1, timescale: 120)) throws -> CMSampleBuffer {
         var pixels: CVPixelBuffer?
         guard CVPixelBufferCreate(kCFAllocatorDefault, 16, 16, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
                                   nil, &pixels) == kCVReturnSuccess, let pixels else {
@@ -51,7 +51,7 @@ struct Checks {
                                                            formatDescriptionOut: &format) == noErr, let format else {
             throw CheckFailure(message: "Could not describe callback fixture")
         }
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: CMTime(value: 1, timescale: 120),
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: timestamp,
                                         decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?
         guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixels,
@@ -104,6 +104,22 @@ struct Checks {
         releaseQueue.signal()
         await stopping.value
         try expect(audit.snapshot.finished, "Stop never finished after the queue drained")
+
+        // Drive the production output callback with inert stream identities and real timestamps.
+        // A stale stream cannot consume the new stream's pacing deadline.
+        let paced = WindowCapture(), pacedAudit = Audit()
+        paced.onFrame = { _, _ in pacedAudit.frame() }
+        paced.stateLock.withLock { paced.stream = second; paced.framePacer = CaptureFramePacer(fps: 120) }
+        paced.stream(second, didOutputSampleBuffer: try sample(.zero), of: .screen)
+        paced.stream(first, didOutputSampleBuffer: try sample(CMTime(value: 100, timescale: 1)), of: .screen)
+        paced.stream(second, didOutputSampleBuffer: try sample(CMTime(value: 1, timescale: 170)), of: .screen)
+        try expect(pacedAudit.snapshot.frames == 1, "Pacer accepted an early frame or a replaced stream")
+        let due = try sample(CMTime(value: 2, timescale: 170))
+        paced.stream(second, didOutputSampleBuffer: due, of: .screen)
+        paced.stream(second, didOutputSampleBuffer: due, of: .screen)
+        try expect(pacedAudit.snapshot.frames == 2, "Pacer lost a due frame or delivered a duplicate timestamp")
+        paced.stream(second, didStopWithError: error)
+        try expect(paced.framePacer == nil, "Stopped capture retained its old pacing state")
     }
 
     static func deferredFailure() async throws {

@@ -11,7 +11,7 @@ swiftc -O -emit-library -emit-module -module-name StreamProtocol Sources/StreamP
 swiftc -O -package-name Sill -I "$out" -L "$app/Contents/Frameworks" -lStreamProtocol \
   -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
   Sources/SillHost/VirtualDisplay.swift Sources/SillHost/DuoDesktopDisplay.swift \
-  Sources/SillHost/Stats.swift Sources/SillHost/WindowCapture.swift Sources/SillHost/DesktopCapturePicker.swift \
+  Sources/SillHost/Stats.swift Sources/SillHost/CaptureFramePacer.swift Sources/SillHost/WindowCapture.swift Sources/SillHost/DesktopCapturePicker.swift \
   Sources/SillHost/EncoderMailbox.swift Sources/SillHost/EncoderSlowState.swift Sources/SillHost/HEVCEncoder.swift \
   iOSClient/HardwareHEVCDecoder.swift \
   Tests/duodesk/capture-probe/PixelMotionAudit.swift Tests/duodesk/picker-capture-probe/FrameAudit.swift \

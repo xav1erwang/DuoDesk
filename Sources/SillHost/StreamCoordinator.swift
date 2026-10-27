@@ -1605,8 +1605,10 @@ package final class StreamCoordinator {
         if let filter {
             capture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }
             do {
+                let nativeDesktop = source == .desktop && desktopResolution != nil
                 try await capture.start(filter: filter, width: width, height: height, fps: fps, showsCursor: false, sourceRect: sourceRect,
-                                        nativeCadence: source == .desktop && desktopResolution != nil && duoDesktop.followsNativeCadence)
+                                        nativeCadence: nativeDesktop && duoDesktop.followsNativeCadence,
+                                        resampleCadence: nativeDesktop && duoDesktop.needsCadenceResampling)
             } catch {
                 await capture.stop()
                 capture.onFrame = nil

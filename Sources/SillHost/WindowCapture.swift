@@ -15,6 +15,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
     private var generation = UUID()
     private var startupFailure: (any Error)?
+    private var framePacer: CaptureFramePacer?
     private let queue = DispatchQueue(label: "sill.capture", qos: .userInteractive)
     var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
     /// The stream ended on its own (window closed, permission revoked). Called on an SCK thread.
@@ -37,13 +38,16 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// and the whole default path) leaves the configuration exactly as it was.
     /// `nativeCadence`: only for a display whose actual clock equals the negotiated FPS. A second
     /// 1/fps throttle can miss a compositor deadline; zero follows that display's native clock.
+    /// `resampleCadence`: receive the faster source without SCK's extra limiter, then select real
+    /// frames against a stable target clock. This never changes the source display's clock.
     func start(filter: SCContentFilter, width: Int, height: Int, fps: Int, showsCursor: Bool, sourceRect: CGRect? = nil,
-               nativeCadence: Bool = false) async throws {
+               nativeCadence: Bool = false, resampleCadence: Bool = false) async throws {
+        precondition(!nativeCadence || !resampleCadence)
         let config = SCStreamConfiguration()
         config.width = width
         config.height = height
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-        config.minimumFrameInterval = nativeCadence ? .zero : CMTime(value: 1, timescale: CMTimeScale(fps))
+        config.minimumFrameInterval = (nativeCadence || resampleCadence) ? .zero : CMTime(value: 1, timescale: CMTimeScale(fps))
         config.queueDepth = 5   // headroom: a wedged encoder may keep one buffer forever
         config.showsCursor = showsCursor
         config.colorSpaceName = CGColorSpace.sRGB
@@ -61,6 +65,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             self.stream = stream
             generation = UUID()
             startupFailure = nil
+            framePacer = resampleCadence ? CaptureFramePacer(fps: fps) : nil
             framesSeen = 0
         }
         do {
@@ -79,7 +84,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             throw error
         }
         let crop = sourceRect.map { String(format: " sourceRect (%.0f,%.0f,%.0f,%.0f)", $0.minX, $0.minY, $0.width, $0.height) } ?? ""
-        print("Capture started: \(width)×\(height) @\(fps) fps, cadence \(nativeCadence ? "native display" : "limited"), cursor \(showsCursor ? "in" : "out"), filter \(filter.contentRect.size) scale \(filter.pointPixelScale)" + crop)
+        let cadence = nativeCadence ? "native display" : resampleCadence ? "resampled" : "limited"
+        print("Capture started: \(width)×\(height) @\(fps) fps, cadence \(cadence), cursor \(showsCursor ? "in" : "out"), filter \(filter.contentRect.size) scale \(filter.pointPixelScale)" + crop)
     }
 
     private var framesSeen = 0
@@ -93,6 +99,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             stream = nil
             generation = UUID()
             startupFailure = nil
+            framePacer = nil
             return previous
         }
         if let previous { try? await previous.stopCapture() }
@@ -114,15 +121,22 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // .idle frames (nothing changed) are skipped, which is what we want.
         guard status == .complete else { Stats.shared.bump(status == .idle ? "cap.idle" : "cap.status\(statusRaw)"); return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { Stats.shared.bump("cap.noPixels"); return }
-        let delivery = stateLock.withLock { () -> (current: Bool, first: Bool) in
-            guard self.stream === stream else { return (false, false) }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let delivery = stateLock.withLock { () -> (current: Bool, first: Bool, pacedOut: Bool) in
+            guard self.stream === stream else { return (false, false, false) }
+            if var pacer = framePacer {
+                let admitted = pacer.admit(pts)
+                framePacer = pacer
+                if !admitted { return (true, false, true) }
+            }
             framesSeen += 1
-            return (true, framesSeen == 1)
+            return (true, framesSeen == 1, false)
         }
         guard delivery.current else { return }
+        if delivery.pacedOut { Stats.shared.bump("cap.cadenceDrop"); return }
         Stats.shared.bump("cap.complete")
         if delivery.first { print("Capture: first frame \(CVPixelBufferGetWidth(pixelBuffer))×\(CVPixelBufferGetHeight(pixelBuffer))") }
-        onFrame?(pixelBuffer, CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        onFrame?(pixelBuffer, pts)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -130,6 +144,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             guard stream === self.stream else { return nil }
             self.stream = nil
             startupFailure = error
+            framePacer = nil
             return Stop(error: error, generation: generation)
         }
         print("Capture stream stopped (\(stopped == nil ? "replaced" : "current")): \(error) — \((error as NSError).userInfo)")
