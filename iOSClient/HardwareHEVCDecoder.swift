@@ -36,13 +36,21 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     // Admission accounts for these together with queued input, without counting a transfer twice.
     private var inFlightBytes = 0
     private static let compressedBytesLimit = StreamMessage.maxFramePayload
+    // Under lock: time since the first outstanding frame or most recent completion. New inputs
+    // cannot postpone the timeout while none of the outstanding callbacks makes progress.
+    private var callbackProgressAt: TimeInterval?
+    private var failed = false
+    private let watchdogQueue = DispatchQueue(label: "duodesk.decoder-watchdog", qos: .utility)
+    private var watchdog: DispatchSourceTimer?
+    // Anchor the first tick too: the app can be suspended before the timer ever fires.
+    private var lastWatchdogCheck = ProcessInfo.processInfo.systemUptime // guarded by lock
+    private static let stallAfter: TimeInterval = 3
     // The remaining state belongs exclusively to queue.
     private var session: VTDecompressionSession?
     private var description: CMVideoFormatDescription?
     private var parameters: Data?
     private var sessionGeneration: UInt64 = 0
     private var waitingForKeyframe = true
-    private var failed = false
     private var frameIndex: Int64 = 0
     private var measurements: [Double] = []
     private var hardware = true
@@ -73,9 +81,15 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
          onFailure: @escaping (String, UInt64) -> Void, onNeedsKeyframe: @escaping (UInt64) -> Void = { _ in }) {
         self.onFormat = onFormat; self.onSample = onSample; self.onFailure = onFailure
         self.onNeedsKeyframe = onNeedsKeyframe
+        let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5, leeway: .milliseconds(100))
+        timer.setEventHandler { [weak self] in self?.checkWatchdog() }
+        timer.resume()
+        watchdog = timer
     }
 
     deinit {
+        watchdog?.cancel()
         if let session { DispatchQueue.global(qos: .utility).async { VTDecompressionSessionInvalidate(session) } }
     }
 
@@ -83,10 +97,15 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }; return generation == value
     }
 
+    private func canOutput(_ value: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return generation == value && !failed
+    }
+
     private func advance(ifInputEpoch epoch: UInt64) -> UInt64? {
         lock.lock(); defer { lock.unlock() }
-        guard inputEpoch == epoch else { return nil }
+        guard inputEpoch == epoch, !failed else { return nil }
         generation &+= 1; inFlight = 0; inFlightBytes = 0; latestOutputSequence = 0; lastRecoveryRequest = -.infinity
+        callbackProgressAt = nil
         cancelRecoveryTimerLocked()
         return generation
     }
@@ -96,6 +115,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         lock.lock()
         guard required != value else { let token = generation; lock.unlock(); return token }
         required = value; inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
+        callbackProgressAt = nil; failed = false
         latestOutputSequence = 0; lastRecoveryRequest = -.infinity; cancelRecoveryTimerLocked()
         let token = generation
         queue.async { [self] in if isCurrent(token) { invalidate() } }
@@ -107,6 +127,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     func clear() -> UInt64 {
         lock.lock()
         inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
+        callbackProgressAt = nil; failed = false
         latestOutputSequence = 0; lastRecoveryRequest = -.infinity; cancelRecoveryTimerLocked()
         let token = generation
         queue.async { [self] in if isCurrent(token) { invalidate() } }
@@ -116,23 +137,54 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
 
     private func invalidate() {
         if let session { VTDecompressionSessionInvalidate(session) }
-        session = nil; description = nil; parameters = nil; failed = false
+        session = nil; description = nil; parameters = nil
         waitingForKeyframe = true; frameIndex = 0; measurements = []
     }
 
     private func fail(_ status: OSStatus, generation: UInt64, reason: String = "VideoToolbox") {
-        guard !failed, isCurrent(generation) else { return }
-        failed = true
-        lock.lock(); let pending = backlog.frames, active = inFlight; lock.unlock()
+        lock.lock(); let counts = claimFailureLocked(generation); lock.unlock()
+        guard let counts else { return }
+        reportFailure(status, generation: generation, reason: reason, counts: counts)
+    }
+
+    /// Under lock. Keep the generation for the UI's failure callback, but fence all old queued
+    /// inputs and decoded pictures immediately; clear/require starts a fresh generation.
+    private func claimFailureLocked(_ token: UInt64) -> (pending: Int, active: Int)? {
+        guard generation == token, !failed else { return nil }
+        failed = true; inputEpoch &+= 1; backlog.reset(); cancelRecoveryTimerLocked()
+        return (backlog.frames, inFlight)
+    }
+
+    private func reportFailure(_ status: OSStatus, generation: UInt64, reason: String,
+                               counts: (pending: Int, active: Int)) {
+        let (pending, active) = counts
         print("HEVC decode failed: \(status), \(reason), queued=\(pending), inFlight=\(active), generation=\(generation)")
         onFailure("硬件解码不可用（\(status)），请重新连接。", generation)
     }
 
+    /// This queue cannot be blocked behind a VideoToolbox call on the decoder queue. A long gap
+    /// between watchdog ticks may be app suspension or scheduler starvation; allow a fresh grace
+    /// interval on resumption rather than declaring the session dead based on suspended time.
+    private func checkWatchdog() {
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        let gap = now - lastWatchdogCheck
+        lastWatchdogCheck = now
+        if gap > 2, callbackProgressAt != nil { callbackProgressAt = now }
+        let token = generation
+        let stalled = inFlight > 0 && callbackProgressAt.map { now - $0 >= Self.stallAfter } == true
+        let counts = stalled ? claimFailureLocked(token) : nil
+        lock.unlock()
+        if let counts { reportFailure(kVTVideoDecoderNotAvailableNowErr, generation: token,
+                                      reason: "decoder callbacks stalled", counts: counts) }
+    }
+
     func apply(_ ps: ParameterSets) {
         lock.lock()
+        guard !failed else { lock.unlock(); return }
         let epoch = inputEpoch
         queue.async { [self] in
-            lock.lock(); let current = inputEpoch == epoch; lock.unlock()
+            lock.lock(); let current = inputEpoch == epoch && !failed; lock.unlock()
             guard current else { return }
             guard ps.sets.count == 3, ps.sets.allSatisfy({ !$0.isEmpty && $0.count <= 65_535 }),
                   ps.nalUnitHeaderLength == 4 else {
@@ -187,6 +239,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
 
     func enqueue(_ data: Data, isKeyframe: Bool) {
         lock.lock()
+        guard !failed else { lock.unlock(); return }
         // Even an empty or oversized access unit is a gap in the reference chain. Let the
         // bounded admission state fence old work and request recovery instead of silently
         // returning before it can observe the discarded frame. The queue and this generation's
@@ -220,9 +273,9 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         queue.async { [self] in
             var queued = true
             defer { if queued { lock.lock(); backlog.complete(ticket); lock.unlock() } }
-            lock.lock(); let current = inputEpoch == epoch && backlog.isCurrent(ticket); lock.unlock()
+            lock.lock(); let current = inputEpoch == epoch && !failed && backlog.isCurrent(ticket); lock.unlock()
             guard current else { return }
-            guard !failed, let session, let description, isCurrent(sessionGeneration) else { return }
+            guard let session, let description, canOutput(sessionGeneration) else { return }
             if waitingForKeyframe { guard isKeyframe else { return }; waitingForKeyframe = false }
             var block: CMBlockBuffer?
             guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: data.count,
@@ -243,11 +296,12 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
             guard ready == noErr, let sample else { fail(ready, generation: sessionGeneration); return }
             let token = sessionGeneration
             lock.lock()
-            let readyForSession = generation == token && backlog.isCurrent(ticket)
+            let readyForSession = generation == token && !failed && backlog.isCurrent(ticket)
             let available = readyForSession && inFlight < 32 && inFlightBytes <= Self.compressedBytesLimit - data.count
             if available {
                 // Move the reservation to VT under the same lock; an arriving frame sees it
                 // exactly once, and an older fenced ticket cannot enter the decoder.
+                if inFlight == 0 { callbackProgressAt = ProcessInfo.processInfo.systemUptime }
                 inFlight += 1; inFlightBytes += data.count
                 backlog.complete(ticket); queued = false
             }
@@ -270,24 +324,26 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     /// Called on the decoder queue after VT returns; a callback may already have claimed flight.
     private func completeSubmission(_ status: OSStatus, flags: VTDecodeInfoFlags, flight: Flight) {
         if status != noErr || flags.contains(.frameDropped) {
-            decoded(nil, status: status, flags: flags, flight: flight, pts: .invalid, onDecoderQueue: true)
+            decoded(nil, status: status, flags: flags, flight: flight, pts: .invalid)
         }
     }
 
     private func decoded(_ image: CVImageBuffer?, status: OSStatus, flags: VTDecodeInfoFlags, flight: Flight,
-                         pts: CMTime, onDecoderQueue: Bool = false) {
+                         pts: CMTime) {
         lock.lock()
         guard !flight.completed else { lock.unlock(); return }
         flight.completed = true
         let token = flight.generation
         guard generation == token else { lock.unlock(); return }
         inFlight -= 1; inFlightBytes -= flight.compressedBytes
-        let current = backlog.isCurrent(flight.ticket)
+        callbackProgressAt = inFlight == 0 ? nil : ProcessInfo.processInfo.systemUptime
+        let current = !failed && backlog.isCurrent(flight.ticket)
         lock.unlock()
         guard current else { return }
         guard status == noErr else {
-            if onDecoderQueue { fail(status, generation: token) }
-            else { queue.async { [self] in fail(status, generation: token) } }
+            // The decoder queue itself may be stuck in VideoToolbox. Failure claiming is
+            // lock-protected, so report directly from either the callback or submission path.
+            fail(status, generation: token)
             return
         }
         // No image or a drop flag can leave the last desktop update unseen forever. Requiring a
@@ -303,13 +359,13 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         guard CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: image, formatDescription: format,
                 sampleTiming: &timing, sampleBufferOut: &sample) == noErr, let sample else { recoverMissingOutput(flight); return }
         lock.lock()
-        let newer = generation == token && backlog.isCurrent(flight.ticket) && flight.sequence > latestOutputSequence
+        let newer = generation == token && !failed && backlog.isCurrent(flight.ticket) && flight.sequence > latestOutputSequence
         if newer { latestOutputSequence = flight.sequence }
         lock.unlock()
         guard newer else { return }
         // The presenter fences generations too. Call outside the state lock so a callback may
         // clear/disconnect without deadlocking, and a late old image can never replace a new one.
-        if isCurrent(token) { onSample(sample, token) }
+        if canOutput(token) { onSample(sample, token) }
         let ms = (ProcessInfo.processInfo.systemUptime - flight.started) * 1000
         queue.async { [self] in
             guard isCurrent(token) else { return }
@@ -325,7 +381,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
 
     private func recoverMissingOutput(_ flight: Flight) {
         lock.lock()
-        guard generation == flight.generation, backlog.isCurrent(flight.ticket), flight.sequence > latestOutputSequence else {
+        guard generation == flight.generation, !failed, backlog.isCurrent(flight.ticket), flight.sequence > latestOutputSequence else {
             lock.unlock(); return
         }
         backlog.reset()
@@ -337,7 +393,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     /// Under `lock`. A request suppressed by the rate limit still needs a timer: if the desktop
     /// becomes static, there may be no later incoming frame to trigger another request.
     private func requestRecoveryLocked(now: TimeInterval) -> UInt64? {
-        guard backlog.waitingForKeyframe else { return nil }
+        guard !failed, backlog.waitingForKeyframe else { return nil }
         let remaining = Self.recoverySpacing - (now - lastRecoveryRequest)
         if remaining <= 0 {
             cancelRecoveryTimerLocked()
