@@ -9,11 +9,13 @@ final class LoopbackVideo: @unchecked Sendable {
     enum Failure: Error { case configuration, identity, timeout, authentication, framing, disconnected }
     private final class State: @unchecked Sendable {
         private let lock = NSLock()
+        private let onFrameReceived: (@Sendable () -> Void)?
         private var admitted = false, ended = false
         private var failure: String?
         private var frames = 0, keyframes = 0, parameters = 0, resets = 0
         private var wireLatencies: [Double] = []
         private var invalidLatencies = 0
+        init(onFrameReceived: (@Sendable () -> Void)? = nil) { self.onFrameReceived = onFrameReceived }
         func accept() { lock.withLock { admitted = true } }
         func stop() { lock.withLock { ended = true } }
         func fail(_ text: String) { lock.withLock { if !ended { failure = text } } }
@@ -31,6 +33,7 @@ final class LoopbackVideo: @unchecked Sendable {
                 default: break
                 }
             }
+            if kind == .frame { onFrameReceived?() }
         }
         var counters: (frames: Int, keyframes: Int, parameters: Int, resets: Int) {
             lock.withLock { (frames, keyframes, parameters, resets) }
@@ -61,7 +64,8 @@ final class LoopbackVideo: @unchecked Sendable {
         self.server = server; self.connection = connection; self.decoder = decoder; self.state = state
     }
 
-    static func connect(decoder: HardwareHEVCDecoder, encoder: HEVCEncoder) async throws -> LoopbackVideo {
+    static func connect(decoder: HardwareHEVCDecoder, encoder: HEVCEncoder,
+                        onFrameReceived: (@Sendable () -> Void)? = nil) async throws -> LoopbackVideo {
         let env = ProcessInfo.processInfo.environment
         guard env["SILL_TEST_LOOPBACK"] == "1", (env["SILL_TEST_SERVICE_TYPE"] ?? "").isEmpty else {
             throw Failure.configuration
@@ -71,7 +75,7 @@ final class LoopbackVideo: @unchecked Sendable {
               let deviceKey = RemoteKey.generate(), let device = RemoteIdentity(privateKey: deviceKey) else { throw Failure.identity }
         let trust = TrustBox()
         trust.update { $0.paired[device.fingerprint] = "Own local test" }
-        let state = State()
+        let state = State(onFrameReceived: onFrameReceived)
         let server = try StreamServer(advertise: false, home: .tls(.init(identity: host, trust: trust)), testHooks: true)
         guard server.loopbackOnly else { throw Failure.configuration }
         server.onListenerFailed = { state.fail("listener: \($0)") }

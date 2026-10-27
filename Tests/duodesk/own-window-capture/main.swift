@@ -1,6 +1,6 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 // Captures only this process's own AppKit window, using the system's current-process inventory.
-// This is not a full-desktop, network, or real-device performance test.
+// This is not a full-desktop, public-network, or real-device performance test.
 import AppKit
 import CoreMedia
 import CoreVideo
@@ -349,6 +349,7 @@ func currentProcessContent() async -> SCShareableContent? {
 @MainActor
 func run() async {
     let capture = WindowCapture()
+    let flow = CommandLine.arguments.contains("--stage-counts") ? FlowStageCounts() : nil
     #if DUO_RENDER_TRACE
     var displayCapture: WindowCapture?
     var displayTrace: DisplayFilterTrace?
@@ -399,6 +400,9 @@ func run() async {
                                && !CommandLine.arguments.contains("--request-keyframe")) else {
             throw PixelMotionAudit.Failure.unavailable
         }
+        guard flow == nil || (!captureOnly && CommandLine.arguments.contains("--quic-loopback")) else {
+            throw PixelMotionAudit.Failure.unavailable
+        }
         guard !profileAuditLock || captureOnly else { throw PixelMotionAudit.Failure.unavailable }
         let captured = try Frames(profileAuditLock: profileAuditLock)
         #if DUO_RENDER_TRACE
@@ -443,29 +447,34 @@ func run() async {
             let received = HardwareHEVCDecoder(onFormat: { size, _ in
                 if size != CGSize(width: 2008, height: 1428) { frames.fail("unexpected hardware-decoder dimensions") }
             }, onSample: { sample, _ in
-                if let image = CMSampleBufferGetImageBuffer(sample) { frames.receive(image) }
+                if let image = CMSampleBufferGetImageBuffer(sample) { flow?.record(.decode); frames.receive(image) }
             }, onFailure: { message, _ in frames.fail(message) }, onNeedsKeyframe: { _ in recovery.request() })
             received.require(DuoDesktopResolution(width: 2007, height: 1427))
             let compressor = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 80_000_000,
                                              prioritizeSpeed: true, software: false)
             if CommandLine.arguments.contains("--quic-loopback") {
-                let channel = try await LoopbackVideo.connect(decoder: received, encoder: compressor)
+                let receivedFrame: (@Sendable () -> Void)?
+                if let flow { receivedFrame = { flow.record(.receive) } } else { receivedFrame = nil }
+                let channel = try await LoopbackVideo.connect(decoder: received, encoder: compressor,
+                                                              onFrameReceived: receivedFrame)
                 recovery.set(channel)
                 compressor.onEncoded = { bytes, keyframe, parameters in
+                    flow?.record(.encode)
                     channel.sendEncoded(bytes, keyframe: keyframe, parameters: parameters)
                 }
                 loopback = channel
             } else {
                 compressor.onEncoded = { bytes, keyframe, parameters in
+                    flow?.record(.encode)
                     if let parameters { received.apply(parameters) }
                     received.enqueue(bytes, isKeyframe: keyframe)
                 }
             }
             compressor.onHung = { frames.fail("hardware encoder stalled") }
-            capture.onFrame = { image, pts in captured.receive(image); compressor.encode(image, pts: pts) }
+            capture.onFrame = { image, pts in flow?.record(.capture); captured.receive(image); compressor.encode(image, pts: pts) }
             encoder = compressor; decoder = received; decoded = frames
         } else {
-            capture.onFrame = { image, _ in captured.receive(image) }
+            capture.onFrame = { image, _ in flow?.record(.capture); captured.receive(image) }
             print("OWN WINDOW CAPTURE-ONLY DIAGNOSTIC: no encoder, decoder, network or desktop acceptance")
         }
         #if DUO_CAPTURE_DIAGNOSTICS
@@ -485,6 +494,7 @@ func run() async {
         let duration = diagnostic ? 12 : 32
         #endif
         let capturedStart = captured.begin(seconds: duration), decodedStart = decoded?.begin(seconds: duration)
+        flow?.begin(at: capturedStart + 2, seconds: duration - 2)
         var keyframeRequest: (before: Int, deadline: Double)?
         for step in 0..<(duration * 2) {
             try await Task.sleep(for: .milliseconds(500))
@@ -536,6 +546,7 @@ func run() async {
             print(loopback.latencyReport)
             Stats.shared.dump()
         }
+        if let flow { print(flow.report()) }
         try captured.audit.validate(); try decoded?.audit.validate()
         passed = !diagnostic && !captureOnly && wrong == 0 && decoded?.summary.1 == 0
             && (captured.audit.changedFramesPerSecond ?? 0) >= 120 && (decoded?.audit.changedFramesPerSecond ?? 0) >= 120
