@@ -20,7 +20,7 @@ git rev-parse --verify --quiet "$base^{commit}" > /dev/null || { echo "build.sh:
 # `Door`, which brings DoorPolicy, HostIdentity's trust snapshot, CableLink and PairingWindow's
 # AskLimits; the harness never builds one (its own door serves every session). Since away from home
 # (PR #39) it judges each device's link (LinkJudge).
-host_files=(StreamServer CableLink ClientLink DeviceGate Door DoorPolicy HostIdentity HostLog InterfaceSnapshot LinkJudge QUICDoorListener
+host_files=(StreamServer EncodedVideoMailbox CableLink ClientLink DeviceGate Door DoorPolicy HostIdentity HostLog InterfaceSnapshot LinkJudge QUICDoorListener
             OriginPolicy PairingWindow PointerControl PointerWatch RefusalSummary Stats)
 
 # put DEST: stdin to DEST, only if it differs.
@@ -66,6 +66,12 @@ side() {
     fi
     if grep -q 'var onClientLinkChanged' "$pkg/Sources/Harness/StreamServer.swift"; then
         defines="${defines:+$defines, }.define(\"LINK_JUDGE\")"
+    fi
+    if grep -qF 'func resetForNewStream(reset: Data)' "$pkg/Sources/Harness/StreamServer.swift"; then
+        defines="${defines:+$defines, }.define(\"PACING_EPOCH_RESET\")"
+    fi
+    if grep -qF 'func broadcastEncodedFrame(' "$pkg/Sources/Harness/StreamServer.swift"; then
+        defines="${defines:+$defines, }.define(\"PACING_BOUNDED_INGRESS\")"
     fi
     if [ -n "$defines" ]; then settings=", swiftSettings: [$defines]"; fi
     put "$pkg/Package.swift" <<SWIFT

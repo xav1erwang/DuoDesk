@@ -151,11 +151,7 @@ final class LoopbackVideo: @unchecked Sendable {
 
     func sendEncoded(_ bytes: Data, keyframe: Bool, parameters: ParameterSets?) {
         let now = Date().timeIntervalSince1970
-        if let parameters {
-            server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true,
-                                           payload: parameters.encoded()), videoToken: token)
-        }
-        server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: keyframe, payload: bytes), videoToken: token)
+        server.broadcastEncodedFrame(bytes, keyframe: keyframe, parameters: parameters, timestamp: now, token: token)
     }
 
     func requestKeyframe() { sendControl(.requestKeyframe) }

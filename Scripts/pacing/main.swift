@@ -109,7 +109,36 @@ final class FakeEncoder {
 
 let encoder = FakeEncoder(kf: keyBytes, delta: deltaBytes)
 let server = try StreamServer(advertise: false)
-let psPayload = ParameterSets(nalUnitHeaderLength: 4, sets: [Data(count: 24), Data(count: 40), Data(count: 8)]).encoded()
+let ps = ParameterSets(nalUnitHeaderLength: 4, sets: [Data(count: 24), Data(count: 40), Data(count: 8)])
+let psPayload = ps.encoded()
+#if PACING_EPOCH_RESET
+var videoEpoch = VideoStreamEpoch()
+#endif
+#if PACING_BOUNDED_INGRESS
+var videoToken = UUID()
+server.beginVideoStream(videoToken, reset: videoEpoch.nextReset())
+#endif
+
+// Called on the fake capture queue; each version gets its own restart and wire format.
+func resetVideo() {
+    #if PACING_BOUNDED_INGRESS
+    videoToken = UUID()
+    server.beginVideoStream(videoToken, reset: videoEpoch.nextReset())
+    #elseif PACING_EPOCH_RESET
+    server.resetForNewStream(reset: videoEpoch.nextReset())
+    #else
+    server.resetForNewStream()
+    #endif
+}
+func sendFakeVideo(key: Bool, size: Int, timestamp: Double) {
+    #if PACING_BOUNDED_INGRESS
+    server.broadcastEncodedFrame(Data(count: size), keyframe: key, parameters: key ? ps : nil,
+                                 timestamp: timestamp, token: videoToken)
+    #else
+    if key { server.broadcast(StreamMessage(kind: .parameterSets, timestamp: timestamp, isKeyframe: true, payload: psPayload)) }
+    server.broadcast(StreamMessage(kind: .frame, timestamp: timestamp, isKeyframe: key, payload: Data(count: size)))
+    #endif
+}
 
 server.onKeyframeNeeded = { encoder.requestKeyframe() }
 #if LINK_JUDGE
@@ -225,7 +254,7 @@ frameTimer.setEventHandler {
         encoder.kf = s.kf; encoder.delta = s.delta
         print("Sizes: keyframe \(s.kf) B, delta \(s.delta) B")
         encoder.requestKeyframe()
-        server.resetForNewStream()          // a settings change restarts the stream
+        resetVideo()                        // a settings change restarts the stream
         #if LINK_JUDGE
         server.resetLinks()                 // …at another quality: the links are judged afresh
         #endif
@@ -234,7 +263,7 @@ frameTimer.setEventHandler {
         restartDue = nil
         print("Restart: the stream starts again (keyframe \(encoder.kf) B)")
         encoder.requestKeyframe()
-        server.resetForNewStream()
+        resetVideo()
     }
     if let spell = stills.first(where: { t >= $0.t && t < $0.t + $0.d }) {
         if stillSince == nil {
@@ -245,8 +274,7 @@ frameTimer.setEventHandler {
         guard t - stillSince! >= 0.05, encoder.stillKeyframe() else { return }
         let now = Date().timeIntervalSince1970
         Stats.shared.bump("enc.out")
-        server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true, payload: psPayload))
-        server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: true, payload: Data(count: encoder.kf)))
+        sendFakeVideo(key: true, size: encoder.kf, timestamp: now)
         lastFrameStamp = now
         print("Still: the last frame again as a keyframe")
         return
@@ -256,8 +284,7 @@ frameTimer.setEventHandler {
     Stats.shared.bump("cap.complete")
     Stats.shared.bump("enc.out")
     let now = Date().timeIntervalSince1970
-    if key { server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true, payload: psPayload)) }
-    server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: key, payload: Data(count: size)))
+    sendFakeVideo(key: key, size: size, timestamp: now)
     lastFrameStamp = now
     if key, restartDue == nil, let r = nextRestarts.first, t >= r.t {
         nextRestarts.removeFirst()

@@ -142,6 +142,8 @@ final class StreamServer {
 
     /// The network queue: both doors, their connections, the verify blocks and the timers.
     let queue: DispatchQueue
+    private let videoIngressLock = NSLock()
+    private var videoIngress = EncodedVideoMailbox()
     private var clients: [ObjectIdentifier: Client] = [:]
     private var lastParameterSets: Data?
     private var videoEpoch = VideoStreamEpoch()
@@ -1356,13 +1358,19 @@ final class StreamServer {
     /// the next keyframe, so nobody decodes frames of the new window with the old format. Each
     /// client's link keeps its judgement (`resetLinks` is the coordinator's to call).
     func resetForNewStream(reset: Data) {
+        videoIngressLock.lock()
+        videoIngress.reset(to: nil)
         queue.async { [self] in resetVideoState(token: nil, reset: reset) }
+        videoIngressLock.unlock()
     }
 
     /// Serial with outgoing video: an old encoder can finish after capture stops, but its output
     /// must never enter a replacement stream, even at the same size and with identical HEVC sets.
     func beginVideoStream(_ token: UUID, reset: Data) {
+        videoIngressLock.lock()
+        videoIngress.reset(to: token)
         queue.async { [self] in resetVideoState(token: token, reset: reset) }
+        videoIngressLock.unlock()
     }
 
     private func resetVideoState(token: UUID?, reset payload: Data) {
@@ -1566,44 +1574,84 @@ final class StreamServer {
 
     /// Thread-safe: hops onto the network queue.
     func broadcast(_ message: StreamMessage, videoToken token: UUID? = nil) {
+        let kind = message.kind, keyframe = message.isKeyframe
         let data = message.serialized()
         queue.async { [self] in
             if let token, token != videoToken { Stats.shared.bump("video.staleEncoded"); return }
-            if message.kind == .parameterSets { lastParameterSets = data }
-            if message.kind == .frame, message.isKeyframe { lastKeyframeAt = Date().timeIntervalSince1970 }
-            var wantKeyframe = false
-            defer { if wantKeyframe { onKeyframeNeeded?() } }
-            for client in clients.values where client.connection.state == .ready {
-                if message.kind == .frame, client.route.isRemote {
-                    if paceRemote(client, message: message, data: data) { wantKeyframe = true }
-                    continue
-                }
-                if message.kind == .frame {
-                    // Its link only counts here (LinkJudge): what it sends and drops is as ever.
-                    if client.needsKeyframe {
-                        guard message.isKeyframe, let ps = lastParameterSets else {
-                            Stats.shared.bump("net.waitKey")
-                            if !client.awaitingFirstKeyframe { client.withheldThisSecond += 1 }
-                            continue
-                        }
-                        if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client) }
-                        send(ps, to: client)
-                        client.needsKeyframe = false
-                        client.awaitingFirstKeyframe = false
-                    } else if client.inflight > 2 && !message.isKeyframe {
-                        // Drop the delta. Every later delta references it, so this client now waits for
-                        // a keyframe (sending deltas anyway is what showed up as flicker on the iPad).
-                        Stats.shared.bump("net.dropped")
-                        client.withheldThisSecond += 1
-                        client.needsKeyframe = true
-                        wantKeyframe = true
+            broadcastOnQueue(kind: kind, keyframe: keyframe, data: data)
+        }
+    }
+
+    /// One atomic encoder output, including its parameter sets. The queue holds at most one
+    /// waiting frame even if its own thread stalls; its current frame may also be in flight.
+    func broadcastEncodedFrame(_ bytes: Data, keyframe: Bool, parameters: ParameterSets?, timestamp: Double, token: UUID) {
+        let frame = StreamMessage(kind: .frame, timestamp: timestamp, isKeyframe: keyframe, payload: bytes).serialized()
+        let ps = parameters.map { StreamMessage(kind: .parameterSets, timestamp: timestamp, isKeyframe: true, payload: $0.encoded()).serialized() }
+        let packet = EncodedVideoMailbox.Packet(data: frame, parameters: ps, isKeyframe: keyframe)
+        videoIngressLock.lock()
+        let offer = videoIngress.offer(packet, token: token)
+        if offer.schedule { queue.async { [self] in drainEncodedFrame(token) } }
+        videoIngressLock.unlock()
+        if offer.stale { Stats.shared.bump("video.staleEncoded") }
+        if offer.dropped { Stats.shared.bump("net.ingressDrop") }
+    }
+
+    private func drainEncodedFrame(_ token: UUID) {
+        let packet = videoIngressLock.withLock { videoIngress.take(token: token) }
+        guard let packet else { return }
+        guard videoToken == token else { Stats.shared.bump("video.staleEncoded"); return }
+        if packet.lostBefore { noteIngressLoss() }
+        if let parameters = packet.parameters { broadcastOnQueue(kind: .parameterSets, keyframe: true, data: parameters) }
+        broadcastOnQueue(kind: .frame, keyframe: packet.isKeyframe, data: packet.data)
+        if packet.lostAfter { noteIngressLoss() }
+    }
+
+    /// A skipped compressed reference affects every client, including an otherwise healthy LAN
+    /// client. Share the bounded trailing recovery used for decoder requests.
+    private func noteIngressLoss() {
+        for (id, client) in clients where client.connection.state == .ready {
+            client.needsKeyframe = true
+            if !client.awaitingFirstKeyframe { client.withheldThisSecond += 1 }
+            pendingDecoderRecovery.insert(id)
+        }
+        flushDecoderRecovery()
+    }
+
+    private func broadcastOnQueue(kind: StreamMessageKind, keyframe: Bool, data: Data) {
+        if kind == .parameterSets { lastParameterSets = data }
+        if kind == .frame, keyframe { lastKeyframeAt = Date().timeIntervalSince1970 }
+        var wantKeyframe = false
+        defer { if wantKeyframe { onKeyframeNeeded?() } }
+        for client in clients.values where client.connection.state == .ready {
+            if kind == .frame, client.route.isRemote {
+                if paceRemote(client, keyframe: keyframe, data: data) { wantKeyframe = true }
+                continue
+            }
+            if kind == .frame {
+                // Its link only counts here (LinkJudge): what it sends and drops is as ever.
+                if client.needsKeyframe {
+                    guard keyframe, let ps = lastParameterSets else {
+                        Stats.shared.bump("net.waitKey")
+                        if !client.awaitingFirstKeyframe { client.withheldThisSecond += 1 }
                         continue
                     }
-                    Stats.shared.bump("net.sent")
-                    client.sentThisSecond += 1
+                    if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client) }
+                    send(ps, to: client)
+                    client.needsKeyframe = false
+                    client.awaitingFirstKeyframe = false
+                } else if client.inflight > 2 && !keyframe {
+                    // Drop the delta. Every later delta references it, so this client now waits for
+                    // a keyframe (sending deltas anyway is what showed up as flicker on the iPad).
+                    Stats.shared.bump("net.dropped")
+                    client.withheldThisSecond += 1
+                    client.needsKeyframe = true
+                    wantKeyframe = true
+                    continue
                 }
-                send(data, to: client, isFrame: message.kind == .frame)
+                Stats.shared.bump("net.sent")
+                client.sentThisSecond += 1
             }
+            send(data, to: client, isFrame: kind == .frame)
         }
     }
 
@@ -1631,11 +1679,11 @@ final class StreamServer {
     ///   has had none since it was admitted or the stream changed (the first keyframe).
     /// Returns whether to ask for one now. On `queue`. No new Stats key: skipped frames count as
     /// net.waitKey, dropped ones as net.dropped, sent ones as net.sent.
-    private func paceRemote(_ client: Client, message: StreamMessage, data: Data) -> Bool {
+    private func paceRemote(_ client: Client, keyframe: Bool, data: Data) -> Bool {
         var ask = false
         client.backlogFloor = min(client.backlogFloor, client.pendingBytes)
         if client.needsKeyframe {
-            guard message.isKeyframe else {
+            guard keyframe else {
                 Stats.shared.bump("net.waitKey")
                 if !client.awaitingFirstKeyframe { client.withheldThisSecond += 1 }
                 let now = Date().timeIntervalSince1970
@@ -1675,7 +1723,7 @@ final class StreamServer {
         }
         Stats.shared.bump("net.sent")
         client.sentThisSecond += 1
-        send(data, to: client, isFrame: true, isKeyframe: message.isKeyframe)
+        send(data, to: client, isFrame: true, isKeyframe: keyframe)
         return false
     }
 

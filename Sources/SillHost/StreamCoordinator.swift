@@ -1598,10 +1598,7 @@ package final class StreamCoordinator {
         server.beginVideoStream(videoToken, reset: videoEpoch.nextReset())
         enc.onEncoded = { data, isKey, parameterSets in
             let now = Date().timeIntervalSince1970
-            if let ps = parameterSets {
-                server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true, payload: ps.encoded()), videoToken: videoToken)
-            }
-            server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: isKey, payload: data), videoToken: videoToken)
+            server.broadcastEncodedFrame(data, keyframe: isKey, parameters: parameterSets, timestamp: now, token: videoToken)
         }
         if let filter {
             capture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }
