@@ -49,14 +49,14 @@ func verifyRestored(_ before: [[String: Double]]) async -> Bool {
 }
 
 final class Frames: @unchecked Sendable {
-    let audit: PixelMotionAudit?
+    let audit: (any FrameAudit)?
     let onFrameID: (@Sendable (Int32, Double) -> Void)?
     private let lock = NSLock()
     private var start = Double.infinity, end = Double.infinity
     private var count = 0, badSize = 0
     private var seen = 0
     private var stopError: String?
-    init(audit: PixelMotionAudit?, onFrameID: (@Sendable (Int32, Double) -> Void)? = nil) {
+    init(audit: (any FrameAudit)?, onFrameID: (@Sendable (Int32, Double) -> Void)? = nil) {
         self.audit = audit; self.onFrameID = onFrameID
     }
     func begin(seconds: Int) -> Double {
@@ -123,9 +123,11 @@ func runCapture() async {
     let picker = DesktopCapturePicker()
     let capture = WindowCapture()
     var fixture: Process?
+    var fixtureControl: Pipe?
     var encoded: HEVCEncoder?
     var decoded: HardwareHEVCDecoder?
     let native = CommandLine.arguments.contains("--native")
+    let appWorkload = CommandLine.arguments.contains("--native-app-workload")
     let before = displaySnapshot()
     printSnapshot("DISPLAY_BEFORE", before)
     do {
@@ -171,7 +173,18 @@ func runCapture() async {
             print("PICKER CAPTURE START/STOP PASS samples=\(frames.summary.0); performanceAcceptance=false; nativeGeometryAcceptance=false")
         } else {
             guard desktop.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
-            if let path = ProcessInfo.processInfo.environment["DUODESK_PICKER_FIXTURE"] {
+            if appWorkload {
+                guard CommandLine.arguments.contains("--hardware-codec"),
+                      let path = ProcessInfo.processInfo.environment["DUODESK_PICKER_APP_FIXTURE"] else {
+                    throw PixelMotionAudit.Failure.unavailable
+                }
+                let process = Process()
+                let control = Pipe()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.standardInput = control
+                try process.run()
+                fixture = process; fixtureControl = control
+            } else if let path = ProcessInfo.processInfo.environment["DUODESK_PICKER_FIXTURE"] {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: path)
                 var environment = ProcessInfo.processInfo.environment
@@ -184,11 +197,13 @@ func runCapture() async {
                 try process.run()
                 fixture = process
             }
-            let latency = CommandLine.arguments.contains("--hardware-codec") ? CodecMotionLatency() : nil
-            let frames = Frames(audit: try PixelMotionAudit(), onFrameID: { id, time in latency?.capture(id, time) })
+            let latency = !appWorkload && CommandLine.arguments.contains("--hardware-codec") ? CodecMotionLatency() : nil
+            let captureAudit: any FrameAudit = appWorkload ? try DesktopContentAudit() : try PixelMotionAudit()
+            let frames = Frames(audit: captureAudit, onFrameID: { id, time in latency?.capture(id, time) })
             var decodedFrames: Frames?
             if CommandLine.arguments.contains("--hardware-codec") {
-                let received = Frames(audit: try PixelMotionAudit(), onFrameID: { id, time in latency?.decode(id, time) })
+                let decodeAudit: any FrameAudit = appWorkload ? try DesktopContentAudit() : try PixelMotionAudit()
+                let received = Frames(audit: decodeAudit, onFrameID: { id, time in latency?.decode(id, time) })
                 let decoder = HardwareHEVCDecoder(onFormat: { size, _ in
                     if size != CGSize(width: 2008, height: 1428) {
                         received.stopped(DuoDesktopDisplay.Failure.invalidResolution)
@@ -233,14 +248,24 @@ func runCapture() async {
             try frames.check()
             let began = frames.begin(seconds: 30)
             let decodedBegan = decodedFrames?.begin(seconds: 30)
-            for _ in 0..<60 {
+            for step in 0..<60 {
                 try await Task.sleep(for: .milliseconds(500))
+                if appWorkload, fixture?.isRunning != true { throw PixelMotionAudit.Failure.invalidFrames }
+                if step == 1, let fixtureControl {
+                    guard fixture?.isRunning == true else { throw PixelMotionAudit.Failure.invalidFrames }
+                    try fixtureControl.fileHandleForWriting.write(contentsOf: Data([1]))
+                    try fixtureControl.fileHandleForWriting.close()
+                    print("Native document scrolling enabled after a stationary baseline")
+                }
                 try frames.check()
                 try decodedFrames?.check()
                 guard desktop.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
             }
             await capture.stop()
             capture.onFrame = nil
+            // The measurement window is already closed. Let callbacks submitted before stop
+            // reach the audits; late arrivals remain outside the fixed 30-second interval.
+            if decodedFrames != nil { try await Task.sleep(for: .milliseconds(250)) }
             let (count, badSize) = frames.summary
             var accepted = badSize == 0 && count > 0
             print("NATIVE SAMPLES: count=\(count), fps=\(Double(count) / 30), wrongDimensions=\(badSize)")
@@ -260,7 +285,7 @@ func runCapture() async {
             decoded?.clear()
             if let latency { print(latency.report()) }
             guard accepted else { throw PixelMotionAudit.Failure.invalidFrames }
-            print("CAPTURE SAMPLING CHECK FINISHED; inProcessHardwareCodec=\(decodedFrames != nil); networkAcceptance=false; realDuoAcceptance=false")
+            print("CAPTURE SAMPLING CHECK FINISHED; nativeAppWorkload=\(appWorkload); inProcessHardwareCodec=\(decodedFrames != nil); networkAcceptance=false; realDuoAcceptance=false")
         }
     } catch {
         await capture.stop()

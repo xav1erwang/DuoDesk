@@ -92,9 +92,16 @@ final class DuoDesktopDisplay {
     }
     /// Keep the diagnostic filter choice separate from the capture interval policy.
     var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && followsNativeCadence }
+    /// A physical resolution may change, but its reported refresh must stay exactly as it was.
+    /// Unknown or slower physical clocks use the virtual desktop instead of a different mode.
+    nonisolated static func permitsPhysicalMode(currentHz: Double, candidateHz: Double, fps: Int) -> Bool {
+        currentHz.isFinite && candidateHz.isFinite && currentHz > 0 && (1...240).contains(fps)
+            && candidateHz == currentHz && candidateHz >= Double(fps) - 0.5
+    }
     var activeModeMatches: Bool {
         guard !pendingMirror, let resolution, let requestedFPS, let mode = CGDisplayCopyDisplayMode(capturedID),
-              mode.refreshRate >= Double(requestedFPS) - 0.5 else { return false }
+              mode.refreshRate >= Double(requestedFPS) - 0.5,
+              physicalRefreshMatchesOriginal else { return false }
         if temporary != nil {
             guard abs(mode.refreshRate - Double(requestedFPS)) < 0.5 else { return false }
             switch layout {
@@ -110,8 +117,20 @@ final class DuoDesktopDisplay {
                           Self.sameMode(CGDisplayCopyDisplayMode(old.id), old.mode) else { return false }
                 }
             }
+        } else {
+            guard let original = originals.first(where: { $0.id == originalMainID }),
+                  mode.refreshRate == original.mode.refreshRate else { return false }
         }
         return resolution.accepts(width: mode.pixelWidth, height: mode.pixelHeight)
+    }
+
+    /// WindowServer can itself choose a different physical clock while changing a mirror graph.
+    /// Reject that graph and restore the snapshot instead of silently changing panel refresh.
+    private var physicalRefreshMatchesOriginal: Bool {
+        !originals.isEmpty && originals.allSatisfy { original in
+            guard CGDisplayIsOnline(original.id) != 0, let mode = CGDisplayCopyDisplayMode(original.id) else { return false }
+            return mode.refreshRate == original.mode.refreshRate
+        }
     }
 
     func prepare(_ wanted: DuoDesktopResolution, fps: Int) async throws -> Prepared {
@@ -154,18 +173,17 @@ final class DuoDesktopDisplay {
         do {
             let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
             let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
-            let native = modes.filter {
-                wanted.accepts(width: $0.pixelWidth, height: $0.pixelHeight) && $0.refreshRate >= Double(fps) - 0.5
+            let matchingModes = modes.filter {
+                wanted.accepts(width: $0.pixelWidth, height: $0.pixelHeight)
+                    && Self.permitsPhysicalMode(currentHz: home.mode.refreshRate, candidateHz: $0.refreshRate, fps: fps)
             }
-                .sorted { a, b in
-                    let aExact = abs(a.refreshRate - Double(fps)) < 0.5
-                    let bExact = abs(b.refreshRate - Double(fps)) < 0.5
-                    if aExact != bExact { return aExact }
-                    return a.width == b.width ? a.refreshRate > b.refreshRate : a.width < b.width
-                }.first
+            let native = matchingModes.first { Self.sameMode($0, home.mode) }
+                ?? matchingModes.min { $0.width < $1.width }
             if let native {
-                try configure { config in
-                    CGConfigureDisplayWithDisplayMode(config, main, native, nil)
+                if !Self.sameMode(native, home.mode) {
+                    try configure { config in
+                        CGConfigureDisplayWithDisplayMode(config, main, native, nil)
+                    }
                 }
                 capturedID = main
             } else {
@@ -213,13 +231,18 @@ final class DuoDesktopDisplay {
 
     func attachPreparedMirror() throws {
         guard pendingMirror else { return }
-        guard let display = temporary, let home = originals.first(where: { $0.id == originalMainID }),
-              CGDisplayIsOnline(home.id) != 0, CGDisplayIsOnline(display.displayID) != 0 else {
-            throw Failure.displayUnavailable
+        do {
+            guard let display = temporary, let home = originals.first(where: { $0.id == originalMainID }),
+                  CGDisplayIsOnline(home.id) != 0, CGDisplayIsOnline(display.displayID) != 0 else {
+                throw Failure.displayUnavailable
+            }
+            try attachMirror(display, home: home)
+            pendingMirror = false
+            guard activeModeMatches else { throw Failure.modeRejected }
+        } catch {
+            _ = restore()
+            throw error
         }
-        try attachMirror(display, home: home)
-        pendingMirror = false
-        guard activeModeMatches else { throw Failure.modeRejected }
     }
 
     private func attachMirror(_ display: VirtualDisplay, home: Original) throws {
@@ -230,6 +253,10 @@ final class DuoDesktopDisplay {
             return CGConfigureDisplayMirrorOfDisplay(config, home.id, display.displayID)
         }
         guard CGDisplayMirrorsDisplay(home.id) == display.displayID else { throw Failure.modeRejected }
+        guard physicalRefreshMatchesOriginal else {
+            print("Duo mirror rejected: WindowServer changed a physical display's reported refresh rate.")
+            throw Failure.modeRejected
+        }
         print("Duo mirror timing: desktop \(display.refreshHz) Hz; source \(CGDisplayCopyDisplayMode(home.id)?.refreshRate ?? 0) Hz")
     }
 

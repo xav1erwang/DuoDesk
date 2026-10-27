@@ -144,16 +144,73 @@ final class WindowCatalog {
         return all.windows.first { $0.windowID == id && !Self.isOwn($0) }
     }
 
-    /// `ownApplication`, else one look at every window (on screen or not) for this process. The
-    /// on-screen look can miss Sill while it shows nothing on screen: its status item's window
+    /// `ownApplication`, else the system's redacted current-process inventory, then (when already
+    /// authorized) one look at every window on screen or off. The current-process query does not
+    /// request Screen Recording and can identify this app even when no global grant is present.
+    /// The on-screen look can miss Sill while it shows nothing on screen: its status item's window
     /// leaves the list while a full-screen app hides the menu bar, and a Desktop stream started
-    /// then would leave nothing out, so a pairing window opened later would reach the devices. Nil
-    /// when this process has no window at all (the CLI).
+    /// then would leave nothing out, so a pairing window opened later would reach the devices. A
+    /// temporary invisible window also permits identification when the app has no visible windows.
     func resolveOwnApplication() async -> SCRunningApplication? {
         if let own = ownApplication { return own }
+        if #available(macOS 14.4, *) {
+            if let current = await Self.currentProcessContent(timeout: 3), let own = Self.ownedApplication(in: current) {
+                ownApplication = own; return own
+            }
+            // A menu-only app can be absent from the redacted inventory while every real window is
+            // closed. Register a transparent, noninteractive own window briefly so the system can
+            // identify the process. It never contains the pairing code or changes another app.
+            if let own = await ownApplicationWithSentinel() {
+                ownApplication = own; return own
+            }
+        }
+        // Avoid starting an inventory that could ask for a global recording grant. An existing
+        // grant allows the original full-list fallback; otherwise the caller must fail closed.
+        guard CGPreflightScreenCaptureAccess() else { return nil }
         guard let all = await Self.shareableContent(excludingDesktopWindows: false, onScreenWindowsOnly: false, timeout: 3) else { return nil }
-        return all.applications.first { $0.processID == Self.ownPID }
-            ?? all.windows.first { Self.isOwn($0) }?.owningApplication
+        let own = Self.ownedApplication(in: all)
+        if let own { ownApplication = own }
+        return own
+    }
+
+    private static func ownedApplication(in content: SCShareableContent) -> SCRunningApplication? {
+        content.applications.first { $0.processID == ownPID }
+            ?? content.windows.first { isOwn($0) }?.owningApplication
+    }
+
+    @available(macOS 14.4, *)
+    private func ownApplicationWithSentinel() async -> SCRunningApplication? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let window = NSWindow(contentRect: NSRect(x: screen.frame.minX, y: screen.frame.minY, width: 2, height: 2),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false; window.backgroundColor = .clear
+        window.alphaValue = 0; window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.close() }
+        do { try await Task.sleep(for: .milliseconds(200)) } catch { return nil }
+        guard let content = await Self.currentProcessContent(timeout: 3) else { return nil }
+        return Self.ownedApplication(in: content)
+    }
+
+    /// A bounded request; the callback may never arrive after a display handover. Dropping a late
+    /// answer keeps a cancelled or timed-out source switch from being resumed a second time.
+    @available(macOS 14.4, *)
+    nonisolated static func currentProcessContent(timeout: TimeInterval) async -> SCShareableContent? {
+        final class Once: @unchecked Sendable {
+            private let lock = NSLock(); private var done = false
+            func first() -> Bool { lock.withLock { if done { return false }; done = true; return true } }
+        }
+        let once = Once()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<SCShareableContent?, Never>) in
+            SCShareableContent.getCurrentProcessShareableContent { content, _ in
+                if once.first() { continuation.resume(returning: content) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if once.first() { continuation.resume(returning: nil) }
+            }
+        }
     }
 
     /// One of this process's own windows (Settings, the log, the pairing window with its code).
@@ -241,7 +298,9 @@ final class WindowCatalog {
         }
         guard seq > appliedSeq else { return }      // a newer refresh already landed; don't go backwards
         appliedSeq = seq
-        ownApplication = content.applications.first { $0.processID == Self.ownPID }
+        if let own = content.applications.first(where: { $0.processID == Self.ownPID }) {
+            ownApplication = own
+        }
         display = preferMainDisplay
             ? (content.displays.first { $0.displayID == CGMainDisplayID() } ?? content.displays.first)
             : content.displays.first

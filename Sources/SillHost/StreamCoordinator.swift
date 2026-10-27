@@ -1504,14 +1504,22 @@ package final class StreamCoordinator {
                 }
                 // Sill's own windows (Settings, Log, the pairing window with its code) never go out
                 // in a Desktop stream. Fixed here at pipeline start: a running SCStream is never
-                // reconfigured, so a host that can show a pairing code (remote access) looks for
-                // Sill among every window when the last on-screen look missed it; excluding nothing
-                // would let a pairing window opened later reach the devices. Without Sill anywhere
-                // (the CLI has no windows), as before.
+                // reconfigured, so a bundled host resolves its own application even when the last
+                // on-screen look missed it; excluding nothing could expose a window opened later.
+                // The unbundled CLI has no windows and retains its previous behaviour.
                 var own = catalog.ownApplication
-                if own == nil, remote != nil, Bundle.main.bundleURL.pathExtension == "app" {
+                let mustExcludeHostWindows = Bundle.main.bundleURL.pathExtension.lowercased() == "app"
+                if own == nil, mustExcludeHostWindows {
                     own = await catalog.resolveOwnApplication()
-                    guard !shuttingDown else { active = .none; broadcastList(); return }
+                    guard !shuttingDown, catalog.clientCount > 0 else { active = .none; broadcastList(); return }
+                }
+                // A bundled host can show Settings, Log and a future pairing code at any time.
+                // Never fall through to a full-display filter when its application is missing.
+                guard !mustExcludeHostWindows || own != nil else {
+                    print("Desktop capture withheld: the host application could not be excluded safely.")
+                    active = .none; broadcastList()
+                    server.goodbyeAll(Goodbye(reason: "duoPrivacy", message: "Mac 无法安全隐藏主机窗口，桌面共享已停止。", reconnect: false), within: 0.1)
+                    return
                 }
                 if let own {
                     filter = SCContentFilter(display: d, excludingApplications: [own], exceptingWindows: [])

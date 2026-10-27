@@ -14,7 +14,9 @@ swiftc -O -package-name Sill -I "$out" -L "$app/Contents/Frameworks" -lStreamPro
   Sources/SillHost/Stats.swift Sources/SillHost/WindowCapture.swift Sources/SillHost/DesktopCapturePicker.swift \
   Sources/SillHost/EncoderMailbox.swift Sources/SillHost/EncoderSlowState.swift Sources/SillHost/HEVCEncoder.swift \
   iOSClient/HardwareHEVCDecoder.swift \
-  Tests/duodesk/capture-probe/PixelMotionAudit.swift Tests/duodesk/picker-capture-probe/main.swift \
+  Tests/duodesk/capture-probe/PixelMotionAudit.swift Tests/duodesk/picker-capture-probe/FrameAudit.swift \
+  Tests/duodesk/picker-capture-probe/DesktopContentAudit.swift \
+  Tests/duodesk/picker-capture-probe/main.swift \
   -o "$app/Contents/MacOS/PickerCapture"
 python3 - "$app/Contents/Info.plist" <<'PY'
 import plistlib, sys
