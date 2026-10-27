@@ -1,6 +1,7 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 // Test-only comparison of actual luma pixels. No pixels are written to disk.
 import CoreVideo
+import Darwin
 import Metal
 
 /// Compares every luma pixel with the preceding frame on the GPU. The center region is inside the
@@ -26,22 +27,33 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
         let width: Int
         let height: Int
     }
+    private struct ReducedResult {
+        let comparison: (Double, Double, Double, Int)?
+        let failed: Bool
+    }
     private let queue: any MTLCommandQueue
     private let pipeline: any MTLComputePipelineState
     private let cache: CVMetalTextureCache
     private let activeOffsetSeconds: Int
+    private let profileLockWait: Bool
     private let submissionQueue = DispatchQueue(label: "duodesk.desktop-content-audit", qos: .userInteractive)
     private var previous: Surface?  // submissionQueue only
     private let pending = DispatchGroup()
     private let lock = NSLock()
     private var inFlight = 0, sequence = 0, next = 1, failed = 0, dropped = 0
-    private var ready: [Int: Result] = [:]
+    private var ready: [Int: ReducedResult] = [:]
+    private var lockWaitTicks: [UInt64] = []
     private var comparisons: [(Double, Double, Double, Int)] = []
     private var validationPassed = false
     private var reportedFPS: Double?
     var changedFramesPerSecond: Double? { lock.withLock { reportedFPS } }
+    #if DUO_AUDIT_TESTING
+    var testingSecondFinishDelay: Double = 0
+    private var testingFinished: [Int] = []
+    var testingFinishedOrder: [Int] { lock.withLock { testingFinished } }
+    #endif
 
-    init(activeOffsetSeconds: Int = 1) throws {
+    init(activeOffsetSeconds: Int = 1, profileLockWait: Bool = false) throws {
         precondition(activeOffsetSeconds >= 1)
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw PixelMotionAudit.Failure.unavailable
@@ -73,10 +85,13 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
         guard let function = library.makeFunction(name: "compareTiles") else { throw PixelMotionAudit.Failure.unavailable }
         self.pipeline = try device.makeComputePipelineState(function: function)
         self.queue = queue; self.cache = cache; self.activeOffsetSeconds = activeOffsetSeconds
+        self.profileLockWait = profileLockWait
     }
 
     func inspect(_ image: CVPixelBuffer, at time: Double, onResult: (@Sendable (Int32, Double) -> Void)?) {
+        let beforeLock = profileLockWait ? mach_absolute_time() : 0
         let number: Int? = lock.withLock {
+            if profileLockWait { lockWaitTicks.append(mach_absolute_time() - beforeLock) }
             guard inFlight < 8 else { dropped += 1; return nil }
             inFlight += 1; sequence += 1; return sequence
         }
@@ -118,7 +133,16 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
                     return Array(UnsafeBufferPointer(start: submission.result.contents().assumingMemoryBound(to: UInt32.self),
                                                      count: columns * rows * 2))
                 }
-                finish(number, Result(time: time, tiles: values, width: width, height: height))
+                let result = Result(time: time, tiles: values, width: width, height: height)
+                #if DUO_AUDIT_TESTING
+                if number == 2, testingSecondFinishDelay > 0 {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + testingSecondFinishDelay) { [self] in
+                        finish(number, result)
+                    }
+                    return
+                }
+                #endif
+                finish(number, result)
             }
             command.commit()
         } catch {
@@ -127,34 +151,57 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
         }
     }
 
+    private func reduce(_ number: Int, _ result: Result) -> ReducedResult {
+        guard let values = result.tiles else { return ReducedResult(comparison: nil, failed: true) }
+        guard number > 1 else { return ReducedResult(comparison: nil, failed: false) }
+        let columns = (result.width + 15) / 16, rows = (result.height + 15) / 16
+        var fullDelta: UInt64 = 0, centerDelta: UInt64 = 0
+        var centerPixels = 0, changedPixels = 0
+        for y in 0..<rows {
+            for x in 0..<columns {
+                let i = (y * columns + x) * 2
+                fullDelta += UInt64(values[i])
+                if x * 16 >= result.width * 3 / 10, (x + 1) * 16 <= result.width * 7 / 10,
+                   y * 16 >= result.height * 3 / 10, (y + 1) * 16 <= result.height * 7 / 10 {
+                    centerDelta += UInt64(values[i]); centerPixels += 256
+                    changedPixels += Int(values[i + 1])
+                }
+            }
+        }
+        let fullMean = Double(fullDelta) / Double(result.width * result.height)
+        let centerMean = centerPixels == 0 ? 0 : Double(centerDelta) / Double(centerPixels)
+        return ReducedResult(comparison: (result.time, fullMean, centerMean, changedPixels), failed: false)
+    }
+
     private func finish(_ number: Int, _ result: Result) {
+        // Reduction touches every tile. Keep it outside the lock used by the capture callback.
+        let reduced = reduce(number, result)
         lock.withLock {
             inFlight -= 1
-            ready[number] = result
+            ready[number] = reduced
+            #if DUO_AUDIT_TESTING
+            testingFinished.append(number)
+            #endif
             while let result = ready.removeValue(forKey: next) {
-                let index = next; next += 1
-                guard let values = result.tiles else { failed += 1; continue }
-                guard index > 1 else { continue }
-                let columns = (result.width + 15) / 16, rows = (result.height + 15) / 16
-                var fullDelta: UInt64 = 0, centerDelta: UInt64 = 0
-                var centerPixels = 0, changedPixels = 0
-                for y in 0..<rows {
-                    for x in 0..<columns {
-                        let i = (y * columns + x) * 2
-                        fullDelta += UInt64(values[i])
-                        if x * 16 >= result.width * 3 / 10, (x + 1) * 16 <= result.width * 7 / 10,
-                           y * 16 >= result.height * 3 / 10, (y + 1) * 16 <= result.height * 7 / 10 {
-                            centerDelta += UInt64(values[i]); centerPixels += 256
-                            changedPixels += Int(values[i + 1])
-                        }
-                    }
-                }
-                let fullMean = Double(fullDelta) / Double(result.width * result.height)
-                let centerMean = centerPixels == 0 ? 0 : Double(centerDelta) / Double(centerPixels)
-                comparisons.append((result.time, fullMean, centerMean, changedPixels))
+                next += 1
+                if result.failed { failed += 1; continue }
+                if let comparison = result.comparison { comparisons.append(comparison) }
             }
         }
         pending.leave()
+    }
+
+    func lockWaitReport() -> String {
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom != 0 else {
+            return "AUDIT LOCK WAIT: timebase unavailable"
+        }
+        let values = lock.withLock { lockWaitTicks }.map {
+            Double($0) * Double(timebase.numer) / Double(timebase.denom) / 1_000_000
+        }.sorted()
+        guard !values.isEmpty else { return "AUDIT LOCK WAIT: no samples" }
+        let p50 = values[values.count / 2], p95 = values[(values.count * 95 + 99) / 100 - 1]
+        return "AUDIT LOCK WAIT: samples=\(values.count), p50Ms=\(p50), p95Ms=\(p95), maxMs=\(values[values.count - 1]), above1ms=\(values.filter { $0 > 1 }.count), above8ms=\(values.filter { $0 > 8 }.count); diagnostic instrumentation only"
     }
 
     func report(from start: Double, seconds: Int) async -> String {

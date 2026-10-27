@@ -68,5 +68,22 @@ struct Harness {
         do { try movingBaseline.validate() } catch { rejected = true }
         guard rejected else { throw PixelMotionAudit.Failure.invalidFrames }
         print("DESKTOP AUDIT UNIT CHECK PASS: a moving stationary baseline is rejected")
+
+        // Delay the second completion until later GPU work has finished. Results must still be
+        // reported in capture order, with the same stationary baseline and center changes.
+        let reordered = try DesktopContentAudit()
+        reordered.testingSecondFinishDelay = 0.25
+        let times = [0.1, 0.4, 1.1, 1.3, 1.5]
+        for index in times.indices {
+            reordered.inspect(try image(index), at: times[index], onResult: nil)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        print(await reordered.report(from: 0, seconds: 5))
+        try reordered.validate()
+        let order = reordered.testingFinishedOrder
+        guard let second = order.firstIndex(of: 2), let third = order.firstIndex(of: 3), second > third,
+              reordered.comparisonSnapshot().map(\.time) == Array(times.dropFirst()),
+              reordered.changedFramesPerSecond == 0.75 else { throw PixelMotionAudit.Failure.invalidFrames }
+        print("DESKTOP AUDIT UNIT CHECK PASS: reordered completion \(order) preserves capture order")
     }
 }

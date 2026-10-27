@@ -35,7 +35,9 @@ final class Frames: @unchecked Sendable {
         }
     }
     #endif
-    init() throws { audit = try DesktopContentAudit(activeOffsetSeconds: 2) }
+    init(profileAuditLock: Bool = false) throws {
+        audit = try DesktopContentAudit(activeOffsetSeconds: 2, profileLockWait: profileAuditLock)
+    }
     func begin(seconds: Int) -> Double {
         lock.withLock {
             start = ProcessInfo.processInfo.systemUptime; end = start + Double(seconds)
@@ -218,11 +220,13 @@ func run() async {
         guard width == 2008, height == 1428 else { throw PixelMotionAudit.Failure.invalidFrames }
         let diagnostic = CommandLine.arguments.contains("--diagnose")
         let captureOnly = CommandLine.arguments.contains("--capture-only")
+        let profileAuditLock = CommandLine.arguments.contains("--audit-lock-profile")
         guard !captureOnly || (diagnostic && !CommandLine.arguments.contains("--quic-loopback")
                                && !CommandLine.arguments.contains("--request-keyframe")) else {
             throw PixelMotionAudit.Failure.unavailable
         }
-        let captured = try Frames()
+        guard !profileAuditLock || captureOnly else { throw PixelMotionAudit.Failure.unavailable }
+        let captured = try Frames(profileAuditLock: profileAuditLock)
         var decoded: Frames?
         if !captureOnly {
             let frames = try Frames()
@@ -293,6 +297,7 @@ func run() async {
         let (samples, wrong) = captured.summary
         print("OWN WINDOW CAPTURE: samples=\(samples), wrongDimensions=\(wrong)")
         print(await captured.audit.report(from: capturedStart, seconds: duration))
+        if profileAuditLock { print(captured.audit.lockWaitReport()) }
         #if DUO_CAPTURE_DIAGNOSTICS
         print(captured.metadataReport())
         if CommandLine.arguments.contains("--scroll-correlation") { print(captured.scrollTimingReport(scrollTimes)) }
