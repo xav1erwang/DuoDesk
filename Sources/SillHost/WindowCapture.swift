@@ -19,6 +19,10 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var generation = UUID()
     private var startupFailure: (any Error)?
     private var framePacer: CaptureFramePacer?
+    // At most one real sample waits for a pacing deadline. Replacing it keeps the newest image;
+    // the token makes delayed work from a stopped or superseded stream harmless.
+    private var pendingSample: CMSampleBuffer?
+    private var pendingSampleToken: UUID?
     private let queue = DispatchQueue(label: "sill.capture", qos: .userInteractive)
     var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
     #if DUO_CAPTURE_DIAGNOSTICS
@@ -89,6 +93,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             generation = UUID()
             startupFailure = nil
             framePacer = resampleCadence ? CaptureFramePacer(fps: fps) : nil
+            pendingSample = nil
+            pendingSampleToken = nil
             framesSeen = 0
         }
         do {
@@ -100,7 +106,12 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             if let failure { throw failure }
         } catch {
             stateLock.withLock {
-                if self.stream === stream { self.stream = nil }
+                if self.stream === stream {
+                    self.stream = nil
+                    framePacer = nil
+                    pendingSample = nil
+                    pendingSampleToken = nil
+                }
             }
             try? await stream.stopCapture()
             await drainOutputQueue()
@@ -123,6 +134,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             generation = UUID()
             startupFailure = nil
             framePacer = nil
+            pendingSample = nil
+            pendingSampleToken = nil
             return previous
         }
         if let previous { try? await previous.stopCapture() }
@@ -143,24 +156,79 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         else { Stats.shared.bump("cap.noStatus"); return }
         // .idle frames (nothing changed) are skipped, which is what we want.
         guard status == .complete else { Stats.shared.bump(status == .idle ? "cap.idle" : "cap.status\(statusRaw)"); return }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { Stats.shared.bump("cap.noPixels"); return }
+        guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { Stats.shared.bump("cap.noPixels"); return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let delivery = stateLock.withLock { () -> (current: Bool, first: Bool, pacedOut: Bool) in
-            guard self.stream === stream else { return (false, false, false) }
+        let selection = stateLock.withLock { () -> Selection in
+            guard self.stream === stream else { return .ignored }
             if var pacer = framePacer {
-                let admitted = pacer.admit(pts)
+                let decision = pacer.consider(pts)
                 framePacer = pacer
-                if !admitted { return (true, false, true) }
+                switch decision {
+                case .discard:
+                    return .discarded
+                case .hold(let wait):
+                    let replaced = pendingSample != nil
+                    pendingSample = sampleBuffer
+                    if pendingSampleToken != nil { return .held(replaced: replaced, timer: nil) }
+                    let token = UUID()
+                    pendingSampleToken = token
+                    return .held(replaced: replaced, timer: (wait, token))
+                case .emit:
+                    break
+                }
             }
+            let replaced = pendingSample != nil
+            pendingSample = nil
+            pendingSampleToken = nil
             framesSeen += 1
-            return (true, framesSeen == 1, false)
+            return .emit(first: framesSeen == 1, replaced: replaced)
         }
-        guard delivery.current else { return }
-        if delivery.pacedOut { Stats.shared.bump("cap.cadenceDrop"); return }
+        switch selection {
+        case .ignored:
+            return
+        case .discarded:
+            Stats.shared.bump("cap.cadenceDrop")
+        case .held(let replaced, let timer):
+            if replaced { Stats.shared.bump("cap.cadenceDrop") }
+            if let (wait, token) = timer {
+                queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.deliverPendingSample(token) }
+            }
+        case .emit(let first, let replaced):
+            if replaced { Stats.shared.bump("cap.cadenceDrop") }
+            deliver(sampleBuffer, first: first)
+        }
+    }
+
+    private enum Selection {
+        case ignored, discarded
+        case held(replaced: Bool, timer: (TimeInterval, UUID)?)
+        case emit(first: Bool, replaced: Bool)
+    }
+
+    /// Runs on the same serial queue as SCK output. This delivers an actual changed sample even
+    /// if the desktop becomes static before the next eligible capture callback.
+    private func deliverPendingSample(_ token: UUID) {
+        let pending = stateLock.withLock { () -> (CMSampleBuffer, Bool)? in
+            guard stream != nil, pendingSampleToken == token, let sample = pendingSample,
+                  var pacer = framePacer else { return nil }
+            pendingSample = nil
+            pendingSampleToken = nil
+            pacer.deliveredHeldFrame()
+            framePacer = pacer
+            framesSeen += 1
+            return (sample, framesSeen == 1)
+        }
+        if let (sample, first) = pending { deliver(sample, first: first) }
+    }
+
+    private func deliver(_ sampleBuffer: CMSampleBuffer, first: Bool) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         Stats.shared.bump("cap.complete")
-        if delivery.first { print("Capture: first frame \(CVPixelBufferGetWidth(pixelBuffer))×\(CVPixelBufferGetHeight(pixelBuffer))") }
+        if first { print("Capture: first frame \(CVPixelBufferGetWidth(pixelBuffer))×\(CVPixelBufferGetHeight(pixelBuffer))") }
         #if DUO_CAPTURE_DIAGNOSTICS
-        let info = attachments.first
+        let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]]
+        let info = attachments?.first
         let displayTime = (info?[.displayTime] as? NSNumber)?.uint64Value
         let rectCount = (info?[.dirtyRects] as? [Any])?.count
         let rawRects = info?[.dirtyRects] as? [Any]
@@ -187,6 +255,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             self.stream = nil
             startupFailure = error
             framePacer = nil
+            pendingSample = nil
+            pendingSampleToken = nil
             return Stop(error: error, generation: generation)
         }
         print("Capture stream stopped (\(stopped == nil ? "replaced" : "current")): \(error) — \((error as NSError).userInfo)")

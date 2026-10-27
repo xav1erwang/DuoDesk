@@ -9,16 +9,18 @@ import ScreenCaptureKit
 final class Audit: @unchecked Sendable {
     private let lock = NSLock()
     private var frames = 0
+    private var frameTimes: [CMTime] = []
     private var stops: [WindowCapture.Stop] = []
     private var queueEntered = false
     private var stopFinished = false
-    func frame() { lock.withLock { frames += 1 } }
+    func frame(_ time: CMTime) { lock.withLock { frames += 1; frameTimes.append(time) } }
     func stop(_ event: WindowCapture.Stop) { lock.withLock { stops.append(event) } }
     func enterQueue() { lock.withLock { queueEntered = true } }
     func finishStop() { lock.withLock { stopFinished = true } }
     var snapshot: (frames: Int, stops: [WindowCapture.Stop], entered: Bool, finished: Bool) {
         lock.withLock { (frames, stops, queueEntered, stopFinished) }
     }
+    var times: [CMTime] { lock.withLock { frameTimes } }
 }
 
 struct CheckFailure: Error { let message: String }
@@ -68,7 +70,7 @@ struct Checks {
     static func callbacks() async throws {
         let capture = WindowCapture()
         let audit = Audit()
-        capture.onFrame = { _, _ in audit.frame() }
+        capture.onFrame = { _, pts in audit.frame(pts) }
         capture.onStopped = { audit.stop($0) }
         // Allocate inert stream identities only. Never call startCapture or enumerate content.
         let first = SCStream(filter: SCContentFilter(), configuration: SCStreamConfiguration(), delegate: nil)
@@ -108,7 +110,7 @@ struct Checks {
         // Drive the production output callback with inert stream identities and real timestamps.
         // A stale stream cannot consume the new stream's pacing deadline.
         let paced = WindowCapture(), pacedAudit = Audit()
-        paced.onFrame = { _, _ in pacedAudit.frame() }
+        paced.onFrame = { _, pts in pacedAudit.frame(pts) }
         paced.stateLock.withLock { paced.stream = second; paced.framePacer = CaptureFramePacer(fps: 120) }
         paced.stream(second, didOutputSampleBuffer: try sample(.zero), of: .screen)
         paced.stream(first, didOutputSampleBuffer: try sample(CMTime(value: 100, timescale: 1)), of: .screen)
@@ -120,6 +122,66 @@ struct Checks {
         try expect(pacedAudit.snapshot.frames == 2, "Pacer lost a due frame or delivered a duplicate timestamp")
         paced.stream(second, didStopWithError: error)
         try expect(paced.framePacer == nil, "Stopped capture retained its old pacing state")
+    }
+
+    /// Exercise the actual SCK output entry point with inert stream identities. In particular,
+    /// a final changed frame before the pacing deadline must not leave the receiver on an older
+    /// image forever. No capture, window, display configuration, or listener is started.
+    static func finalFrameDelivery() async throws {
+        let error = NSError(domain: "DuoCallbackFixture", code: 75)
+        let zero = CMTime.zero
+        let early = CMTime(value: 4, timescale: 100)
+        let latest = CMTime(value: 6, timescale: 100)
+        let due = CMTime(value: 11, timescale: 100)
+
+        func makeCapture() -> (WindowCapture, SCStream, Audit) {
+            let capture = WindowCapture(), audit = Audit()
+            let stream = SCStream(filter: SCContentFilter(), configuration: SCStreamConfiguration(), delegate: nil)
+            capture.onFrame = { _, pts in audit.frame(pts) }
+            capture.stateLock.withLock { capture.stream = stream; capture.framePacer = CaptureFramePacer(fps: 10) }
+            return (capture, stream, audit)
+        }
+        func equal(_ actual: [CMTime], _ expected: [CMTime]) -> Bool {
+            actual.count == expected.count && zip(actual, expected).allSatisfy { CMTimeCompare($0, $1) == 0 }
+        }
+
+        let (capture, stream, audit) = makeCapture()
+        let first = try sample(zero), older = try sample(early), final = try sample(latest)
+        capture.queue.sync {
+            capture.stream(stream, didOutputSampleBuffer: first, of: .screen)
+            capture.stream(stream, didOutputSampleBuffer: older, of: .screen)
+            capture.stream(stream, didOutputSampleBuffer: final, of: .screen)
+        }
+        try expect(equal(audit.times, [zero]), "An early frame bypassed the target cadence")
+        try await waitFor { audit.times.count == 2 }
+        try expect(equal(audit.times, [zero, latest]), "The final changed image was not the newest queued frame")
+        try await Task.sleep(for: .milliseconds(150))
+        try expect(equal(audit.times, [zero, latest]), "A queued or duplicate image was delivered twice")
+        capture.stream(stream, didStopWithError: error)
+        await capture.stop()
+
+        let (replaced, active, replacedAudit) = makeCapture()
+        let dueFrame = try sample(due)
+        replaced.queue.sync {
+            replaced.stream(active, didOutputSampleBuffer: first, of: .screen)
+            replaced.stream(active, didOutputSampleBuffer: final, of: .screen)
+            replaced.stream(active, didOutputSampleBuffer: dueFrame, of: .screen)
+        }
+        try expect(equal(replacedAudit.times, [zero, due]), "A newer due frame did not replace the waiting image")
+        try await Task.sleep(for: .milliseconds(150))
+        try expect(equal(replacedAudit.times, [zero, due]), "A superseded waiting image was delivered out of order")
+        replaced.stream(active, didStopWithError: error)
+        await replaced.stop()
+
+        let (stopped, stoppedStream, stoppedAudit) = makeCapture()
+        stopped.queue.sync {
+            stopped.stream(stoppedStream, didOutputSampleBuffer: first, of: .screen)
+            stopped.stream(stoppedStream, didOutputSampleBuffer: final, of: .screen)
+        }
+        stopped.stream(stoppedStream, didStopWithError: error)
+        await stopped.stop()
+        try await Task.sleep(for: .milliseconds(150))
+        try expect(equal(stoppedAudit.times, [zero]), "A pending image escaped after capture stopped")
     }
 
     static func deferredFailure() async throws {
@@ -173,6 +235,7 @@ struct Checks {
 
     static func main() async {
         do {
+            try await finalFrameDelivery()
             try await callbacks()
             try await deferredFailure()
             print("Capture callback checks: \(passed) passed; no capture, input, keychain or listener started.")
