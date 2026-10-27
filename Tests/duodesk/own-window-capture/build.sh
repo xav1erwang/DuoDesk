@@ -8,12 +8,12 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
 swiftc -O -emit-library -emit-module -module-name StreamProtocol Sources/StreamProtocol/*.swift \
   -emit-module-path "$out/StreamProtocol.swiftmodule" -Xlinker -install_name -Xlinker '@rpath/libStreamProtocol.dylib' \
   -o "$app/Contents/Frameworks/libStreamProtocol.dylib"
-swiftc -O -D DUO_CAPTURE_DIAGNOSTICS -package-name Sill -I "$out" -L "$app/Contents/Frameworks" -lStreamProtocol \
+swiftc -O -D DUO_CAPTURE_DIAGNOSTICS -D DUO_RENDER_TRACE -package-name Sill -I "$out" -L "$app/Contents/Frameworks" -lStreamProtocol \
   -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
   Sources/SillHost/*.swift iOSClient/HardwareHEVCDecoder.swift \
   Tests/duodesk/capture-probe/PixelMotionAudit.swift Tests/duodesk/picker-capture-probe/FrameAudit.swift \
   Tests/duodesk/picker-capture-probe/DesktopContentAudit.swift Tests/duodesk/native-document-workload/DocumentWorkload.swift \
-  Tests/duodesk/own-window-capture/LoopbackVideo.swift Tests/duodesk/own-window-capture/VirtualWindowDisplay.swift \
+  Tests/duodesk/own-window-capture/LoopbackVideo.swift Tests/duodesk/own-window-capture/VirtualWindowDisplay.swift Tests/duodesk/own-window-capture/RenderPhaseTrace.swift \
   Tests/duodesk/own-window-capture/main.swift -o "$app/Contents/MacOS/OwnWindowCapture"
 python3 - "$app/Contents/Info.plist" <<'PY'
 import plistlib, sys

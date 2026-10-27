@@ -12,6 +12,11 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
     private var clock: CADisplayLink?
     private var timer: DispatchSourceTimer?
     private var baselineIndicator: NSProgressIndicator?
+    #if DUO_RENDER_TRACE
+    private var renderMarker: RenderPhaseMarker?
+    var onRenderPhaseDraw: (@MainActor (Int, UInt64) -> Void)?
+    var renderMarkerRectInWindow: CGRect? { renderMarker.map { $0.convert($0.bounds, to: nil) } }
+    #endif
     private var ticks = 0
     private var started = 0.0
     private let requestedFrameSize: NSSize?
@@ -93,6 +98,14 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
         scroll.addSubview(indicator, positioned: .above, relativeTo: nil)
         indicator.startAnimation(nil)
         baselineIndicator = indicator
+        #if DUO_RENDER_TRACE
+        if environment["DUODESK_RENDER_TRACE"] == "1" {
+            let marker = RenderPhaseMarker(frame: NSRect(origin: NSPoint(x: 32, y: 12), size: RenderPhaseMarker.size))
+            marker.onDraw = { [weak self] sequence, time in self?.onRenderPhaseDraw?(sequence, time) }
+            scroll.addSubview(marker, positioned: .above, relativeTo: nil)
+            renderMarker = marker
+        }
+        #endif
         window.contentView = scroll
         let visible = screen.visibleFrame
         window.setFrameOrigin(NSPoint(x: visible.midX - window.frame.width / 2,
@@ -159,6 +172,9 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
         let y = min(maximum, scroll.contentView.bounds.origin.y + 1.5)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
         scroll.reflectScrolledClipView(scroll.contentView)
+        #if DUO_RENDER_TRACE
+        renderMarker?.setSequence(ticks)
+        #endif
         onScrollSample?(mach_absolute_time())
         if ticks % 120 == 0 {
             let screen = window?.screen

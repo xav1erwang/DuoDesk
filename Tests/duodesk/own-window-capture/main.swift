@@ -11,6 +11,7 @@ import StreamProtocol
 setbuf(stdout, nil)
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
+if CommandLine.arguments.contains("--render-correlation") { setenv("DUODESK_RENDER_TRACE", "1", 1) }
 let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
                                                      reason: "Native document capture measurement")
 let workload = MainActor.assumeIsolated { DocumentWorkload(frameSize: NSSize(width: 1004, height: 714), usesStdin: false) }
@@ -23,8 +24,12 @@ final class Frames: @unchecked Sendable {
     private var failure: String?
     #if DUO_CAPTURE_DIAGNOSTICS
     private var pendingObservation: (info: WindowCapture.SampleObservation, arrival: UInt64)?
-    private var observations: [(time: Double, info: WindowCapture.SampleObservation, arrival: UInt64)] = []
+    private var observations: [(time: Double, info: WindowCapture.SampleObservation, arrival: UInt64, marker: Int?)] = []
     private var printedDirtyType = false
+    #if DUO_RENDER_TRACE
+    var phaseSampler: RenderPhaseSampler?
+    private var phaseLockWait: [UInt64] = []
+    #endif
     func observe(_ info: WindowCapture.SampleObservation) {
         lock.withLock {
             pendingObservation = (info, mach_absolute_time())
@@ -46,6 +51,9 @@ final class Frames: @unchecked Sendable {
     }
     func receive(_ image: CVPixelBuffer) {
         let time = ProcessInfo.processInfo.systemUptime
+        #if DUO_RENDER_TRACE
+        let phase = phaseSampler?.inspect(image)
+        #endif
         let accepted = lock.withLock {
             #if DUO_CAPTURE_DIAGNOSTICS
             let info = pendingObservation; pendingObservation = nil
@@ -55,7 +63,14 @@ final class Frames: @unchecked Sendable {
                 wrongSize += 1; return false
             }
             #if DUO_CAPTURE_DIAGNOSTICS
-            if let info { observations.append((time, info.info, info.arrival)) }
+            if let info {
+                #if DUO_RENDER_TRACE
+                observations.append((time, info.info, info.arrival, phase?.sequence))
+                if let phase { phaseLockWait.append(phase.lockWaitTicks) }
+                #else
+                observations.append((time, info.info, info.arrival, nil))
+                #endif
+            }
             #endif
             count += 1; return true
         }
@@ -156,8 +171,129 @@ final class Frames: @unchecked Sendable {
         let p95 = lags.isEmpty ? 0 : lags[(lags.count * 95 + 99) / 100 - 1]
         return "SCROLL TIMING: sourceCalls=\(sorted.count), offsetsMs=[0,8.333,16.667], lumaBelowThree=\(unchanged.map(\.description)), lumaPresent=\(changed.map(\.description)), missing=\(missing), arrivalBeforeDisplay=\(arrivalBeforeDisplay), displayToCallbackMsP50=\(p50), p95=\(p95); interval counts only, not frame attribution"
     }
+
+    #if DUO_RENDER_TRACE
+    /// Marker and document-center differences are reported separately. A marker change cannot
+    /// turn a stationary document into a counted changing document frame.
+    func renderPhaseReport(_ draws: [(Int, UInt64)]) -> String {
+        let snapshot = lock.withLock { (start, end, observations, phaseLockWait) }
+        let positions = Dictionary(uniqueKeysWithValues: snapshot.2.enumerated().map { ($0.element.time, $0.offset) })
+        let times = draws.map(\.1).sorted()
+        func upperBound(_ value: UInt64) -> Int {
+            var lower = 0, upper = times.count
+            while lower < upper {
+                let middle = (lower + upper) / 2
+                if times[middle] <= value { lower = middle + 1 } else { upper = middle }
+            }
+            return lower
+        }
+        var stationarySame = 0, stationaryChanged = 0, motionSame = 0, motionChanged = 0, missing = 0
+        var stationaryDraws = [Int](repeating: 0, count: 3), backward = 0, jumps = 0
+        let known = Set(draws.map(\.0))
+        var knownCurrent = 0, unknownCurrent = 0
+        for comparison in audit.comparisonSnapshot() where comparison.time >= snapshot.0 + 2 && comparison.time < snapshot.1 {
+            guard let i = positions[comparison.time], i > 0,
+                  let previous = snapshot.2[i - 1].marker, let current = snapshot.2[i].marker else { missing += 1; continue }
+            if current == 0 || known.contains(current) { knownCurrent += 1 } else { unknownCurrent += 1 }
+            let changed = current != previous
+            let documentMoved = comparison.center >= 0.12 && comparison.changedPixels >= 500
+            if documentMoved {
+                if changed { motionChanged += 1 } else { motionSame += 1 }
+            } else if changed { stationaryChanged += 1 }
+            else {
+                stationarySame += 1
+                if let a = snapshot.2[i - 1].info.displayTime, let b = snapshot.2[i].info.displayTime, b > a {
+                    let count = upperBound(b) - upperBound(a)
+                    stationaryDraws[min(count, 2)] += 1
+                }
+            }
+            if changed {
+                let difference = (current - previous + 4096) % 4096
+                if difference > 2048 { backward += 1 } else if difference > 1 { jumps += 1 }
+            }
+        }
+        var timebase = mach_timebase_info_data_t()
+        let validTimebase = mach_timebase_info(&timebase) == KERN_SUCCESS && timebase.denom != 0
+        let waits = validTimebase ? snapshot.3.map { Double($0) * Double(timebase.numer) / Double(timebase.denom) / 1_000_000 }.sorted() : []
+        let p95 = waits.isEmpty ? -1 : waits[(waits.count * 95 + 99) / 100 - 1]
+        let maximum = waits.last ?? -1
+        return "RENDER PHASE CORRELATION: stationaryDocument_markerSame=\(stationarySame), stationaryDocument_markerChanged=\(stationaryChanged), movingDocument_markerSame=\(motionSame), movingDocument_markerChanged=\(motionChanged), markerMissing=\(missing), markerKnown=\(knownCurrent), markerUnknown=\(unknownCurrent), markerBackward=\(backward), markerJumps=\(jumps), sourceDraws=\(draws.count), stationarySame_drawsBetweenDisplayTimesZeroOneMultiple=\(stationaryDraws), markerLockWaitP95Ms=\(p95), markerLockWaitMaxMs=\(maximum); marker is diagnostic only, draw timestamps do not prove compositor presentation"
+    }
+
+    func compareDisplayFilter(_ other: DisplayFilterTrace) -> String {
+        let snapshot = lock.withLock { (start, end, observations) }
+        let secondary = other.snapshot()
+        let valid = secondary.compactMap { entry -> (UInt64, Int)? in
+            guard let time = entry.time, let marker = entry.marker else { return nil }
+            return (time, marker)
+        }.sorted { $0.0 < $1.0 }
+        let byTime = Dictionary(valid, uniquingKeysWith: { _, last in last })
+        let secondaryTimes = Set(secondary.compactMap(\.time))
+        let positions = Dictionary(uniqueKeysWithValues: snapshot.2.enumerated().map { ($0.element.time, $0.offset) })
+        var matched = 0, same = 0, windowNewer = 0, displayNewer = 0, incomparable = 0, missing = 0
+        var stationarySame = 0, stationaryDifferent = 0, exactTimeWithoutMarker = 0
+        var near: [Double] = [], nearSame = 0, nearDifferent = 0
+        var timebase = mach_timebase_info_data_t()
+        let validTimebase = mach_timebase_info(&timebase) == KERN_SUCCESS && timebase.denom != 0
+        func closest(_ time: UInt64) -> (UInt64, Int)? {
+            var lower = 0, upper = valid.count
+            while lower < upper {
+                let middle = (lower + upper) / 2
+                if valid[middle].0 < time { lower = middle + 1 } else { upper = middle }
+            }
+            let candidates = [lower - 1, lower].filter { valid.indices.contains($0) }
+            return candidates.map { valid[$0] }.min { a, b in
+                let da = a.0 > time ? a.0 - time : time - a.0
+                let db = b.0 > time ? b.0 - time : time - b.0
+                return da < db
+            }
+        }
+        for comparison in audit.comparisonSnapshot() where comparison.time >= snapshot.0 + 2 && comparison.time < snapshot.1 {
+            guard let i = positions[comparison.time], i > 0, let time = snapshot.2[i].info.displayTime,
+                  let windowMarker = snapshot.2[i].marker else { missing += 1; continue }
+            if secondaryTimes.contains(time) { exactTimeWithoutMarker += 1 }
+            if validTimebase, let nearest = closest(time) {
+                let ticks = nearest.0 > time ? nearest.0 - time : time - nearest.0
+                let ms = Double(ticks) * Double(timebase.numer) / Double(timebase.denom) / 1_000_000
+                near.append(ms)
+                if ms <= 1 { if nearest.1 == windowMarker { nearSame += 1 } else { nearDifferent += 1 } }
+            }
+            guard let displayMarker = byTime[time] else { missing += 1; continue }
+            matched += 1
+            let difference = (displayMarker - windowMarker + 4096) % 4096
+            if difference == 0 { same += 1 }
+            else if difference < 2048 { displayNewer += 1 }
+            else if difference > 2048 { windowNewer += 1 }
+            else { incomparable += 1 }
+            if comparison.center < 0.12 || comparison.changedPixels < 500 {
+                if difference == 0 { stationarySame += 1 } else { stationaryDifferent += 1 }
+            }
+        }
+        let distances = near.sorted()
+        let p50 = distances.isEmpty ? -1 : distances[distances.count / 2]
+        let p95 = distances.isEmpty ? -1 : distances[(distances.count * 95 + 99) / 100 - 1]
+        return "DISPLAY FILTER CORRELATION: exactDisplayTimeMatches=\(matched), sameMarker=\(same), displayMarkerNewer=\(displayNewer), windowMarkerNewer=\(windowNewer), incomparable=\(incomparable), unmatched=\(missing), stationaryDocument_same=\(stationarySame), stationaryDocument_different=\(stationaryDifferent), secondarySamples=\(secondary.count), secondaryTimePresent=\(secondary.compactMap(\.time).count), secondaryMarkerValid=\(secondary.compactMap(\.marker).count), exactTimeIgnoringMarker=\(exactTimeWithoutMarker), nearestValidP50Ms=\(p50), nearestValidP95Ms=\(p95), within1msSame=\(nearSame), within1msDifferent=\(nearDifferent); near timestamps do not prove the same displayed refresh; simultaneous test may perturb timing"
+    }
+    #endif
     #endif
 }
+
+#if DUO_RENDER_TRACE && DUO_CAPTURE_DIAGNOSTICS
+final class DisplayFilterTrace: @unchecked Sendable {
+    struct Entry { let time: UInt64?; let marker: Int? }
+    private let lock = NSLock()
+    private let sampler: RenderPhaseSampler
+    private var pendingTime: UInt64?
+    private var entries: [Entry] = []
+    init(sampler: RenderPhaseSampler) { self.sampler = sampler }
+    func observe(_ info: WindowCapture.SampleObservation) { lock.withLock { pendingTime = info.displayTime } }
+    func receive(_ image: CVPixelBuffer) {
+        let marker = sampler.inspect(image).sequence
+        lock.withLock { entries.append(Entry(time: pendingTime, marker: marker)); pendingTime = nil }
+    }
+    func snapshot() -> [Entry] { lock.withLock { entries } }
+}
+#endif
 
 final class RecoveryBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -185,11 +321,21 @@ func currentProcessContent() async -> SCShareableContent? {
 @MainActor
 func run() async {
     let capture = WindowCapture()
+    #if DUO_RENDER_TRACE
+    var displayCapture: WindowCapture?
+    var displayTrace: DisplayFilterTrace?
+    #endif
     var encoder: HEVCEncoder?
     var decoder: HardwareHEVCDecoder?
     var loopback: LoopbackVideo?
     var temporaryDisplay: VirtualWindowDisplay?
     var scrollTimes: [UInt64] = []
+    #if DUO_RENDER_TRACE
+    var phaseDraws: [(Int, UInt64)] = []
+    let renderCorrelation = CommandLine.arguments.contains("--render-correlation")
+    let compareDisplay = CommandLine.arguments.contains("--compare-display-filter")
+    if renderCorrelation { workload.onRenderPhaseDraw = { sequence, time in phaseDraws.append((sequence, time)) } }
+    #endif
     if CommandLine.arguments.contains("--scroll-correlation") {
         workload.onScrollSample = { scrollTimes.append($0) }
     }
@@ -197,7 +343,7 @@ func run() async {
     let initialGrant = CGPreflightScreenCaptureAccess()
     print("OWN WINDOW START: globalRecording=\(initialGrant); completeDesktop=false; no physical display mode writes")
     do {
-        guard !initialGrant, let window = workload.window else { throw PixelMotionAudit.Failure.unavailable }
+        guard let window = workload.window else { throw PixelMotionAudit.Failure.unavailable }
         try await Task.sleep(for: .milliseconds(400))
         if let requested = ProcessInfo.processInfo.environment["DUODESK_WORKLOAD_SCREEN_ID"].flatMap(UInt32.init) {
             let actual = (window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
@@ -227,6 +373,41 @@ func run() async {
         }
         guard !profileAuditLock || captureOnly else { throw PixelMotionAudit.Failure.unavailable }
         let captured = try Frames(profileAuditLock: profileAuditLock)
+        #if DUO_RENDER_TRACE
+        if renderCorrelation {
+            guard diagnostic, captureOnly, virtualSecondary, let rect = workload.renderMarkerRectInWindow else {
+                throw PixelMotionAudit.Failure.unavailable
+            }
+            captured.phaseSampler = RenderPhaseSampler(markerRect: rect, windowHeight: window.frame.height, scale: CGFloat(filter.pointPixelScale))
+            print("RENDER PHASE MARKER: own diagnostic window, outside document center, rect=\(rect), scale=\(filter.pointPixelScale)")
+            if compareDisplay {
+                // This uses a display-style filter containing only our own window. It excludes
+                // desktop, Dock and menu bar and never enumerates or captures another app.
+                guard initialGrant,
+                      let id = (window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+                      let display = content.displays.first(where: { $0.displayID == id }) else { throw PixelMotionAudit.Failure.unavailable }
+                let displayFilter = SCContentFilter(display: display, including: [owned])
+                displayFilter.includeMenuBar = false
+                guard displayFilter.includedWindows.count == 1, displayFilter.includedWindows.first?.windowID == owned.windowID,
+                      !displayFilter.includeMenuBar else { throw PixelMotionAudit.Failure.unavailable }
+                let crop = owned.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+                guard crop.width == 1004, crop.height == 714, crop.minX >= 0, crop.minY >= 0,
+                      crop.maxX <= display.frame.width, crop.maxY <= display.frame.height else { throw PixelMotionAudit.Failure.unavailable }
+                let trace = DisplayFilterTrace(sampler: RenderPhaseSampler(markerRect: rect, windowHeight: window.frame.height,
+                                                                           scale: CGFloat(filter.pointPixelScale)))
+                let second = WindowCapture()
+                second.onSampleObservation = { trace.observe($0) }
+                second.onFrame = { image, _ in trace.receive(image) }
+                second.onStopped = { stop in captured.fail(stop.error.localizedDescription) }
+                displayCapture = second; displayTrace = trace
+                try await second.start(filter: displayFilter, width: 2008, height: 1428, fps: 120, showsCursor: false,
+                                       sourceRect: crop, nativeCadence: true)
+                print("DISPLAY FILTER COMPARISON: own window only, menuBar=false, crop=\(crop), no other applications")
+            }
+        } else if compareDisplay {
+            throw PixelMotionAudit.Failure.unavailable
+        }
+        #endif
         var decoded: Frames?
         if !captureOnly {
             let frames = try Frames()
@@ -270,7 +451,11 @@ func run() async {
         try await Task.sleep(for: .seconds(2))
         if CommandLine.arguments.contains("--request-keyframe"), loopback == nil { throw LoopbackVideo.Failure.configuration }
         // One second stationary, one second scrolling warmup, then a fixed active interval.
+        #if DUO_RENDER_TRACE
+        let duration = renderCorrelation ? 7 : diagnostic ? 12 : 32
+        #else
         let duration = diagnostic ? 12 : 32
+        #endif
         let capturedStart = captured.begin(seconds: duration), decodedStart = decoded?.begin(seconds: duration)
         var keyframeRequest: (before: Int, deadline: Double)?
         for step in 0..<(duration * 2) {
@@ -293,6 +478,9 @@ func run() async {
             try temporaryDisplay?.checkOwnedWindow(window)
         }
         await capture.stop(); capture.onFrame = nil
+        #if DUO_RENDER_TRACE
+        await displayCapture?.stop(); displayCapture?.onFrame = nil
+        #endif
         try await Task.sleep(for: .milliseconds(250))
         let (samples, wrong) = captured.summary
         print("OWN WINDOW CAPTURE: samples=\(samples), wrongDimensions=\(wrong)")
@@ -301,6 +489,10 @@ func run() async {
         #if DUO_CAPTURE_DIAGNOSTICS
         print(captured.metadataReport())
         if CommandLine.arguments.contains("--scroll-correlation") { print(captured.scrollTimingReport(scrollTimes)) }
+        #if DUO_RENDER_TRACE
+        if renderCorrelation { print(captured.renderPhaseReport(phaseDraws)) }
+        if let displayTrace { print(captured.compareDisplayFilter(displayTrace)) }
+        #endif
         #endif
         if let decoded, let decodedStart {
             let (outputs, badOutputs) = decoded.summary
@@ -321,9 +513,15 @@ func run() async {
         print("OWN WINDOW CHECK FAILED: \(error)")
     }
     await capture.stop(); capture.onFrame = nil
+    #if DUO_RENDER_TRACE
+    await displayCapture?.stop(); displayCapture?.onFrame = nil
+    #endif
     _ = encoder?.abandon(); loopback?.close(); decoder?.clear()
     workload.stopScrolling()
     workload.onScrollSample = nil
+    #if DUO_RENDER_TRACE
+    workload.onRenderPhaseDraw = nil
+    #endif
     workload.window?.close()
     if let temporaryDisplay, !(await temporaryDisplay.cleanup()) { passed = false }
     ProcessInfo.processInfo.endActivity(activity)
