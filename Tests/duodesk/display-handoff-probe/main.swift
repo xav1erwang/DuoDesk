@@ -205,7 +205,7 @@ Task { @MainActor in
         report["immediatelySuspendedSource"] = describe(fake.displayID, window: fixture)
         report["immediatelySuspendedMaster"] = describe(master, window: fixture)
         try await waitFor("native master after source suspension") {
-            CGDisplayIsOnline(master) != 0 && visibleFullscreen(fixture, on: master, observer: observer)
+            CGDisplayIsOnline(master) > 0 && visibleFullscreen(fixture, on: master, observer: observer)
         }
         guard let mode = CGDisplayCopyDisplayMode(master), mode.pixelWidth == 2008, mode.pixelHeight == 1428,
               abs(mode.refreshRate - 120) < 0.5 else { throw failure("Native canvas or clock changed") }

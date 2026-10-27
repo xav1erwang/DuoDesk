@@ -1,6 +1,7 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 // Exercises the production physical-mode decision without configuring a display.
 import Foundation
+import CoreGraphics
 
 let cases: [(String, Double, Double, Int, Bool)] = [
     ("keep a 170 Hz panel while sampling at 120", 170, 170, 120, true),
@@ -17,4 +18,14 @@ for (label, current, candidate, fps, expected) in cases {
     guard actual == expected else { fputs("FAIL: \(label)\n", stderr); exit(1) }
     print("PASS: \(label)")
 }
+// An invalid ID returns -1 on macOS 27, which the former `!= 0` check misclassified as online.
+let main = CGMainDisplayID()
+let missing = CGDirectDisplayID.max
+let missingStatus = CGDisplayIsOnline(missing)
+guard CGDisplayIsOnline(main) > 0, DuoDesktopDisplay.isDisplayOnline(main),
+      missingStatus <= 0, !DuoDesktopDisplay.isDisplayOnline(missing) else {
+    fputs("FAIL: online display status; main=\(main), missing=\(missingStatus)\n", stderr)
+    exit(1)
+}
+print("PASS: current main is online; unknown display is not (system status \(missingStatus))")
 print("PHYSICAL MODE POLICY PASS; no display configuration was applied")

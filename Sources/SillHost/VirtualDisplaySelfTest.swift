@@ -78,7 +78,7 @@ package enum VirtualDisplaySelfTest {
             let onIt = { (p: CGPoint) in d.bounds.contains(p) }
             print("  cursor reach: warp to \(target) → \(afterWarp) (on display: \(onIt(afterWarp))); HID move → \(afterPost) (on display: \(onIt(afterPost))); cursor restored to \(before)")
         }
-        print("  CGGetOnlineDisplayList contains it: \(onlineDisplays().contains(d.displayID)); CGDisplayIsActive \(CGDisplayIsActive(d.displayID) != 0)")
+        print("  CGGetOnlineDisplayList contains it: \(onlineDisplays().contains(d.displayID)); CGDisplayIsActive \(CGDisplayIsActive(d.displayID) > 0)")
         let modes = d.availableModes()
         print("  modes (\(modes.count)): \(modes.joined(separator: "; "))")
 

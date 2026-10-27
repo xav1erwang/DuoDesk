@@ -100,7 +100,7 @@ func describeDisplays(_ label: String) {
         let px = mode.map { "\($0.pixelWidth)×\($0.pixelHeight) px" } ?? "mode unknown"
         let flags = [CGDisplayIsMain(id) != 0 ? "main" : nil,
                      CGDisplayIsBuiltin(id) != 0 ? "built-in" : nil,
-                     CGDisplayIsActive(id) != 0 ? "active" : "inactive",
+                     CGDisplayIsActive(id) > 0 ? "active" : "inactive",
                      CGDisplayMirrorsDisplay(id) != 0 ? "mirroring \(CGDisplayMirrorsDisplay(id))" : nil]
             .compactMap { $0 }.joined(separator: ", ")
         info("  id \(id): \(fmt(CGDisplayBounds(id))), \(px) (\(flags))")
@@ -335,7 +335,7 @@ func createDisplay() async throws -> VirtualDisplay {
     info(String(format: "displayID %u, created in %.0f ms, online after %.0f ms", vd.displayID,
                 created * 1000, Date().timeIntervalSince(t0) * 1000))
     info("bounds \(fmt(vd.bounds)), backing \(px.width)×\(px.height) px")
-    info("CGDisplayIsActive \(CGDisplayIsActive(vd.displayID) != 0), CGDisplayIsOnline \(CGDisplayIsOnline(vd.displayID) != 0), in CGGetOnlineDisplayList \(!before.contains(vd.displayID) && onlineDisplays().contains(vd.displayID))")
+    info("CGDisplayIsActive \(CGDisplayIsActive(vd.displayID) > 0), CGDisplayIsOnline \(CGDisplayIsOnline(vd.displayID) > 0), in CGGetOnlineDisplayList \(!before.contains(vd.displayID) && onlineDisplays().contains(vd.displayID))")
     if ok { good("requested mode is current") } else { bad("requested mode not current after 3 s (see modes below)") }
     if !ok {
         for m in vd.availableModes() { info("  mode: \(m)") }
@@ -459,7 +459,7 @@ func fullRun(target: String) async -> Int32 {
     }
     good(String(format: "listed after %.0f ms: ", Date().timeIntervalSince(t0) * 1000)
          + "SCDisplay \(scDisplay.displayID), frame \(fmt(scDisplay.frame)), \(scDisplay.width)×\(scDisplay.height)")
-    info("CGDisplayIsActive \(CGDisplayIsActive(vd.displayID) != 0), CGDisplayIsOnline \(CGDisplayIsOnline(vd.displayID) != 0)")
+    info("CGDisplayIsActive \(CGDisplayIsActive(vd.displayID) > 0), CGDisplayIsOnline \(CGDisplayIsOnline(vd.displayID) > 0)")
 
     step("Move the window onto the virtual display (Accessibility)")
     let axList = axWindows(pid: app.processID)

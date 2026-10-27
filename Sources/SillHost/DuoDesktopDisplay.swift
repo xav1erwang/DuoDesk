@@ -55,15 +55,19 @@ final class DuoDesktopDisplay {
     /// desktop; never move an arbitrary secondary display when the main display is unknown.
     private static func availableMainDisplayID() -> CGDirectDisplayID {
         let main = CGMainDisplayID()
-        if CGDisplayIsOnline(main) != 0 { return main }
+        if isDisplayOnline(main) { return main }
         let live = NSScreen.screens.compactMap { screen -> CGDirectDisplayID? in
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
             let id = number.uint32Value
-            return CGDisplayIsOnline(id) != 0 ? id : nil
+            return isDisplayOnline(id) ? id : nil
         }
         let atOrigin = live.filter { CGDisplayBounds($0).origin == .zero && CGDisplayMirrorsDisplay($0) == 0 }
         if atOrigin.count == 1 { return atOrigin[0] }
         return live.count == 1 ? live[0] : main
+    }
+    /// CoreGraphics returns -1 for an unknown display ID on macOS 27; it is not online.
+    nonisolated static func isDisplayOnline(_ id: CGDirectDisplayID) -> Bool {
+        CGDisplayIsOnline(id) > 0
     }
     /// Keep a stable identity for each source desktop, rather than sharing serial 1 with
     /// every source and virtual-display utility. A Screen Sharing handover can retain the
@@ -135,7 +139,7 @@ final class DuoDesktopDisplay {
     /// Reject that graph and restore the snapshot instead of silently changing panel refresh.
     private var physicalRefreshMatchesOriginal: Bool {
         !originals.isEmpty && originals.allSatisfy { original in
-            guard CGDisplayIsOnline(original.id) != 0, let mode = CGDisplayCopyDisplayMode(original.id) else { return false }
+            guard Self.isDisplayOnline(original.id), let mode = CGDisplayCopyDisplayMode(original.id) else { return false }
             return mode.refreshRate == original.mode.refreshRate
         }
     }
@@ -240,7 +244,7 @@ final class DuoDesktopDisplay {
         guard pendingMirror else { return }
         do {
             guard let display = temporary, let home = originals.first(where: { $0.id == originalMainID }),
-                  CGDisplayIsOnline(home.id) != 0, CGDisplayIsOnline(display.displayID) != 0 else {
+                  Self.isDisplayOnline(home.id), Self.isDisplayOnline(display.displayID) else {
                 throw Failure.displayUnavailable
             }
             try attachMirror(display, home: home)
@@ -272,7 +276,7 @@ final class DuoDesktopDisplay {
     func restore() -> Bool {
         guard !originals.isEmpty || temporary != nil else { return true }
         var success = true
-        let live = originals.filter { CGDisplayIsOnline($0.id) != 0 }
+        let live = originals.filter { Self.isDisplayOnline($0.id) }
         // Detach first. Removing a mirror master after restoring a slave's mode can otherwise
         // make WindowServer reapply the slave's pre-mirror timing after this method returns.
         if temporary != nil, !live.isEmpty {
@@ -308,7 +312,7 @@ final class DuoDesktopDisplay {
                             if origin != .success { return origin }
                         }
                     }
-                    for old in live where old.mirror != kCGNullDirectDisplay && CGDisplayIsOnline(old.mirror) != 0 && CGDisplayMirrorsDisplay(old.id) != old.mirror {
+                    for old in live where old.mirror != kCGNullDirectDisplay && Self.isDisplayOnline(old.mirror) && CGDisplayMirrorsDisplay(old.id) != old.mirror {
                         let result = CGConfigureDisplayMirrorOfDisplay(config, old.id, old.mirror)
                         if result != .success { return result }
                     }
