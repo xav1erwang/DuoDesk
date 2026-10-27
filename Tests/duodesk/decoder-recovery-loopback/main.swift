@@ -1,6 +1,6 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
-// Synthetic native-size frames exercise production hardware HEVC and QUIC loopback. One decoder
-// output loss is injected before forwarding the last delta; no screenshot or input is involved.
+// Synthetic native-size frames exercise production hardware HEVC and QUIC loopback. A decoder
+// output loss or an oversized incoming frame is injected for the last delta; no screenshot or input.
 import Foundation
 import CoreMedia
 import CoreVideo
@@ -72,18 +72,21 @@ struct Check {
                 let count = results.encoded()
                 if count == 2 {
                     guard !keyframe else { results.fail("last input unexpectedly encoded as a keyframe"); return }
-                    let flight: HardwareHEVCDecoder.Flight? = decoder.lock.withLock {
-                        guard let ticket = decoder.backlog.admit(bytes: 1, keyframe: false) else { return nil }
-                        decoder.backlog.complete(ticket)
-                        decoder.inFlight += 1
-                        return HardwareHEVCDecoder.Flight(generation: decoder.generation, ticket: ticket,
-                            sequence: decoder.latestOutputSequence + 1, started: ProcessInfo.processInfo.systemUptime)
+                    if CommandLine.arguments.contains("--invalid-frame") {
+                        // Inject at the decoder boundary; recovery still travels over real QUIC.
+                        decoder.enqueue(Data(count: 16 * 1024 * 1024 + 1), isKeyframe: false)
+                    } else {
+                        let flight: HardwareHEVCDecoder.Flight? = decoder.lock.withLock {
+                            guard let ticket = decoder.backlog.admit(bytes: 1, keyframe: false) else { return nil }
+                            decoder.backlog.complete(ticket)
+                            decoder.inFlight += 1
+                            return HardwareHEVCDecoder.Flight(generation: decoder.generation, ticket: ticket,
+                                sequence: decoder.latestOutputSequence + 1, started: ProcessInfo.processInfo.systemUptime)
+                        }
+                        guard let flight else { results.fail("could not inject decoder output loss"); return }
+                        // Simulate loss of the output and do not forward the real delta.
+                        decoder.decoded(nil, status: noErr, flags: [.frameDropped], flight: flight, pts: .invalid)
                     }
-                    guard let flight else { results.fail("could not inject decoder output loss"); return }
-                    // The real encoder already retained this final input. Simulate loss of its
-                    // decoder output and do not forward this delta; only a requested keyframe can
-                    // recover the newer image once the source becomes static.
-                    decoder.decoded(nil, status: noErr, flags: [.frameDropped], flight: flight, pts: .invalid)
                 } else {
                     loop.sendEncoded(bytes, keyframe: keyframe, parameters: parameters)
                 }
@@ -100,8 +103,9 @@ struct Check {
             guard final.errors.isEmpty, final.requests >= 1, final.encoded >= 3,
                   final.luma.first == first, final.luma.last.map({ $0 > 150 }) == true,
                   loop.counters.keyframes >= 2 else { throw Failure.invalid("recovery outcome") }
-            print("DECODER RECOVERY LOOPBACK PASS: hardware encoder/decoder, real QUIC on 127.0.0.1, injected last-delta loss, request and newer keyframe; luma=\(final.luma), requests=\(final.requests), encoded=\(final.encoded)")
-            print("SCOPE: native-size synthetic buffers and simulated decoder output loss; not desktop, FPS, external network or Duo acceptance")
+            let injection = CommandLine.arguments.contains("--invalid-frame") ? "oversized decoder input" : "last-delta output loss"
+            print("DECODER RECOVERY LOOPBACK PASS: hardware encoder/decoder, real QUIC on 127.0.0.1, injected \(injection), request and newer keyframe; luma=\(final.luma), requests=\(final.requests), encoded=\(final.encoded)")
+            print("SCOPE: native-size synthetic buffers and simulated decoder fault; not desktop, FPS, external network or Duo acceptance")
     }
     static func main() async {
         do { try await run(); exit(0) }

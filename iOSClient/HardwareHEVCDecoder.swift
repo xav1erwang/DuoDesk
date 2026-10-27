@@ -179,8 +179,10 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     }
 
     func enqueue(_ data: Data, isKeyframe: Bool) {
-        guard !data.isEmpty, data.count <= 16 * 1024 * 1024 else { return }
         lock.lock()
+        // Even an empty or oversized access unit is a gap in the reference chain. Let the
+        // bounded admission state fence old work and request recovery instead of silently
+        // returning before it can observe the discarded frame.
         let ticket = backlog.admit(bytes: data.count, keyframe: isKeyframe)
         guard let ticket else {
             let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)

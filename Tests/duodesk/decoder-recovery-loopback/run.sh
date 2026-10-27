@@ -12,4 +12,4 @@ swiftc -swift-version 5 -O -whole-module-optimization -warnings-as-errors -parse
   -Xfrontend -disable-access-control -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
   Sources/SillHost/*.swift iOSClient/HardwareHEVCDecoder.swift Tests/duodesk/own-window-capture/LoopbackVideo.swift \
   Tests/duodesk/decoder-recovery-loopback/main.swift -o "$out/check"
-if [[ "${1:-}" != "--build-only" ]]; then SILL_TEST_LOOPBACK=1 "$out/check"; fi
+if [[ "${1:-}" != "--build-only" ]]; then SILL_TEST_LOOPBACK=1 "$out/check" "$@"; fi
