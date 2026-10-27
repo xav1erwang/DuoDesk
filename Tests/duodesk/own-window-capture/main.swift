@@ -274,22 +274,50 @@ final class Frames: @unchecked Sendable {
         let p95 = distances.isEmpty ? -1 : distances[(distances.count * 95 + 99) / 100 - 1]
         return "DISPLAY FILTER CORRELATION: exactDisplayTimeMatches=\(matched), sameMarker=\(same), displayMarkerNewer=\(displayNewer), windowMarkerNewer=\(windowNewer), incomparable=\(incomparable), unmatched=\(missing), stationaryDocument_same=\(stationarySame), stationaryDocument_different=\(stationaryDifferent), secondarySamples=\(secondary.count), secondaryTimePresent=\(secondary.compactMap(\.time).count), secondaryMarkerValid=\(secondary.compactMap(\.marker).count), exactTimeIgnoringMarker=\(exactTimeWithoutMarker), nearestValidP50Ms=\(p50), nearestValidP95Ms=\(p95), within1msSame=\(nearSame), within1msDifferent=\(nearDifferent); near timestamps do not prove the same displayed refresh; simultaneous test may perturb timing"
     }
+
+    func sequenceComparison(_ other: DisplayFilterTrace, draws: [(Int, UInt64)]) -> String {
+        let snapshot = lock.withLock { (start, end, observations) }
+        let active = snapshot.2.filter { $0.time >= snapshot.0 + 2 && $0.time < snapshot.1 }
+        guard let first = active.first?.info.displayTime, let last = active.last?.info.displayTime else {
+            return "RENDER SEQUENCE MATCH: valid=false, reason=missing-active-boundary"
+        }
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.numer != 0, timebase.denom != 0 else {
+            return "RENDER SEQUENCE MATCH: valid=false, reason=missing-timebase"
+        }
+        let nsPerTick = Double(timebase.numer) / Double(timebase.denom)
+        let padding = UInt64((100_000_000 / nsPerTick).rounded(.up))
+        guard last > first, last - first > padding * 2 else {
+            return "RENDER SEQUENCE MATCH: valid=false, reason=short-overlap"
+        }
+        let window = active.map { RenderSequenceCorrelation.Sample(displayTime: $0.info.displayTime,
+                                                                     arrival: $0.arrival, marker: $0.marker) }
+        let display = other.snapshot().map { RenderSequenceCorrelation.Sample(displayTime: $0.time,
+                                                                               arrival: $0.arrival, marker: $0.marker) }
+        return RenderSequenceCorrelation.compare(draws: draws, primary: window, secondary: display,
+                                                 lower: first + padding, upper: last - padding,
+                                                 nanosecondsPerTick: nsPerTick).description
+    }
     #endif
     #endif
 }
 
 #if DUO_RENDER_TRACE && DUO_CAPTURE_DIAGNOSTICS
 final class DisplayFilterTrace: @unchecked Sendable {
-    struct Entry { let time: UInt64?; let marker: Int? }
+    struct Entry { let time: UInt64?; let arrival: UInt64; let marker: Int? }
     private let lock = NSLock()
     private let sampler: RenderPhaseSampler
-    private var pendingTime: UInt64?
+    private var pending: (time: UInt64?, arrival: UInt64)?
     private var entries: [Entry] = []
     init(sampler: RenderPhaseSampler) { self.sampler = sampler }
-    func observe(_ info: WindowCapture.SampleObservation) { lock.withLock { pendingTime = info.displayTime } }
+    func observe(_ info: WindowCapture.SampleObservation) { lock.withLock { pending = (info.displayTime, mach_absolute_time()) } }
     func receive(_ image: CVPixelBuffer) {
         let marker = sampler.inspect(image).sequence
-        lock.withLock { entries.append(Entry(time: pendingTime, marker: marker)); pendingTime = nil }
+        lock.withLock {
+            let observation = pending
+            entries.append(Entry(time: observation?.time, arrival: observation?.arrival ?? 0, marker: marker))
+            pending = nil
+        }
     }
     func snapshot() -> [Entry] { lock.withLock { entries } }
 }
@@ -491,7 +519,10 @@ func run() async {
         if CommandLine.arguments.contains("--scroll-correlation") { print(captured.scrollTimingReport(scrollTimes)) }
         #if DUO_RENDER_TRACE
         if renderCorrelation { print(captured.renderPhaseReport(phaseDraws)) }
-        if let displayTrace { print(captured.compareDisplayFilter(displayTrace)) }
+        if let displayTrace {
+            print(captured.compareDisplayFilter(displayTrace))
+            print(captured.sequenceComparison(displayTrace, draws: phaseDraws))
+        }
         #endif
         #endif
         if let decoded, let decodedStart {
