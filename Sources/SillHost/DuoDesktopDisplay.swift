@@ -65,6 +65,9 @@ final class DuoDesktopDisplay {
     private var testInterceptConfiguration = false
     private var testConfigurationAttempts = 0
     private var testPreventDisplayMutation = false
+    private var testRecoveryModes: [CGDisplayMode]?
+    private var testRecoveryRead: (() throws -> DisplayRecoveryRecord)?
+    private var testAfterRecoveryConfiguration: (() -> Void)?
     #endif
     private let mainDisplay: @MainActor () -> CGDirectDisplayID
     private let layout: Layout
@@ -203,17 +206,24 @@ final class DuoDesktopDisplay {
         let store: DisplayRecoveryStore?
         do { store = try recoveryDirectory.map { try DisplayRecoveryStore(directory: $0) } }
         catch { print("Duo display recovery storage unavailable: \(error)"); throw Failure.recoveryUnavailable }
-        let main = mainDisplay()
-        let systemMain = CGMainDisplayID()
-        let sampled = try snapshot()
+        var main = mainDisplay()
+        var systemMain = CGMainDisplayID()
+        var sampled = try snapshot()
         guard main == mainDisplay(), systemMain == CGMainDisplayID() else { throw Failure.topologyChanging }
-        guard let home = sampled.first(where: { $0.id == main }) else { throw Failure.noDisplay }
         let recoveryRecord: DisplayRecoveryRecord?
         if let store {
-            let record = try Self.recoveryRecord(sampled, systemMain: systemMain)
+            var record = try Self.recoveryRecord(sampled, systemMain: systemMain)
             do {
                 if let prior = try store.load() {
-                    guard prior.alreadyRestored(as: record) else { throw Failure.restorePending }
+                    if !prior.alreadyRestored(as: record) {
+                        guard let intent = try store.loadIntent(for: prior),
+                              try recoverSingleDisplay(prior, intent: intent, current: record) else { throw Failure.restorePending }
+                        main = mainDisplay(); systemMain = CGMainDisplayID(); sampled = try snapshot()
+                        guard main == mainDisplay(), systemMain == CGMainDisplayID() else { throw Failure.topologyChanging }
+                        record = try Self.recoveryRecord(sampled, systemMain: systemMain)
+                        guard prior.alreadyRestored(as: record) else { throw Failure.restorePending }
+                        print("Duo desktop: interrupted single-display mode restored")
+                    }
                     try store.remove(token: prior.token)
                     print("Duo desktop: interrupted session was already restored; recovery record cleared")
                 }
@@ -221,6 +231,7 @@ final class DuoDesktopDisplay {
             catch { print("Duo display recovery record unavailable: \(error)"); throw Failure.restorePending }
             recoveryRecord = record
         } else { recoveryRecord = nil }
+        guard let home = sampled.first(where: { $0.id == main }) else { throw Failure.noDisplay }
         recoveryStore = store
         originals = sampled
         originalIdentityCounts = Self.identityCounts(originals.compactMap(\.identity))
@@ -240,6 +251,15 @@ final class DuoDesktopDisplay {
             if let native {
                 if !Self.sameMode(native, home.mode) {
                     try persistRecovery(recoveryRecord)
+                    if let recoveryRecord, let intent = Self.singleDisplayIntent(original: recoveryRecord, mode: native) {
+                        do { try recoveryStore?.saveIntent(intent, for: recoveryRecord) }
+                        catch { throw Failure.recoveryUnavailable }
+                        // The intent is durable; check the complete state again before mutation.
+                        let latestMain = CGMainDisplayID()
+                        let latest = try Self.recoveryRecord(snapshot(), systemMain: latestMain)
+                        guard latestMain == CGMainDisplayID(), main == mainDisplay(),
+                              recoveryRecord.sameState(as: latest) else { throw Failure.topologyChanging }
+                    }
                     #if DUO_DISPLAY_RESTORE_TESTING
                     if testPreventDisplayMutation { throw Failure.modeRejected }
                     #endif
@@ -462,6 +482,58 @@ final class DuoDesktopDisplay {
         }
         let record = DisplayRecoveryRecord(version: 1, token: UUID(), main: systemMain, displays: saved)
         guard record.isValid else { throw Failure.topologyChanging }
+        return record
+    }
+
+    /// This narrowly scoped intent is known before a single physical-mode change. In all other
+    /// topologies the journal remains a conservative record and is never replayed automatically.
+    private static func singleDisplayIntent(original: DisplayRecoveryRecord, mode: CGDisplayMode) -> DisplayRecoveryIntent? {
+        guard original.displays.count == 1 else { return nil }
+        let saved = original.displays[0]
+        let target = DisplayRecoveryRecord.Display(id: saved.id, identity: saved.identity, modeID: mode.ioDisplayModeID,
+            width: mode.width, height: mode.height, pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight,
+            refresh: mode.refreshRate, originX: saved.originX, originY: saved.originY, mirror: saved.mirror)
+        let expected = DisplayRecoveryRecord(version: original.version, token: original.token, main: original.main, displays: [target])
+        let intent = DisplayRecoveryIntent(version: 1, expected: expected)
+        return intent.isValid(for: original) ? intent : nil
+    }
+
+    /// After a crash, undo only a matching, identifiable single-display change. Find the exact
+    /// old mode again; mode IDs or dimensions alone are not sufficient. The final state is checked
+    /// before clearing the journal. No refresh-rate change is requested.
+    private func recoverSingleDisplay(_ original: DisplayRecoveryRecord, intent: DisplayRecoveryIntent,
+                                      current: DisplayRecoveryRecord) throws -> Bool {
+        guard intent.permitsReplay(original: original, current: current) else { return false }
+        let saved = original.displays[0]
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        let modes: [CGDisplayMode]
+        #if DUO_DISPLAY_RESTORE_TESTING
+        if let testRecoveryModes { modes = testRecoveryModes }
+        else { modes = (CGDisplayCopyAllDisplayModes(saved.id, options) as? [CGDisplayMode]) ?? [] }
+        #else
+        modes = (CGDisplayCopyAllDisplayModes(saved.id, options) as? [CGDisplayMode]) ?? []
+        #endif
+        let matches = modes.filter {
+            $0.ioDisplayModeID == saved.modeID && $0.width == saved.width && $0.height == saved.height
+                && $0.pixelWidth == saved.pixelWidth && $0.pixelHeight == saved.pixelHeight && $0.refreshRate == saved.refresh
+        }
+        guard matches.count == 1, let mode = matches.first else { return false }
+        let latest = try currentRecoveryRecord()
+        guard intent.permitsReplay(original: original, current: latest) else { return false }
+        try configure { config in CGConfigureDisplayWithDisplayMode(config, saved.id, mode, nil) }
+        #if DUO_DISPLAY_RESTORE_TESTING
+        testAfterRecoveryConfiguration?()
+        #endif
+        return original.alreadyRestored(as: try currentRecoveryRecord())
+    }
+
+    private func currentRecoveryRecord() throws -> DisplayRecoveryRecord {
+        #if DUO_DISPLAY_RESTORE_TESTING
+        if let testRecoveryRead { return try testRecoveryRead() }
+        #endif
+        let main = CGMainDisplayID()
+        let record = try Self.recoveryRecord(snapshot(), systemMain: main)
+        guard main == CGMainDisplayID() else { throw Failure.topologyChanging }
         return record
     }
 
@@ -711,6 +783,53 @@ final class DuoDesktopDisplay {
     }
 
     #if DUO_DISPLAY_RESTORE_TESTING
+    /// Exercise the production replay sequence with synthetic records and intercepted writes.
+    /// The live mode object is read only to stand in for an available original mode.
+    static func inspectSingleDisplayReplayForTesting() -> [Bool]? {
+        let id = CGMainDisplayID()
+        guard isDisplayOnline(id), let mode = CGDisplayCopyDisplayMode(id), mode.refreshRate > 0 else { return nil }
+        let identity = DisplayRestoreIdentity(vendor: 42, model: 7, serial: 1234, builtIn: false)
+        func display(identity: DisplayRestoreIdentity, modeID: Int32, x: Int32 = 0) -> DisplayRecoveryRecord.Display {
+            .init(id: id, identity: identity, modeID: modeID, width: mode.width, height: mode.height,
+                  pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight, refresh: mode.refreshRate,
+                  originX: x, originY: 0, mirror: 0)
+        }
+        let token = UUID()
+        let saved = display(identity: identity, modeID: mode.ioDisplayModeID)
+        let original = DisplayRecoveryRecord(version: 1, token: token, main: id, displays: [saved])
+        let changedID = mode.ioDisplayModeID == Int32.max ? mode.ioDisplayModeID - 1 : mode.ioDisplayModeID + 1
+        let expected = DisplayRecoveryRecord(version: 1, token: token, main: id,
+                                             displays: [display(identity: identity, modeID: changedID)])
+        let intent = DisplayRecoveryIntent(version: 1, expected: expected)
+        let moved = DisplayRecoveryRecord(version: 1, token: token, main: id,
+                                          displays: [display(identity: identity, modeID: changedID, x: 1)])
+        let replacement = DisplayRestoreIdentity(vendor: 42, model: 7, serial: 9876, builtIn: false)
+        let replaced = DisplayRecoveryRecord(version: 1, token: token, main: id,
+                                             displays: [display(identity: replacement, modeID: changedID)])
+        func run(current: DisplayRecoveryRecord, latest: DisplayRecoveryRecord, final: DisplayRecoveryRecord,
+                 available: [CGDisplayMode]) -> (Bool, Int) {
+            let desktop = DuoDesktopDisplay()
+            desktop.testInterceptConfiguration = true
+            desktop.testRecoveryModes = available
+            var state = latest
+            desktop.testRecoveryRead = { state }
+            desktop.testAfterRecoveryConfiguration = { state = final }
+            let result = (try? desktop.recoverSingleDisplay(original, intent: intent, current: current)) ?? false
+            return (result, desktop.testConfigurationAttempts)
+        }
+        let accepted = run(current: expected, latest: expected, final: original, available: [mode])
+        let initialDrift = run(current: moved, latest: expected, final: original, available: [mode])
+        let laterDrift = run(current: expected, latest: moved, final: original, available: [mode])
+        let laterReplacement = run(current: expected, latest: replaced, final: original, available: [mode])
+        let missingMode = run(current: expected, latest: expected, final: original, available: [])
+        let ambiguousMode = run(current: expected, latest: expected, final: original, available: [mode, mode])
+        let notRestored = run(current: expected, latest: expected, final: expected, available: [mode])
+        return [accepted.0 && accepted.1 == 1, !initialDrift.0 && initialDrift.1 == 0,
+                !laterDrift.0 && laterDrift.1 == 0, !laterReplacement.0 && laterReplacement.1 == 0,
+                !missingMode.0 && missingMode.1 == 0, !ambiguousMode.0 && ambiguousMode.1 == 0,
+                !notRestored.0 && notRestored.1 == 1]
+    }
+
     /// Exercise the real restore path with an unavailable ID; no live display is configured.
     static func inspectOfflineRestoreForTesting() -> (Bool, Bool, Bool, Bool)? {
         let missing = CGDirectDisplayID.max

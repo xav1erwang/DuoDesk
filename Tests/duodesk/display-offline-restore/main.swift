@@ -2,6 +2,12 @@
 // Tests the real restoration state with an invalid ID; no display configuration is applied.
 import Foundation
 
+guard let replay = MainActor.assumeIsolated({ DuoDesktopDisplay.inspectSingleDisplayReplayForTesting() }),
+      replay.count == 7, replay.allSatisfy({ $0 }) else {
+    fputs("FAIL: single-display crash replay guard or intercepted configuration\n", stderr); exit(1)
+}
+print("PASS: single-display replay checks current state twice, unique mode, and restored state; writes intercepted")
+
 let result = MainActor.assumeIsolated { DuoDesktopDisplay.inspectOfflineRestoreForTesting() }
 guard let (first, keptAfterFirst, second, keptAfterSecond) = result else {
     fputs("FAIL: read-only display prerequisites unavailable\n", stderr); exit(1)

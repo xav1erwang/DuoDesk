@@ -3,7 +3,6 @@ import Foundation
 import Darwin
 
 /// An immutable, write-ahead record. It contains display metadata, never pixels or pairing data.
-/// Reconciliation is read-only: this version does not guess how to undo an interrupted session.
 struct DisplayRecoveryRecord: Codable, Equatable {
     struct Display: Codable, Equatable {
         let id: UInt32
@@ -55,6 +54,31 @@ struct DisplayRecoveryRecord: Codable, Equatable {
     }
 }
 
+/// The exact single-display mode we intend to set, written before the CoreGraphics transaction.
+/// A later process may undo it only if the complete current state still matches and the display is
+/// independently identifiable. This deliberately excludes mirror and multi-display transactions.
+struct DisplayRecoveryIntent: Codable, Equatable {
+    let version: Int
+    let expected: DisplayRecoveryRecord
+
+    func isValid(for original: DisplayRecoveryRecord) -> Bool {
+        guard version == 1, original.isValid, expected.isValid, expected.token == original.token,
+              original.displays.count == 1, expected.displays.count == 1,
+              original.main == expected.main else { return false }
+        let before = original.displays[0], after = expected.displays[0]
+        guard before.id == original.main, after.id == before.id, before.identity == after.identity,
+              before.mirror == 0, after.mirror == 0,
+              before.originX == 0, before.originY == 0, after.originX == 0, after.originY == 0,
+              before.refresh > 0, before.refresh == after.refresh else { return false }
+        return before.modeID != after.modeID || before.width != after.width || before.height != after.height
+            || before.pixelWidth != after.pixelWidth || before.pixelHeight != after.pixelHeight
+    }
+
+    func permitsReplay(original: DisplayRecoveryRecord, current: DisplayRecoveryRecord) -> Bool {
+        isValid(for: original) && expected.alreadyRestored(as: current)
+    }
+}
+
 /// One host at a time may own a recovery directory. Records are published without replacement,
 /// with the file flushed before the directory entry is created. A failed read is never 'missing'.
 final class DisplayRecoveryStore {
@@ -65,6 +89,7 @@ final class DisplayRecoveryStore {
     private let directoryFD: Int32
     private let lockFD: Int32
     private static let recordName = "pending-display.json"
+    private static let intentName = "pending-display-intent.json"
     private static let maxBytes = 65_536
 
     init(directory: URL) throws {
@@ -96,7 +121,29 @@ final class DisplayRecoveryStore {
     }
 
     func load() throws -> DisplayRecoveryRecord? {
-        let fd = openat(directoryFD, Self.recordName, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        let record: DisplayRecoveryRecord? = try read(name: Self.recordName)
+        guard let record else {
+            // An orphaned intent can result from an older version or external interference. Never
+            // associate it with a new transaction or silently erase it.
+            let fd = openat(directoryFD, Self.intentName, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW)
+            if fd >= 0 { close(fd); throw Failure.changedRecord }
+            guard errno == ENOENT else { throw Failure.unavailable }
+            return nil
+        }
+        guard record.isValid else { throw Failure.invalidRecord }
+        return record
+    }
+
+    func loadIntent(for original: DisplayRecoveryRecord) throws -> DisplayRecoveryIntent? {
+        let intent: DisplayRecoveryIntent? = try read(name: Self.intentName)
+        guard let intent else { return nil }
+        guard intent.isValid(for: original) else { throw Failure.invalidRecord }
+        return intent
+    }
+
+    private func read<T: Decodable>(name: String) throws -> T? {
+        // A damaged path might be a FIFO; opening it must not wait for a writer.
+        let fd = openat(directoryFD, name, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW)
         if fd < 0 {
             if errno == ENOENT { return nil }
             throw Failure.unavailable
@@ -109,14 +156,14 @@ final class DisplayRecoveryStore {
         let byteCount = bytes.count
         var offset = 0
         while offset < bytes.count {
-            let readCount = bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress!.advanced(by: offset), byteCount - offset) }
+            let readCount = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress!.advanced(by: offset), byteCount - offset) }
             if readCount < 0 && errno == EINTR { continue }
             guard readCount > 0 else { throw Failure.unavailable }
             offset += readCount
         }
         var extra: UInt8 = 0
-        guard read(fd, &extra, 1) == 0,
-              let record = try? JSONDecoder().decode(DisplayRecoveryRecord.self, from: Data(bytes)), record.isValid else {
+        guard Darwin.read(fd, &extra, 1) == 0,
+              let record = try? JSONDecoder().decode(T.self, from: Data(bytes)) else {
             throw Failure.invalidRecord
         }
         return record
@@ -124,6 +171,16 @@ final class DisplayRecoveryStore {
 
     func save(_ record: DisplayRecoveryRecord) throws {
         guard record.isValid else { throw Failure.invalidRecord }
+        guard try load() == nil else { throw Failure.changedRecord }
+        try publish(record, name: Self.recordName)
+    }
+
+    func saveIntent(_ intent: DisplayRecoveryIntent, for original: DisplayRecoveryRecord) throws {
+        guard let saved = try load(), saved == original, intent.isValid(for: original) else { throw Failure.changedRecord }
+        try publish(intent, name: Self.intentName)
+    }
+
+    private func publish<T: Encodable>(_ record: T, name: String) throws {
         let data = try JSONEncoder().encode(record)
         guard data.count <= Self.maxBytes else { throw Failure.invalidRecord }
         let temp = ".pending-\(UUID().uuidString).tmp"
@@ -141,7 +198,7 @@ final class DisplayRecoveryStore {
         }
         guard fcntl(fd, F_FULLFSYNC) == 0 else { throw Failure.unavailable }
         // linkat fails if another record already exists; never overwrite its evidence.
-        guard linkat(directoryFD, temp, directoryFD, Self.recordName, 0) == 0 else { throw Failure.unavailable }
+        guard linkat(directoryFD, temp, directoryFD, name, 0) == 0 else { throw Failure.unavailable }
         guard unlinkat(directoryFD, temp, 0) == 0, fsync(directoryFD) == 0 else { throw Failure.unavailable }
     }
 
@@ -151,6 +208,9 @@ final class DisplayRecoveryStore {
             return
         }
         guard record.token == token else { throw Failure.changedRecord }
+        if try loadIntent(for: record) != nil {
+            guard unlinkat(directoryFD, Self.intentName, 0) == 0, fsync(directoryFD) == 0 else { throw Failure.unavailable }
+        }
         guard unlinkat(directoryFD, Self.recordName, 0) == 0, fsync(directoryFD) == 0 else { throw Failure.unavailable }
     }
 }
