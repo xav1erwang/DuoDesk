@@ -1,6 +1,9 @@
 import Foundation
 import ScreenCaptureKit
 import CoreMedia
+#if DUO_CAPTURE_DIAGNOSTICS
+import IOSurface
+#endif
 
 /// Runs one ScreenCaptureKit stream (a window or a display) and hands out 420f pixel buffers.
 /// The coordinator stops and restarts it whenever the client picks a different source.
@@ -18,6 +21,26 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var framePacer: CaptureFramePacer?
     private let queue = DispatchQueue(label: "sill.capture", qos: .userInteractive)
     var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
+    #if DUO_CAPTURE_DIAGNOSTICS
+    /// Test-only metadata from an admitted sample; never contains image pixels or window titles.
+    struct SampleObservation {
+        let displayTime: UInt64?
+        let dirtyRectCount: Int?
+        let dirtyCenter: Bool?
+        let dirtyElementType: String?
+        let surfaceID: UInt32?
+    }
+    var onSampleObservation: ((SampleObservation) -> Void)?
+    static func diagnosticRect(_ value: Any) -> CGRect? {
+        if let rect = value as? CGRect { return rect }
+        if let wrapped = value as? NSValue { return wrapped.rectValue }
+        if let dictionary = value as? [String: Any] {
+            var rect = CGRect.zero
+            if CGRectMakeWithDictionaryRepresentation(dictionary as CFDictionary, &rect) { return rect }
+        }
+        return nil
+    }
+    #endif
     /// The stream ended on its own (window closed, permission revoked). Called on an SCK thread.
     var onStopped: ((Stop) -> Void)?
 
@@ -136,6 +159,25 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         if delivery.pacedOut { Stats.shared.bump("cap.cadenceDrop"); return }
         Stats.shared.bump("cap.complete")
         if delivery.first { print("Capture: first frame \(CVPixelBufferGetWidth(pixelBuffer))×\(CVPixelBufferGetHeight(pixelBuffer))") }
+        #if DUO_CAPTURE_DIAGNOSTICS
+        let info = attachments.first
+        let displayTime = (info?[.displayTime] as? NSNumber)?.uint64Value
+        let rectCount = (info?[.dirtyRects] as? [Any])?.count
+        let rawRects = info?[.dirtyRects] as? [Any]
+        let rects = rawRects?.compactMap(Self.diagnosticRect)
+        let center = CGRect(x: CGFloat(CVPixelBufferGetWidth(pixelBuffer)) * 0.3,
+                            y: CGFloat(CVPixelBufferGetHeight(pixelBuffer)) * 0.3,
+                            width: CGFloat(CVPixelBufferGetWidth(pixelBuffer)) * 0.4,
+                            height: CGFloat(CVPixelBufferGetHeight(pixelBuffer)) * 0.4)
+        let dirtyCenter = rects.flatMap { rects -> Bool? in
+            guard rects.count == rawRects?.count else { return nil }
+            return rects.contains { $0.intersects(center) }
+        }
+        let dirtyElementType = rawRects?.first.map { String(reflecting: Swift.type(of: $0)) }
+        let surfaceID = CVPixelBufferGetIOSurface(pixelBuffer).map { IOSurfaceGetID($0.takeUnretainedValue()) }
+        onSampleObservation?(SampleObservation(displayTime: displayTime, dirtyRectCount: rectCount,
+                                               dirtyCenter: dirtyCenter, dirtyElementType: dirtyElementType, surfaceID: surfaceID))
+        #endif
         onFrame?(pixelBuffer, pts)
     }
 

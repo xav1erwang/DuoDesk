@@ -20,6 +20,20 @@ final class Frames: @unchecked Sendable {
     private var start = Double.infinity, end = Double.infinity
     private var count = 0, wrongSize = 0
     private var failure: String?
+    #if DUO_CAPTURE_DIAGNOSTICS
+    private var pendingObservation: WindowCapture.SampleObservation?
+    private var observations: [(time: Double, info: WindowCapture.SampleObservation)] = []
+    private var printedDirtyType = false
+    func observe(_ info: WindowCapture.SampleObservation) {
+        lock.withLock {
+            pendingObservation = info
+            if !printedDirtyType, let type = info.dirtyElementType {
+                printedDirtyType = true
+                print("SCK DIRTY RECT ELEMENT TYPE: \(type), center=\(String(describing: info.dirtyCenter))")
+            }
+        }
+    }
+    #endif
     init() throws { audit = try DesktopContentAudit(activeOffsetSeconds: 2) }
     func begin(seconds: Int) -> Double {
         lock.withLock {
@@ -30,10 +44,16 @@ final class Frames: @unchecked Sendable {
     func receive(_ image: CVPixelBuffer) {
         let time = ProcessInfo.processInfo.systemUptime
         let accepted = lock.withLock {
+            #if DUO_CAPTURE_DIAGNOSTICS
+            let info = pendingObservation; pendingObservation = nil
+            #endif
             guard time >= start, time < end else { return false }
             guard CVPixelBufferGetWidth(image) == 2008, CVPixelBufferGetHeight(image) == 1428 else {
                 wrongSize += 1; return false
             }
+            #if DUO_CAPTURE_DIAGNOSTICS
+            if let info { observations.append((time, info)) }
+            #endif
             count += 1; return true
         }
         if accepted { audit.inspect(image, at: time, onResult: nil) }
@@ -45,6 +65,51 @@ final class Frames: @unchecked Sendable {
         }
     }
     var summary: (Int, Int) { lock.withLock { (count, wrongSize) } }
+
+    #if DUO_CAPTURE_DIAGNOSTICS
+    func metadataReport() -> String {
+        struct Tally {
+            var total = 0, sameDisplayTime = 0, changedDisplayTime = 0, unknownDisplayTime = 0
+            var noDirtyRects = 0, hasDirtyRects = 0, unknownDirtyRects = 0
+            var centerDirty = 0, centerClean = 0, centerUnknown = 0
+            var sameSurface = 0, changedSurface = 0, unknownSurface = 0
+            mutating func add(_ current: WindowCapture.SampleObservation, _ previous: WindowCapture.SampleObservation) {
+                total += 1
+                if let a = current.displayTime, let b = previous.displayTime {
+                    if a == b { sameDisplayTime += 1 } else { changedDisplayTime += 1 }
+                } else { unknownDisplayTime += 1 }
+                if let count = current.dirtyRectCount {
+                    if count == 0 { noDirtyRects += 1 } else { hasDirtyRects += 1 }
+                } else { unknownDirtyRects += 1 }
+                if let dirty = current.dirtyCenter {
+                    if dirty { centerDirty += 1 } else { centerClean += 1 }
+                } else { centerUnknown += 1 }
+                if let a = current.surfaceID, let b = previous.surfaceID {
+                    if a == b { sameSurface += 1 } else { changedSurface += 1 }
+                } else { unknownSurface += 1 }
+            }
+            var description: String {
+                "n=\(total),displaySame=\(sameDisplayTime),displayChanged=\(changedDisplayTime),displayUnknown=\(unknownDisplayTime),dirtyEmpty=\(noDirtyRects),dirtyPresent=\(hasDirtyRects),dirtyUnknown=\(unknownDirtyRects),centerDirty=\(centerDirty),centerClean=\(centerClean),centerUnknown=\(centerUnknown),surfaceSame=\(sameSurface),surfaceChanged=\(changedSurface),surfaceUnknown=\(unknownSurface)"
+            }
+        }
+        let snapshot = lock.withLock { (start, end, observations) }
+        let index = Dictionary(uniqueKeysWithValues: snapshot.2.enumerated().map { ($0.element.time, $0.offset) })
+        var unchanged = Tally(), changed = Tally(), unmatched = 0
+        for item in audit.comparisonSnapshot() where item.time >= snapshot.0 + 2 && item.time < snapshot.1 {
+            guard let position = index[item.time], position > 0 else { unmatched += 1; continue }
+            let current = snapshot.2[position].info, previous = snapshot.2[position - 1].info
+            if item.full == 0 { unchanged.add(current, previous) } else { changed.add(current, previous) }
+        }
+        return "SCK METADATA CORRELATION: lumaDeltaBelowThree={\(unchanged.description)}; lumaDeltaPresent={\(changed.description)}; unmatched=\(unmatched)"
+    }
+    #endif
+}
+
+final class RecoveryBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var channel: LoopbackVideo?
+    func set(_ value: LoopbackVideo?) { lock.withLock { channel = value } }
+    func request() { lock.withLock { channel }?.requestKeyframe() }
 }
 
 func currentProcessContent() async -> SCShareableContent? {
@@ -68,12 +133,17 @@ func run() async {
     let capture = WindowCapture()
     var encoder: HEVCEncoder?
     var decoder: HardwareHEVCDecoder?
+    var loopback: LoopbackVideo?
     var passed = false
     let initialGrant = CGPreflightScreenCaptureAccess()
     print("OWN WINDOW START: globalRecording=\(initialGrant); completeDesktop=false; no display mode changes")
     do {
         guard !initialGrant, let window = workload.window else { throw PixelMotionAudit.Failure.unavailable }
         try await Task.sleep(for: .milliseconds(400))
+        if let requested = ProcessInfo.processInfo.environment["DUODESK_WORKLOAD_SCREEN_ID"].flatMap(UInt32.init) {
+            let actual = (window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            guard actual == requested else { throw PixelMotionAudit.Failure.unavailable }
+        }
         guard let content = await currentProcessContent(),
               let owned = content.windows.first(where: {
                   $0.windowID == UInt32(window.windowNumber) && $0.owningApplication?.processID == getpid()
@@ -84,19 +154,32 @@ func run() async {
         print("OWN WINDOW FILTER: owner=\(owned.owningApplication?.processID ?? 0), ownPID=\(getpid()), frame=\(filter.contentRect), scale=\(filter.pointPixelScale), nativePixels=\(width)×\(height)")
         guard width == 2008, height == 1428 else { throw PixelMotionAudit.Failure.invalidFrames }
         let captured = try Frames(), decoded = try Frames()
+        let recovery = RecoveryBox()
         let received = HardwareHEVCDecoder(onFormat: { size, _ in
             if size != CGSize(width: 2008, height: 1428) { decoded.fail("unexpected hardware-decoder dimensions") }
         }, onSample: { sample, _ in
             if let image = CMSampleBufferGetImageBuffer(sample) { decoded.receive(image) }
-        }, onFailure: { message, _ in decoded.fail(message) })
+        }, onFailure: { message, _ in decoded.fail(message) }, onNeedsKeyframe: { _ in recovery.request() })
         received.require(DuoDesktopResolution(width: 2007, height: 1427))
         let compressor = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 80_000_000,
                                          prioritizeSpeed: true, software: false)
-        compressor.onEncoded = { bytes, keyframe, parameters in
-            if let parameters { received.apply(parameters) }
-            received.enqueue(bytes, isKeyframe: keyframe)
+        if CommandLine.arguments.contains("--quic-loopback") {
+            let channel = try await LoopbackVideo.connect(decoder: received, encoder: compressor)
+            recovery.set(channel)
+            compressor.onEncoded = { bytes, keyframe, parameters in
+                channel.sendEncoded(bytes, keyframe: keyframe, parameters: parameters)
+            }
+            loopback = channel
+        } else {
+            compressor.onEncoded = { bytes, keyframe, parameters in
+                if let parameters { received.apply(parameters) }
+                received.enqueue(bytes, isKeyframe: keyframe)
+            }
         }
         compressor.onHung = { decoded.fail("hardware encoder stalled") }
+        #if DUO_CAPTURE_DIAGNOSTICS
+        capture.onSampleObservation = { info in captured.observe(info) }
+        #endif
         capture.onFrame = { image, pts in captured.receive(image); compressor.encode(image, pts: pts) }
         capture.onStopped = { stop in captured.fail(stop.error.localizedDescription) }
         encoder = compressor; decoder = received
@@ -105,13 +188,28 @@ func run() async {
                                 resampleCadence: resampled)
         try await Task.sleep(for: .seconds(2))
         let diagnostic = CommandLine.arguments.contains("--diagnose")
+        if CommandLine.arguments.contains("--request-keyframe"), loopback == nil { throw LoopbackVideo.Failure.configuration }
         // One second stationary, one second scrolling warmup, then a fixed active interval.
         let duration = diagnostic ? 12 : 32
         let capturedStart = captured.begin(seconds: duration), decodedStart = decoded.begin(seconds: duration)
+        var keyframeRequest: (before: Int, deadline: Double)?
         for step in 0..<(duration * 2) {
             try await Task.sleep(for: .milliseconds(500))
             if step == 1 { workload.startScrolling() }
+            if step == 6, CommandLine.arguments.contains("--request-keyframe"), let loopback {
+                keyframeRequest = (loopback.counters.keyframes, ProcessInfo.processInfo.systemUptime + 1.5)
+                loopback.requestKeyframe()
+                print("OWN LOOPBACK QUIC: requested a new keyframe")
+            }
+            if let request = keyframeRequest, ProcessInfo.processInfo.systemUptime >= request.deadline {
+                guard let loopback, loopback.counters.keyframes > request.before else {
+                    throw NSError(domain: "DuoLoopback", code: 4, userInfo: [NSLocalizedDescriptionKey: "keyframe recovery deadline exceeded"])
+                }
+                keyframeRequest = nil
+                print("OWN LOOPBACK QUIC: requested keyframe received within 1.5 seconds")
+            }
             try captured.check(); try decoded.check()
+            try loopback?.check()
         }
         await capture.stop(); capture.onFrame = nil
         try await Task.sleep(for: .milliseconds(250))
@@ -119,17 +217,26 @@ func run() async {
         let (outputs, badOutputs) = decoded.summary
         print("OWN WINDOW CAPTURE: samples=\(samples), wrongDimensions=\(wrong)")
         print(await captured.audit.report(from: capturedStart, seconds: duration))
+        #if DUO_CAPTURE_DIAGNOSTICS
+        print(captured.metadataReport())
+        #endif
         print("OWN WINDOW HARDWARE DECODE: outputs=\(outputs), wrongDimensions=\(badOutputs)")
         print(await decoded.audit.report(from: decodedStart, seconds: duration))
+        if let loopback {
+            let counters = loopback.counters
+            print("OWN LOOPBACK QUIC COUNTERS: frames=\(counters.frames), keyframes=\(counters.keyframes), parameterSets=\(counters.parameters), resets=\(counters.resets)")
+            print(loopback.latencyReport)
+            Stats.shared.dump()
+        }
         try captured.audit.validate(); try decoded.audit.validate()
         passed = !diagnostic && wrong == 0 && badOutputs == 0 && (captured.audit.changedFramesPerSecond ?? 0) >= 120
             && (decoded.audit.changedFramesPerSecond ?? 0) >= 120
-        print("OWN WINDOW RESULT: target120=\(passed); diagnosticOnly=\(diagnostic); resampled=\(resampled); completeDesktop=false; network=false; realDuo=false")
+        print("OWN WINDOW RESULT: target120=\(passed); diagnosticOnly=\(diagnostic); resampled=\(resampled); loopbackQUIC=\(loopback != nil); completeDesktop=false; publicNetwork=false; realDuo=false")
     } catch {
         print("OWN WINDOW CHECK FAILED: \(error)")
     }
     await capture.stop(); capture.onFrame = nil
-    _ = encoder?.abandon(); decoder?.clear()
+    _ = encoder?.abandon(); loopback?.close(); decoder?.clear()
     workload.window?.close()
     ProcessInfo.processInfo.endActivity(activity)
     print("OWN WINDOW END: globalRecording=\(CGPreflightScreenCaptureAccess()); no screen capture or permission prompt was requested for another process")

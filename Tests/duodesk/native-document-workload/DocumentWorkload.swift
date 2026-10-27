@@ -9,6 +9,7 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
     private var scroll: NSScrollView?
     private var text: NSTextView?
     private var clock: CADisplayLink?
+    private var timer: DispatchSourceTimer?
     private var baselineIndicator: NSProgressIndicator?
     private var ticks = 0
     private var started = 0.0
@@ -50,7 +51,13 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
             guard !paths.isEmpty, documents.count == paths.count, documents.allSatisfy({ !$0.isEmpty }) else { exit(1) }
             document = documents.joined(separator: "\n\n")
         }
-        guard let screen = NSScreen.screens.first else { exit(1) }
+        let requestedScreen = environment["DUODESK_WORKLOAD_SCREEN_ID"].flatMap(UInt32.init)
+        let screen = requestedScreen.flatMap { requested in
+            NSScreen.screens.first { screen in
+                (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == requested
+            }
+        } ?? (requestedScreen == nil ? NSScreen.screens.first : nil)
+        guard let screen else { exit(1) }
         let initial = NSSize(width: screen.visibleFrame.width * 0.78, height: screen.visibleFrame.height * 0.78)
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: initial),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -85,12 +92,16 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
         indicator.startAnimation(nil)
         baselineIndicator = indicator
         window.contentView = scroll
-        window.center(); window.makeKeyAndOrderFront(nil); NSApplication.shared.activate()
+        let visible = screen.visibleFrame
+        window.setFrameOrigin(NSPoint(x: visible.midX - window.frame.width / 2,
+                                      y: visible.midY - window.frame.height / 2))
+        window.makeKeyAndOrderFront(nil); NSApplication.shared.activate()
         text.layoutManager?.ensureLayout(for: text.textContainer!)
         text.sizeToFit()
         self.window = window; self.scroll = scroll; self.text = text
         let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? 0
-        print("NATIVE DOCUMENT READY: screen=\(number), window=\(window.frame), documentHeight=\(text.frame.height), visibleHeight=\(scroll.contentView.bounds.height)")
+        let actual = window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? 0
+        print("NATIVE DOCUMENT READY: requestedScreen=\(number), actualScreen=\(actual), window=\(window.frame), documentHeight=\(text.frame.height), visibleHeight=\(scroll.contentView.bounds.height)")
         onReady?()
         if usesStdin {
             // The capture controller provides one byte only after its stationary baseline.
@@ -103,7 +114,7 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
     }
 
     func startScrolling() {
-        guard let screen = window?.screen, let scroll, let text,
+        guard let window, let screen = window.screen, let scroll, let text,
               text.frame.height > scroll.contentView.bounds.height + 6_000 else {
             print("NATIVE DOCUMENT ERROR: document is too short or no screen is available")
             NSApplication.shared.terminate(nil); return
@@ -112,14 +123,29 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
         baselineIndicator?.removeFromSuperview()
         baselineIndicator = nil
         started = ProcessInfo.processInfo.systemUptime
-        let link = screen.displayLink(target: self, selector: #selector(tick(_:)))
+        let requestedClock = ProcessInfo.processInfo.environment["DUODESK_WORKLOAD_CLOCK"]
+        let clockKind = requestedClock == "window" ? "window" : requestedClock == "timer" ? "timer" : "screen"
+        if clockKind == "timer" {
+            let source = DispatchSource.makeTimerSource(queue: .main)
+            source.schedule(deadline: .now(), repeating: .nanoseconds(8_333_333), leeway: .microseconds(500))
+            source.setEventHandler { [weak self] in self?.advanceFrame(intervalMs: 0) }
+            source.resume(); timer = source
+            print("NATIVE DOCUMENT SCROLLING: clock=timer, screenFPS=\(screen.maximumFramesPerSecond), 1.5 points per timer callback")
+            return
+        }
+        let link = clockKind == "window" ? window.displayLink(target: self, selector: #selector(tick(_:)))
+                                          : screen.displayLink(target: self, selector: #selector(tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         clock = link
-        print("NATIVE DOCUMENT SCROLLING: screenFPS=\(screen.maximumFramesPerSecond), 1.5 points per display callback")
+        print("NATIVE DOCUMENT SCROLLING: clock=\(clockKind), screenFPS=\(screen.maximumFramesPerSecond), 1.5 points per display callback")
     }
 
     @objc private func tick(_ link: CADisplayLink) {
+        advanceFrame(intervalMs: (link.targetTimestamp - link.timestamp) * 1000)
+    }
+
+    private func advanceFrame(intervalMs: Double) {
         guard let scroll, let text else { return }
         ticks += 1
         let maximum = max(0, text.bounds.height - scroll.contentView.bounds.height)
@@ -127,7 +153,9 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
         scroll.reflectScrolledClipView(scroll.contentView)
         if ticks % 120 == 0 {
-            print("NATIVE DOCUMENT: callbacks=\(ticks), elapsed=\(ProcessInfo.processInfo.systemUptime - started), scrollY=\(y), max=\(maximum)")
+            let screen = window?.screen
+            let number = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? 0
+            print("NATIVE DOCUMENT: callbacks=\(ticks), elapsed=\(ProcessInfo.processInfo.systemUptime - started), scrollY=\(y), max=\(maximum), screen=\(number), screenFPS=\(screen?.maximumFramesPerSecond ?? 0), intervalMs=\(intervalMs)")
         }
     }
 }

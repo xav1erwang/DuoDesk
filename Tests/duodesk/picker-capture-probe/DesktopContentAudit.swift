@@ -198,4 +198,9 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
     func validate() throws {
         guard lock.withLock({ validationPassed }) else { throw PixelMotionAudit.Failure.invalidFrames }
     }
+
+    /// Aggregate-only diagnostic data: timestamps and differences, never image pixels.
+    func comparisonSnapshot() -> [(time: Double, full: Double, center: Double, changedPixels: Int)] {
+        lock.withLock { comparisons.map { (time: $0.0, full: $0.1, center: $0.2, changedPixels: $0.3) } }
+    }
 }
