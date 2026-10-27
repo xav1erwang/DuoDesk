@@ -483,18 +483,38 @@ func run() async {
         capture.onStopped = { stop in captured.fail(stop.error.localizedDescription) }
         let resampled = CommandLine.arguments.contains("--resampled")
         guard !virtualSecondary || !resampled else { throw PixelMotionAudit.Failure.unavailable }
+        let phaseRequested = CommandLine.arguments.contains("--phase-study")
+        guard !phaseRequested || (diagnostic && captureOnly && resampled && !virtualSecondary) else {
+            throw PixelMotionAudit.Failure.unavailable
+        }
+        let phaseStudy = phaseRequested ? try SamplePhaseStudy() : nil
+        #if DUO_CAPTURE_DIAGNOSTICS
+        if let phaseStudy {
+            capture.onUnpacedSample = { image, pts, arrival in phaseStudy.inspect(image, pts: pts, arrived: arrival) }
+            capture.onFrame = { image, pts in
+                let now = CMClockGetTime(CMClockGetHostTimeClock())
+                phaseStudy.emitted(pts: pts, at: now)
+                captured.receive(image)
+            }
+        }
+        #endif
         try await capture.start(filter: filter, width: 2008, height: 1428, fps: 120, showsCursor: false,
                                 nativeCadence: virtualSecondary, resampleCadence: resampled)
         try await Task.sleep(for: .seconds(2))
         if CommandLine.arguments.contains("--request-keyframe"), loopback == nil { throw LoopbackVideo.Failure.configuration }
         // One second stationary, one second scrolling warmup, then a fixed active interval.
         #if DUO_RENDER_TRACE
-        let duration = renderCorrelation ? 7 : diagnostic ? 12 : 32
+        let duration = phaseRequested || renderCorrelation ? 7 : diagnostic ? 12 : 32
         #else
-        let duration = diagnostic ? 12 : 32
+        let duration = phaseRequested ? 7 : diagnostic ? 12 : 32
         #endif
         let capturedStart = captured.begin(seconds: duration), decodedStart = decoded?.begin(seconds: duration)
         flow?.begin(at: capturedStart + 2, seconds: duration - 2)
+        if let phaseStudy {
+            let hostNow = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
+            let uptimeNow = ProcessInfo.processInfo.systemUptime
+            phaseStudy.begin(at: capturedStart + hostNow - uptimeNow, seconds: duration)
+        }
         var keyframeRequest: (before: Int, deadline: Double)?
         for step in 0..<(duration * 2) {
             try await Task.sleep(for: .milliseconds(500))
@@ -523,6 +543,7 @@ func run() async {
         let (samples, wrong) = captured.summary
         print("OWN WINDOW CAPTURE: samples=\(samples), wrongDimensions=\(wrong)")
         print(await captured.audit.report(from: capturedStart, seconds: duration))
+        if let phaseStudy { print(await phaseStudy.report(fullPixelFPS: captured.audit.changedFramesPerSecond)) }
         if profileAuditLock { print(captured.audit.lockWaitReport()) }
         #if DUO_CAPTURE_DIAGNOSTICS
         print(captured.metadataReport())
@@ -557,6 +578,9 @@ func run() async {
     await capture.stop(); capture.onFrame = nil
     #if DUO_RENDER_TRACE
     await displayCapture?.stop(); displayCapture?.onFrame = nil
+    #endif
+    #if DUO_CAPTURE_DIAGNOSTICS
+    capture.onUnpacedSample = nil
     #endif
     _ = encoder?.abandon(); loopback?.close(); decoder?.clear()
     workload.stopScrolling()

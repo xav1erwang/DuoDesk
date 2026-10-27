@@ -35,6 +35,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let surfaceID: UInt32?
     }
     var onSampleObservation: ((SampleObservation) -> Void)?
+    /// Test-only view of actual SCK inputs before cadence selection. No production build includes it.
+    var onUnpacedSample: ((CVPixelBuffer, CMTime, CMTime) -> Void)?
     static func diagnosticRect(_ value: Any) -> CGRect? {
         if let rect = value as? CGRect { return rect }
         if let wrapped = value as? NSValue { return wrapped.rectValue }
@@ -158,6 +160,13 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         guard status == .complete else { Stats.shared.bump(status == .idle ? "cap.idle" : "cap.status\(statusRaw)"); return }
         guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { Stats.shared.bump("cap.noPixels"); return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        #if DUO_CAPTURE_DIAGNOSTICS
+        if let onUnpacedSample, let image = CMSampleBufferGetImageBuffer(sampleBuffer),
+           stateLock.withLock({ self.stream === stream }) {
+            let arrival = CMClockGetTime(CMClockGetHostTimeClock())
+            onUnpacedSample(image, pts, arrival)
+        }
+        #endif
         let selection = stateLock.withLock { () -> Selection in
             guard self.stream === stream else { return .ignored }
             if var pacer = framePacer {
