@@ -26,6 +26,8 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     // Only this small admission/generation state crosses the network, UI and VT callback queues.
     private let lock = NSLock()
     private var generation: UInt64 = 0
+    // Once retired, this instance cannot admit work even if an old network callback kept it.
+    private var retired = false
     // A queued parameter-set operation belongs to the connection/resolution that admitted it.
     // It must not mint a new generation after clear() has already fenced that connection out.
     private var inputEpoch: UInt64 = 0
@@ -39,6 +41,11 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     // Under lock: time since the first outstanding frame or most recent completion. New inputs
     // cannot postpone the timeout while none of the outstanding callbacks makes progress.
     private var callbackProgressAt: TimeInterval?
+    // An explicit queue checkpoint also detects a blocked reset/invalidation when no frame is
+    // counted in flight. Repeated resets coalesce behind one checkpoint and one recheck.
+    private var queueCheckpointAt: TimeInterval?
+    private var queueCheckpointID: UInt64 = 0
+    private var queueCheckpointAgain = false
     private var failed = false
     private let watchdogQueue = DispatchQueue(label: "duodesk.decoder-watchdog", qos: .utility)
     private var watchdog: DispatchSourceTimer?
@@ -77,8 +84,9 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         }
     }
 
-    init(onFormat: @escaping (CGSize, UInt64) -> Void, onSample: @escaping (CMSampleBuffer, UInt64) -> Void,
+    init(initialGeneration: UInt64 = 0, onFormat: @escaping (CGSize, UInt64) -> Void, onSample: @escaping (CMSampleBuffer, UInt64) -> Void,
          onFailure: @escaping (String, UInt64) -> Void, onNeedsKeyframe: @escaping (UInt64) -> Void = { _ in }) {
+        self.generation = initialGeneration
         self.onFormat = onFormat; self.onSample = onSample; self.onFailure = onFailure
         self.onNeedsKeyframe = onNeedsKeyframe
         let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
@@ -94,16 +102,16 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     }
 
     func isCurrent(_ value: UInt64) -> Bool {
-        lock.lock(); defer { lock.unlock() }; return generation == value
+        lock.lock(); defer { lock.unlock() }; return generation == value && !retired
     }
 
-    private func canOutput(_ value: UInt64) -> Bool {
-        lock.lock(); defer { lock.unlock() }; return generation == value && !failed
+    func canOutput(_ value: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return generation == value && !failed && !retired
     }
 
     private func advance(ifInputEpoch epoch: UInt64) -> UInt64? {
         lock.lock(); defer { lock.unlock() }
-        guard inputEpoch == epoch, !failed else { return nil }
+        guard inputEpoch == epoch, !failed, !retired else { return nil }
         generation &+= 1; inFlight = 0; inFlightBytes = 0; latestOutputSequence = 0; lastRecoveryRequest = -.infinity
         callbackProgressAt = nil
         cancelRecoveryTimerLocked()
@@ -113,6 +121,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     @discardableResult
     func require(_ value: DuoDesktopResolution?) -> UInt64 {
         lock.lock()
+        guard !retired else { let token = generation; lock.unlock(); return token }
         guard required != value else { let token = generation; lock.unlock(); return token }
         required = value; inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
         callbackProgressAt = nil; failed = false
@@ -126,12 +135,70 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     @discardableResult
     func clear() -> UInt64 {
         lock.lock()
+        guard !retired else { let token = generation; lock.unlock(); return token }
         inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
         callbackProgressAt = nil; failed = false
         latestOutputSequence = 0; lastRecoveryRequest = -.infinity; cancelRecoveryTimerLocked()
         let token = generation
         queue.async { [self] in if isCurrent(token) { invalidate() } }
         lock.unlock()
+        return token
+    }
+
+    /// If a failed queue cannot be replaced because the router's retirement limit is full,
+    /// fence the old generation without pretending the same blocked queue became usable.
+    func fenceFailed() -> UInt64? {
+        lock.lock(); defer { lock.unlock() }
+        guard failed, !retired else { return nil }
+        inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
+        callbackProgressAt = nil; latestOutputSequence = 0; lastRecoveryRequest = -.infinity
+        cancelRecoveryTimerLocked(); cancelQueueCheckpointLocked()
+        return generation
+    }
+
+    /// Call after a reset that must reuse this queue. The marker runs after that reset and before
+    /// subsequent admissions; an already pending marker coalesces later resets into one recheck.
+    func watchQueue() {
+        lock.lock(); defer { lock.unlock() }
+        guard !failed, !retired else { return }
+        if queueCheckpointAt != nil { queueCheckpointAgain = true; return }
+        startQueueCheckpointLocked(now: ProcessInfo.processInfo.systemUptime)
+    }
+
+    private func startQueueCheckpointLocked(now: TimeInterval) {
+        queueCheckpointID &+= 1
+        let id = queueCheckpointID
+        queueCheckpointAt = now
+        queue.async { [weak self] in self?.queueCheckpointReached(id) }
+    }
+
+    private func queueCheckpointReached(_ id: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        guard queueCheckpointID == id, queueCheckpointAt != nil, !failed, !retired else { return }
+        if queueCheckpointAgain {
+            queueCheckpointAgain = false
+            startQueueCheckpointLocked(now: ProcessInfo.processInfo.systemUptime)
+        } else { queueCheckpointAt = nil }
+    }
+
+    private func cancelQueueCheckpointLocked() {
+        queueCheckpointID &+= 1; queueCheckpointAt = nil; queueCheckpointAgain = false
+    }
+
+    /// Fence an abandoned instance immediately, then retire its session on its own queue. The
+    /// completion is intentionally not called until invalidation returns; a router can bound the
+    /// number of old queues retained when a VideoToolbox call never comes back.
+    @discardableResult
+    func retire(onDrained: @escaping () -> Void) -> UInt64 {
+        lock.lock()
+        guard !retired else { let token = generation; lock.unlock(); return token }
+        retired = true; failed = true; inputEpoch &+= 1; generation &+= 1
+        inFlight = 0; inFlightBytes = 0; callbackProgressAt = nil; backlog.reset()
+        latestOutputSequence = 0; cancelRecoveryTimerLocked(); cancelQueueCheckpointLocked()
+        let token = generation
+        queue.async { [self] in invalidate(); onDrained() }
+        lock.unlock()
+        watchdog?.cancel()
         return token
     }
 
@@ -150,8 +217,8 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     /// Under lock. Keep the generation for the UI's failure callback, but fence all old queued
     /// inputs and decoded pictures immediately; clear/require starts a fresh generation.
     private func claimFailureLocked(_ token: UInt64) -> (pending: Int, active: Int)? {
-        guard generation == token, !failed else { return nil }
-        failed = true; inputEpoch &+= 1; backlog.reset(); cancelRecoveryTimerLocked()
+        guard generation == token, !failed, !retired else { return nil }
+        failed = true; inputEpoch &+= 1; backlog.reset(); cancelRecoveryTimerLocked(); cancelQueueCheckpointLocked()
         return (backlog.frames, inFlight)
     }
 
@@ -170,18 +237,22 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         lock.lock()
         let gap = now - lastWatchdogCheck
         lastWatchdogCheck = now
-        if gap > 2, callbackProgressAt != nil { callbackProgressAt = now }
+        if gap > 2 {
+            if callbackProgressAt != nil { callbackProgressAt = now }
+            if queueCheckpointAt != nil { queueCheckpointAt = now }
+        }
         let token = generation
-        let stalled = inFlight > 0 && callbackProgressAt.map { now - $0 >= Self.stallAfter } == true
+        let queueStalled = queueCheckpointAt.map { now - $0 >= Self.stallAfter } == true
+        let stalled = queueStalled || (inFlight > 0 && callbackProgressAt.map { now - $0 >= Self.stallAfter } == true)
         let counts = stalled ? claimFailureLocked(token) : nil
         lock.unlock()
         if let counts { reportFailure(kVTVideoDecoderNotAvailableNowErr, generation: token,
-                                      reason: "decoder callbacks stalled", counts: counts) }
+                                      reason: queueStalled ? "decoder queue stalled" : "decoder callbacks stalled", counts: counts) }
     }
 
     func apply(_ ps: ParameterSets) {
         lock.lock()
-        guard !failed else { lock.unlock(); return }
+        guard !failed, !retired else { lock.unlock(); return }
         let epoch = inputEpoch
         queue.async { [self] in
             lock.lock(); let current = inputEpoch == epoch && !failed; lock.unlock()
@@ -239,7 +310,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
 
     func enqueue(_ data: Data, isKeyframe: Bool) {
         lock.lock()
-        guard !failed else { lock.unlock(); return }
+        guard !failed, !retired else { lock.unlock(); return }
         // Even an empty or oversized access unit is a gap in the reference chain. Let the
         // bounded admission state fence old work and request recovery instead of silently
         // returning before it can observe the discarded frame. The queue and this generation's

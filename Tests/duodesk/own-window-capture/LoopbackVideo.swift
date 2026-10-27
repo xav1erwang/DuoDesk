@@ -5,6 +5,13 @@ import Network
 import Security
 import StreamProtocol
 
+protocol LoopbackVideoDecoder: AnyObject {
+    @discardableResult func clear() -> UInt64
+    func apply(_ parameters: ParameterSets)
+    func enqueue(_ data: Data, isKeyframe: Bool)
+}
+extension HardwareHEVCDecoder: LoopbackVideoDecoder { }
+
 final class LoopbackVideo: @unchecked Sendable {
     enum Failure: Error { case configuration, identity, timeout, authentication, framing, disconnected }
     private final class State: @unchecked Sendable {
@@ -55,16 +62,16 @@ final class LoopbackVideo: @unchecked Sendable {
 
     private let server: StreamServer
     private let connection: NWConnection
-    private let decoder: HardwareHEVCDecoder
+    private let decoder: any LoopbackVideoDecoder
     private let state: State
     private let token = UUID()
     private var reader: Task<Void, Never>?
 
-    private init(server: StreamServer, connection: NWConnection, decoder: HardwareHEVCDecoder, state: State) {
+    private init(server: StreamServer, connection: NWConnection, decoder: any LoopbackVideoDecoder, state: State) {
         self.server = server; self.connection = connection; self.decoder = decoder; self.state = state
     }
 
-    static func connect(decoder: HardwareHEVCDecoder, encoder: HEVCEncoder,
+    static func connect(decoder: any LoopbackVideoDecoder, encoder: HEVCEncoder,
                         onFrameReceived: (@Sendable () -> Void)? = nil) async throws -> LoopbackVideo {
         let env = ProcessInfo.processInfo.environment
         guard env["SILL_TEST_LOOPBACK"] == "1", (env["SILL_TEST_SERVICE_TYPE"] ?? "").isEmpty else {

@@ -17,19 +17,19 @@ final class HEVCDisplayView: UIView {
     private var displayedGeneration: UInt64?
     var hasCurrentImage: Bool {
         guard let token = displayedGeneration else { return false }
-        return window != nil && hardwareDecoder.isCurrent(token) && videoPresenter.isReady(token)
+        return window != nil && hardwareDecoder.canOutput(token) && videoPresenter.isReady(token)
     }
     /// Taken on main with a touch, checked on the network queue before it is sent. Captures the
     /// thread-safe decoder and token only, so queued input never reads UIKit from another thread.
     func makeInputFence() -> @Sendable () -> Bool {
         let decoder = hardwareDecoder
-        guard let token = displayedGeneration, decoder.isCurrent(token) else { return { false } }
+        guard let token = displayedGeneration, decoder.canOutput(token) else { return { false } }
         let presentation = videoPresenter.makeInputFence(token)
-        return { decoder.isCurrent(token) && presentation() }
+        return { decoder.canOutput(token) && presentation() }
     }
     private lazy var videoPresenter: HardwareVideoPresenter = HardwareVideoPresenter(renderer: displayLayer.sampleBufferRenderer, onFirstImage: { [weak self] size, token in
         Task { @MainActor [weak self] in
-            guard let self, self.hardwareDecoder.isCurrent(token), self.videoPresenter.isReady(token) else { return }
+            guard let self, self.hardwareDecoder.canOutput(token), self.videoPresenter.isReady(token) else { return }
             self.displayedGeneration = token
             self.pointerVideoSize = size
             self.onVideoSize?(size)
@@ -43,9 +43,9 @@ final class HEVCDisplayView: UIView {
             self.onDecoderFailure?(message)
         }
     })
-    private lazy var hardwareDecoder: HardwareHEVCDecoder = {
+    private lazy var hardwareDecoder: HardwareDecoderRouter = {
         let presenter = videoPresenter
-        return HardwareHEVCDecoder(onFormat: { _, token in
+        return HardwareDecoderRouter(onFormat: { _, token in
             presenter.reset(token)
         }, onSample: { sample, token in
             presenter.enqueue(sample, generation: token)
@@ -56,10 +56,10 @@ final class HEVCDisplayView: UIView {
             }
         }, onNeedsKeyframe: { [weak self] token in
             Task { @MainActor [weak self] in
-                guard let self, self.hardwareDecoder.isCurrent(token) else { return }
+                guard let self, self.hardwareDecoder.canOutput(token) else { return }
                 self.onKeyframeNeeded?()
             }
-        })
+        }, onReset: { token in presenter.reset(token) })
     }()
 
     func requireNativeResolution(_ resolution: DuoDesktopResolution?) {
@@ -160,7 +160,7 @@ final class HEVCDisplayView: UIView {
     private func presentationHierarchyChanged() {
         let changed = presentationWindow !== window || presentationParent !== superview
         presentationWindow = window; presentationParent = superview
-        guard changed, let token = displayedGeneration, hardwareDecoder.isCurrent(token) else { return }
+        guard changed, let token = displayedGeneration, hardwareDecoder.canOutput(token) else { return }
         videoPresenter.refreshSurface(token)
         #if DEBUG
         print("Video surface rehosted: attached=\(window != nil), generation=\(token)")
