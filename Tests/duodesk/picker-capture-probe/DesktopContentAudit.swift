@@ -29,6 +29,7 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
     private let queue: any MTLCommandQueue
     private let pipeline: any MTLComputePipelineState
     private let cache: CVMetalTextureCache
+    private let activeOffsetSeconds: Int
     private let submissionQueue = DispatchQueue(label: "duodesk.desktop-content-audit", qos: .userInteractive)
     private var previous: Surface?  // submissionQueue only
     private let pending = DispatchGroup()
@@ -40,7 +41,8 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
     private var reportedFPS: Double?
     var changedFramesPerSecond: Double? { lock.withLock { reportedFPS } }
 
-    init() throws {
+    init(activeOffsetSeconds: Int = 1) throws {
+        precondition(activeOffsetSeconds >= 1)
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw PixelMotionAudit.Failure.unavailable
         }
@@ -70,7 +72,7 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
         """, options: nil)
         guard let function = library.makeFunction(name: "compareTiles") else { throw PixelMotionAudit.Failure.unavailable }
         self.pipeline = try device.makeComputePipelineState(function: function)
-        self.queue = queue; self.cache = cache
+        self.queue = queue; self.cache = cache; self.activeOffsetSeconds = activeOffsetSeconds
     }
 
     func inspect(_ image: CVPixelBuffer, at time: Double, onResult: (@Sendable (Int32, Double) -> Void)?) {
@@ -163,8 +165,9 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
             func meaningful(_ item: (Double, Double, Double, Int)) -> Bool {
                 item.1 >= 0.01 && item.2 >= 0.12 && item.3 >= 500
             }
-            let active = comparisons.filter { $0.0 >= start + 1 && $0.0 < start + Double(seconds) }
+            let active = comparisons.filter { $0.0 >= start + Double(activeOffsetSeconds) && $0.0 < start + Double(seconds) }
             let changed = active.filter(meaningful)
+            let missed = active.filter { !meaningful($0) }
             var perSecond = [Int](repeating: 0, count: seconds)
             for item in changed {
                 let second = Int(item.0 - start)
@@ -175,13 +178,20 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
             let stationaryChanging = stationary.filter(meaningful).count
             let baselineMax = stationary.map(\.2).max() ?? 0
             let p50 = values.isEmpty ? 0 : values[values.count / 2]
-            let p95 = values.isEmpty ? 0 : values[Int(Double(values.count - 1) * 0.95)]
+            let p95 = values.isEmpty ? 0 : values[(values.count * 95 + 99) / 100 - 1]
             validationPassed = sequence > 0 && failed == 0 && dropped == 0 && ready.isEmpty
                 && !active.isEmpty && !stationary.isEmpty && stationaryChanging == 0
-            reportedFPS = Double(changed.count) / Double(max(1, seconds - 1))
-            return String(format: "DESKTOP CONTENT: submitted=%d comparisons=%d changing=%d activeFPS=%.3f failed=%d auditDropped=%d; per-pixel luma delta>=3; full/center thresholds=0.01/0.12 and 500 changed center pixels; stationaryPairs=%d stationaryChanging=%d stationaryMax=%.3f activeCenterP50=%.3f p95=%.3f; perSecond=%@",
-                          sequence, active.count, changed.count, reportedFPS ?? 0, failed, dropped, stationary.count,
-                          stationaryChanging, baselineMax, p50, p95, String(describing: perSecond))
+            reportedFPS = Double(changed.count) / Double(max(1, seconds - activeOffsetSeconds))
+            let missSample = missed.prefix(12).map { item in
+                String(format: "%.3f:%.3f/%.3f/%d", item.0 - start, item.1, item.2, item.3)
+            }.joined(separator: ",")
+            let zeroFull = missed.filter { $0.1 == 0 }.count
+            let zeroCenter = missed.filter { $0.2 == 0 }.count
+            return String(format: "DESKTOP CONTENT: submitted=%d comparisons=%d changing=%d activeFPS=%.3f activeOffset=%d activeSeconds=%d failed=%d auditDropped=%d; per-pixel luma delta>=3; full/center thresholds=0.01/0.12 and 500 changed center pixels; stationaryPairs=%d stationaryChanging=%d stationaryMax=%.3f activeCenterP50=%.3f p95=%.3f; missed=%d zeroFull=%d zeroCenter=%d firstMissed(time:full/center/pixels)=%@; perSecond=%@",
+                          sequence, active.count, changed.count, reportedFPS ?? 0, activeOffsetSeconds,
+                          seconds - activeOffsetSeconds, failed, dropped, stationary.count,
+                          stationaryChanging, baselineMax, p50, p95, missed.count, zeroFull, zeroCenter, missSample,
+                          String(describing: perSecond))
         }
     }
 

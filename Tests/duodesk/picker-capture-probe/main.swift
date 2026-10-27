@@ -272,14 +272,14 @@ func runCapture() async {
             if let audit = frames.audit {
                 print(await audit.report(from: began, seconds: 30))
                 do { try audit.validate() } catch { accepted = false }
-                accepted = accepted && (audit.changedFramesPerSecond ?? 0) >= 119.5
+                accepted = accepted && (audit.changedFramesPerSecond ?? 0) >= 120
             }
             if let received = decodedFrames, let audit = received.audit, let decodedBegan {
                 let (decodedCount, badDecodedSize) = received.summary
                 print("HARDWARE DECODED: count=\(decodedCount), fps=\(Double(decodedCount) / 30), wrongDimensions=\(badDecodedSize)")
                 print(await audit.report(from: decodedBegan, seconds: 30))
                 do { try audit.validate() } catch { accepted = false }
-                accepted = accepted && badDecodedSize == 0 && (audit.changedFramesPerSecond ?? 0) >= 119.5
+                accepted = accepted && badDecodedSize == 0 && (audit.changedFramesPerSecond ?? 0) >= 120
             }
             _ = encoded?.abandon()
             decoded?.clear()

@@ -41,15 +41,22 @@ struct Harness {
     }
     private static func run() async throws {
         let audit = try DesktopContentAudit()
+        let warmedAudit = try DesktopContentAudit(activeOffsetSeconds: 2)
         for index in 0..<9 {
             let time = index < 2 ? Double(index) * 0.3 : 1.1 + Double(index - 2) * 0.2
-            audit.inspect(try image(index), at: time, onResult: nil)
+            let buffer = try image(index)
+            audit.inspect(buffer, at: time, onResult: nil)
+            warmedAudit.inspect(buffer, at: time, onResult: nil)
             try await Task.sleep(for: .milliseconds(10))
         }
         print(await audit.report(from: 0, seconds: 5))
         try audit.validate()
         guard audit.changedFramesPerSecond == 1.5 else { throw PixelMotionAudit.Failure.invalidFrames }
         print("DESKTOP AUDIT UNIT CHECK PASS: stationary drift and outside-only motion are excluded; six center changes are counted")
+        print(await warmedAudit.report(from: 0, seconds: 5))
+        try warmedAudit.validate()
+        guard warmedAudit.changedFramesPerSecond == 1.0 / 3.0 else { throw PixelMotionAudit.Failure.invalidFrames }
+        print("DESKTOP AUDIT UNIT CHECK PASS: warmup frames are excluded from the fixed active interval")
 
         let movingBaseline = try DesktopContentAudit()
         for (index, time) in [(2, 0.1), (3, 0.4), (4, 1.2)] {

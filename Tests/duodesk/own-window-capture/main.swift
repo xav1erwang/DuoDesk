@@ -20,10 +20,10 @@ final class Frames: @unchecked Sendable {
     private var start = Double.infinity, end = Double.infinity
     private var count = 0, wrongSize = 0
     private var failure: String?
-    init() throws { audit = try DesktopContentAudit() }
-    func begin() -> Double {
+    init() throws { audit = try DesktopContentAudit(activeOffsetSeconds: 2) }
+    func begin(seconds: Int) -> Double {
         lock.withLock {
-            start = ProcessInfo.processInfo.systemUptime; end = start + 30
+            start = ProcessInfo.processInfo.systemUptime; end = start + Double(seconds)
             return start
         }
     }
@@ -104,8 +104,11 @@ func run() async {
         try await capture.start(filter: filter, width: 2008, height: 1428, fps: 120, showsCursor: false,
                                 resampleCadence: resampled)
         try await Task.sleep(for: .seconds(2))
-        let capturedStart = captured.begin(), decodedStart = decoded.begin()
-        for step in 0..<60 {
+        let diagnostic = CommandLine.arguments.contains("--diagnose")
+        // One second stationary, one second scrolling warmup, then a fixed active interval.
+        let duration = diagnostic ? 12 : 32
+        let capturedStart = captured.begin(seconds: duration), decodedStart = decoded.begin(seconds: duration)
+        for step in 0..<(duration * 2) {
             try await Task.sleep(for: .milliseconds(500))
             if step == 1 { workload.startScrolling() }
             try captured.check(); try decoded.check()
@@ -115,13 +118,13 @@ func run() async {
         let (samples, wrong) = captured.summary
         let (outputs, badOutputs) = decoded.summary
         print("OWN WINDOW CAPTURE: samples=\(samples), wrongDimensions=\(wrong)")
-        print(await captured.audit.report(from: capturedStart, seconds: 30))
+        print(await captured.audit.report(from: capturedStart, seconds: duration))
         print("OWN WINDOW HARDWARE DECODE: outputs=\(outputs), wrongDimensions=\(badOutputs)")
-        print(await decoded.audit.report(from: decodedStart, seconds: 30))
+        print(await decoded.audit.report(from: decodedStart, seconds: duration))
         try captured.audit.validate(); try decoded.audit.validate()
-        passed = wrong == 0 && badOutputs == 0 && (captured.audit.changedFramesPerSecond ?? 0) >= 119.5
-            && (decoded.audit.changedFramesPerSecond ?? 0) >= 119.5
-        print("OWN WINDOW RESULT: target120=\(passed); resampled=\(resampled); completeDesktop=false; network=false; realDuo=false")
+        passed = !diagnostic && wrong == 0 && badOutputs == 0 && (captured.audit.changedFramesPerSecond ?? 0) >= 120
+            && (decoded.audit.changedFramesPerSecond ?? 0) >= 120
+        print("OWN WINDOW RESULT: target120=\(passed); diagnosticOnly=\(diagnostic); resampled=\(resampled); completeDesktop=false; network=false; realDuo=false")
     } catch {
         print("OWN WINDOW CHECK FAILED: \(error)")
     }
