@@ -87,7 +87,7 @@ final class HEVCEncoder {
     /// The frame inside VideoToolbox, the one waiting behind it, whether the session is dead, and
     /// what the next frame to go in carries (its timestamp, a requested keyframe).
     private var mailbox = EncoderMailbox<(CVPixelBuffer, CMTime)>()
-    /// Forced keyframes VideoToolbox dropped and we asked for again (bounded, see `submit`).
+    /// Consecutive recovery keyframes requested after a dropped frame (bounded, see `submit`).
     private var forcedRetries = 0
     /// Most recent captured frame. ScreenCaptureKit only delivers frames when the window repaints,
     /// so a client that connects while the window is static would otherwise never get a keyframe.
@@ -399,19 +399,17 @@ final class HEVCEncoder {
             print("TEST: holding frame \(id) of the hardware HEVC \(width)×\(height) session for \(Int(TestHang.hold)) s before it goes in (SILL_TEST_ENCODER_HANG)")
             Thread.sleep(forTimeInterval: TestHang.hold)
         }
+        var infoFlags: VTEncodeInfoFlags = []
         let status = VTCompressionSessionEncodeFrame(session, imageBuffer: pixelBuffer, presentationTimeStamp: pts,
-                                                     duration: .invalid, frameProperties: props, infoFlagsOut: nil) { [weak self] status, _, sampleBuffer in
+                                                     duration: .invalid, frameProperties: props, infoFlagsOut: &infoFlags) { [weak self] status, flags, sampleBuffer in
             guard let self else { return }
             // A session the watchdog gave up on may still cough up late output. Its clients have
             // moved on to a new session (new size, new parameter sets): never forward it.
-            let bytes = status == noErr ? sampleBuffer.map { CMSampleBufferGetTotalSampleSize($0) } : nil
-            let failed = status != noErr || sampleBuffer == nil
-            guard self.frameReturned(id, bytes: bytes, retryForced: forced && failed) else { return }
-            guard status == noErr, let sampleBuffer else {
+            let failed = status != noErr || flags.contains(.frameDropped) || sampleBuffer == nil
+            let bytes = failed ? nil : sampleBuffer.map { CMSampleBufferGetTotalSampleSize($0) }
+            guard self.frameReturned(id, bytes: bytes, failed: failed) else { return }
+            guard !failed, let sampleBuffer else {
                 self.bump("enc.error")
-                // VideoToolbox dropped the frame (real-time mode over its data-rate cap). A forced
-                // keyframe must not go with it: on a static window nothing would ask again and a
-                // client waiting for a keyframe would wait for good.
                 return
             }
             self.bump("enc.out")
@@ -421,16 +419,22 @@ final class HEVCEncoder {
             // Refused outright; the handler may never run. Free the slot ourselves, or the watchdog
             // would call a transient error a hang and drop the stream to the software encoder.
             bump("enc.refused")
-            frameReturned(id, bytes: nil, retryForced: forced)
+            frameReturned(id, bytes: nil, failed: true)
+        } else if infoFlags.contains(.frameDropped) {
+            // VideoToolbox can report a synchronous drop before returning. The output callback
+            // may also arrive; frameReturned accepts the first notice and ignores the duplicate.
+            if frameReturned(id, bytes: nil, failed: true) { bump("enc.droppedSync") }
         }
     }
 
     /// VT callback thread (or `submit` on a refusal): the frame's place is free; the waiting frame,
     /// if there is one, takes it. A dead session or duplicate notice neither forwards output nor
-    /// retries a keyframe. A genuine failed forced frame requests at most one retry under the same
-    /// lock as its return, before a waiting frame may consume that request.
+    /// retries a keyframe. A failed frame requests a recovery keyframe, since the receiver cannot
+    /// depend on the missing frame's references. A newer waiting image carries the request; when
+    /// none is waiting, retry the latest image after the normal stillness check. The request and
+    /// hand-over share the lock, so a newer image cannot be overwritten by an older recovery.
     @discardableResult
-    private func frameReturned(_ id: Int, bytes: Int?, retryForced: Bool = false) -> Bool {
+    private func frameReturned(_ id: Int, bytes: Int?, failed: Bool = false) -> Bool {
         lock.lock()
         let now = CACurrentMediaTime()
         // The slow state is judged on frames that came back encoded, timed from their hand-over.
@@ -447,9 +451,20 @@ final class HEVCEncoder {
         case .freed, .next: accepted = true
         }
         var retry: (Admission?, CFTimeInterval?)?
-        if accepted && retryForced && forcedRetries < 3 {
-            forcedRetries += 1
-            retry = prepareKeyframeRequestLocked(now: now)
+        if accepted && failed {
+            if forcedRetries < 3 {
+                forcedRetries += 1
+                if case .next = outcome {
+                    // Already let in, but not submitted: the queued newer image carries this flag.
+                    mailbox.keyframeRequested = true
+                } else {
+                    retry = prepareKeyframeRequestLocked(now: now)
+                }
+            } else {
+                // Stop autonomous retries, but do not resume with a potentially undecodable delta
+                // if a new capture arrives or the client explicitly asks for a keyframe later.
+                mailbox.keyframeRequested = true
+            }
         }
         // Queued before the lock is released, like every frame let in (`admitLocked`).
         if case .next(let (pb, pts), let next) = outcome { encodeQueue.async { [weak self] in self?.submit(pb, pts: pts, id: next) } }

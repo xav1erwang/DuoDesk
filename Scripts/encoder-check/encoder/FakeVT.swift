@@ -77,6 +77,12 @@ enum Behavior {
     case refuseWithCallback(delay: Double, beforeReturn: Bool, success: Bool)
     /// Accepted, then a failed output callback after the specified delay.
     case errorAfter(Double)
+    /// A real-time drop with a no-error status, as reported by VideoToolbox.
+    case dropAfter(Double)
+    /// Synchronous drop in infoFlagsOut, optionally followed by a duplicate drop callback.
+    case dropSync(callbackAfter: Double?)
+    /// Both the callback and synchronous infoFlagsOut report the same drop before return.
+    case dropSyncCallbackBeforeReturn
 }
 
 struct Call {
@@ -152,7 +158,8 @@ final class VTCompressionSession {
         callbacks = DispatchQueue(label: "fakevt.callback.\(index)", qos: .userInteractive)
     }
 
-    func encode(_ pb: CVPixelBuffer, pts: CMTime, props: CFDictionary?, handler: @escaping VTCompressionOutputHandler) -> OSStatus {
+    func encode(_ pb: CVPixelBuffer, pts: CMTime, props: CFDictionary?, infoFlagsOut: UnsafeMutablePointer<VTEncodeInfoFlags>?,
+                handler: @escaping VTCompressionOutputHandler) -> OSStatus {
         let forced = ((props as NSDictionary?)?[kVTEncodeFrameOptionKey_ForceKeyFrame as String] as? Bool) ?? false
         let seq = seqOf(pb)
         let now = CACurrentMediaTime()
@@ -183,6 +190,24 @@ final class VTCompressionSession {
                 lock.run { _ = held.removeValue(forKey: n) }
                 handler(-12902, [], nil)
             }
+            return noErr
+        case .dropAfter(let delay):
+            FakeVT.lock.run { FakeVT.calls.append(call) }
+            lock.run { held[n] = pb }
+            callbacks.asyncAfter(deadline: .now() + delay) { [self] in
+                lock.run { _ = held.removeValue(forKey: n) }
+                handler(noErr, .frameDropped, nil)
+            }
+            return noErr
+        case .dropSync(let callbackAfter):
+            FakeVT.lock.run { FakeVT.calls.append(call) }
+            infoFlagsOut?.pointee.insert(.frameDropped)
+            if let delay = callbackAfter { callbacks.asyncAfter(deadline: .now() + delay) { handler(noErr, .frameDropped, nil) } }
+            return noErr
+        case .dropSyncCallbackBeforeReturn:
+            FakeVT.lock.run { FakeVT.calls.append(call) }
+            infoFlagsOut?.pointee.insert(.frameDropped)
+            handler(noErr, .frameDropped, nil)
             return noErr
         case .blockCall:
             FakeVT.lock.run { FakeVT.calls.append(call) }
@@ -264,7 +289,11 @@ final class VTCompressionSession {
 
 // MARK: - The VideoToolbox names HEVCEncoder.swift uses
 
-struct VTEncodeInfoFlags: OptionSet { let rawValue: UInt32; init(rawValue: UInt32) { self.rawValue = rawValue } }
+struct VTEncodeInfoFlags: OptionSet {
+    let rawValue: UInt32
+    init(rawValue: UInt32) { self.rawValue = rawValue }
+    static let frameDropped = VTEncodeInfoFlags(rawValue: 2)
+}
 typealias VTCompressionOutputHandler = (OSStatus, VTEncodeInfoFlags, CMSampleBuffer?) -> Void
 
 @discardableResult
@@ -292,7 +321,8 @@ func VTCompressionSessionEncodeFrame(_ session: VTCompressionSession, imageBuffe
                                      duration: CMTime, frameProperties: CFDictionary?,
                                      infoFlagsOut: UnsafeMutablePointer<VTEncodeInfoFlags>?,
                                      outputHandler: @escaping VTCompressionOutputHandler) -> OSStatus {
-    session.encode(imageBuffer, pts: presentationTimeStamp, props: frameProperties, handler: outputHandler)
+    session.encode(imageBuffer, pts: presentationTimeStamp, props: frameProperties,
+                   infoFlagsOut: infoFlagsOut, handler: outputHandler)
 }
 @discardableResult
 func VTCompressionSessionCompleteFrames(_ session: VTCompressionSession, untilPresentationTimeStamp: CMTime) -> OSStatus {
