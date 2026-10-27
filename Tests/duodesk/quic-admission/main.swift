@@ -34,6 +34,8 @@ trust.update {
     $0.internetAccess = ["remote-internet-toggle", "remote-internet-outbound-toggle"].contains(mode)
 }
 let server = try StreamServer(advertise: false, home: .tls(.init(identity: hostIdentity, trust: trust)))
+let decoderRecoveryRequests = Counter()
+if mode == "decoder-recovery" { server.onKeyframeNeeded = { decoderRecoveryRequests.add() } }
 var remote: RemoteServer?
 var admitted = Set<ObjectIdentifier>() // server.queue only
 var remotePort: UInt16?               // server.queue only
@@ -189,6 +191,58 @@ func run() async throws {
     // TCP publishes its bound port before the UDP companion's ready callback.
     try await Task.sleep(for: .milliseconds(100))
     switch mode {
+    case "decoder-recovery":
+        let connection = try await dial(port)
+        defer { connection.cancel() }
+        try await echo(connection)
+        let second = try await dial(port)
+        defer { second.cancel() }
+        try await echo(second)
+        func sendRequest(_ target: NWConnection, _ payload: Data = Data()) {
+            let request = StreamMessage(kind: .requestKeyframe, timestamp: 0, isKeyframe: false, payload: payload)
+            target.send(content: request.serialized(), completion: .contentProcessed { _ in })
+        }
+        func waitRequests(_ count: Int) async throws {
+            for _ in 0..<100 {
+                if decoderRecoveryRequests.value >= count { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw CheckError.failed("expected \(count) decoder recovery requests; got \(decoderRecoveryRequests.value)")
+        }
+        sendRequest(connection)
+        try await waitRequests(1)
+        sendRequest(connection, Data([1])) // malformed, must not consume a request or schedule one
+        for _ in 0..<5 { sendRequest(connection) }
+        sendRequest(second)
+        try await waitRequests(2)
+        try await Task.sleep(for: .milliseconds(150))
+        try require(decoderRecoveryRequests.value == 2, "recovery burst was not coalesced")
+        sendRequest(connection); sendRequest(second)
+        try await echo(connection); try await echo(second) // both requests reached the host
+        connection.cancel(); try await waitCount(1)
+        try await waitRequests(3)
+
+        sendRequest(second)
+        try await echo(second) // the pending request is registered before the stream reset
+        var epoch = VideoStreamEpoch()
+        server.beginVideoStream(UUID(), reset: epoch.nextReset())
+        server.queue.sync { }
+        let resetBytes = try await read(StreamMessage.headerLength, from: second)
+        guard let reset = StreamMessage.parseHeader(resetBytes), reset.kind == .streamReset else {
+            throw CheckError.failed("stream reset did not reach the remaining client")
+        }
+        _ = try await read(reset.payloadLength, from: second)
+        try await Task.sleep(for: .milliseconds(600))
+        try require(decoderRecoveryRequests.value == 3, "old stream kept a pending request")
+
+        sendRequest(second)
+        try await waitRequests(4)
+        sendRequest(second)
+        try await echo(second)
+        second.cancel(); try await waitCount(0)
+        try await Task.sleep(for: .milliseconds(600))
+        try require(decoderRecoveryRequests.value == 4, "disconnected client kept a pending request")
+        print("Decoder recovery over QUIC: burst coalesced, another peer survives disconnect, old stream and disconnected requests cancelled")
     case "remote-connector-session":
         let winner = try await productionDial(port)
         try require(winner.fingerprint == hostIdentity.fingerprint, "production dial lost the host pin")

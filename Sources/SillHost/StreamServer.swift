@@ -162,6 +162,10 @@ final class StreamServer {
     var onKeyframeNeeded: (() -> Void)?
     // All admitted peers share this ceiling: a faulty client cannot force continuous IDRs.
     private var lastDecoderRecoveryRequest = -Double.infinity // network queue
+    private var pendingDecoderRecovery: Set<ObjectIdentifier> = [] // network queue
+    private var decoderRecoveryTimer: DispatchWorkItem?            // network queue
+    private var decoderRecoveryTimerID: UInt64 = 0                 // network queue
+    private static let decoderRecoverySpacing: TimeInterval = 0.5
     /// Number of connected clients changed. Called on the network queue. Zero means the host can idle.
     var onClientCountChanged: ((Int) -> Void)?
     /// One connection ended (before `onClientCountChanged`), for per-client state such as its rate.
@@ -1333,6 +1337,8 @@ final class StreamServer {
     /// connection that was never registered (refused, or failed before it was ready) leaves no line.
     private func unregister(_ id: ObjectIdentifier) {
         guard let client = clients.removeValue(forKey: id) else { return }
+        pendingDecoderRecovery.remove(id)
+        if pendingDecoderRecovery.isEmpty { cancelDecoderRecovery() }
         // The path callback retains this client, which retains its connection. Break that cycle
         // explicitly, including for transports that keep a parent tunnel until ended() runs.
         client.connection.stateUpdateHandler = nil
@@ -1360,6 +1366,8 @@ final class StreamServer {
     }
 
     private func resetVideoState(token: UUID?, reset payload: Data) {
+        // Requests made for the old source must not force a keyframe on its successor.
+        cancelDecoderRecovery()
         guard videoEpoch.acceptReset(payload) else {
             videoToken = nil; lastParameterSets = nil
             Stats.shared.bump("video.invalidReset")
@@ -1487,11 +1495,7 @@ final class StreamServer {
                         if let hello = Wire.decode(Hello.self, from: payload) { self.took(hello, from: client) }
                     }
                 } else if header.kind == .requestKeyframe {
-                    let now = ProcessInfo.processInfo.systemUptime
-                    if payload.isEmpty, now - self.lastDecoderRecoveryRequest >= 0.5 {
-                        self.lastDecoderRecoveryRequest = now
-                        self.onKeyframeNeeded?()
-                    }
+                    if payload.isEmpty { self.requestDecoderRecovery(from: client) }
                 } else if header.kind == .pairingWanted && client.route.isRemote {
                     // "Show your pairing code" comes only from a device near the Mac: ignored here.
                 } else {
@@ -1508,6 +1512,45 @@ final class StreamServer {
                 deliver(data)
             }
         }
+    }
+
+    /// A request that arrives within the shared limit is not thrown away: it may refer to a
+    /// later lost frame than the preceding request. Coalesce the burst and send one trailing
+    /// request even when the desktop stops producing frames in the meantime.
+    private func requestDecoderRecovery(from client: Client) {
+        pendingDecoderRecovery.insert(ObjectIdentifier(client.connection))
+        flushDecoderRecovery()
+    }
+
+    private func flushDecoderRecovery() {
+        pendingDecoderRecovery = Set(pendingDecoderRecovery.filter { id in
+            guard let client = clients[id], client.connection.state == .ready else { return false }
+            return client.transport?.validate(client.connection.currentPath) != false
+        })
+        guard !pendingDecoderRecovery.isEmpty else { cancelDecoderRecovery(); return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let remaining = Self.decoderRecoverySpacing - (now - lastDecoderRecoveryRequest)
+        if remaining <= 0 {
+            cancelDecoderRecovery()
+            lastDecoderRecoveryRequest = now
+            onKeyframeNeeded?()
+            return
+        }
+        guard decoderRecoveryTimer == nil else { return }
+        decoderRecoveryTimerID &+= 1
+        let timerID = decoderRecoveryTimerID
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.decoderRecoveryTimerID == timerID else { return }
+            self.decoderRecoveryTimer = nil
+            self.flushDecoderRecovery()
+        }
+        decoderRecoveryTimer = work
+        queue.asyncAfter(deadline: .now() + remaining, execute: work)
+    }
+
+    private func cancelDecoderRecovery() {
+        pendingDecoderRecovery.removeAll()
+        decoderRecoveryTimer?.cancel(); decoderRecoveryTimer = nil; decoderRecoveryTimerID &+= 1
     }
 
     /// One number of a client stats line. A current client reports each second's median and max:
