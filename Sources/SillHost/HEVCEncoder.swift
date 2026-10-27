@@ -412,8 +412,8 @@ final class HEVCEncoder {
             if status == noErr, !flags.contains(.frameDropped), let sampleBuffer {
                 output = self.extract(sampleBuffer)
             } else { output = nil }
-            // A successful VT status is not enough: a missing, empty, oversized or unreadable
-            // compressed block is a lost frame. Decide this before admitting a dependent frame.
+            // A successful VT status is not enough: unusable compressed data or unusable
+            // keyframe parameters mean a lost frame. Decide this before admitting a dependent frame.
             let failed = output == nil
             let keyframeReady = output.map { $0.isKey && $0.parameterSets != nil } ?? false
             guard self.frameReturned(id, bytes: output?.data.count, failed: failed,
@@ -569,8 +569,8 @@ final class HEVCEncoder {
         let pts: CMTime
     }
 
-    /// Copy the access unit while it still owns the encoder slot. A failed copy must request a
-    /// keyframe before the next pending input can be handed to VideoToolbox.
+    /// Copy the access unit while it still owns the encoder slot. A keyframe must also carry the
+    /// parameter sets the decoder can accept; otherwise the frame cannot recover a still screen.
     private func extract(_ sb: CMSampleBuffer) -> EncodedOutput? {
         guard let block = CMSampleBufferGetDataBuffer(sb) else { return nil }
         let length = CMBlockBufferGetDataLength(block)
@@ -587,6 +587,7 @@ final class HEVCEncoder {
             isKey = !notSync
         }
         let ps = isKey ? CMSampleBufferGetFormatDescription(sb).flatMap { Self.parameterSets(from: $0) } : nil
+        guard !isKey || ps != nil else { return nil }
         return EncodedOutput(data: data, isKey: isKey, parameterSets: ps, pts: CMSampleBufferGetPresentationTimeStamp(sb))
     }
 
@@ -599,14 +600,16 @@ final class HEVCEncoder {
         var nalLen: Int32 = 0
         guard CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(desc, parameterSetIndex: 0, parameterSetPointerOut: nil,
                                                                  parameterSetSizeOut: nil, parameterSetCountOut: &count,
-                                                                 nalUnitHeaderLengthOut: &nalLen) == noErr else { return nil }
+                                                                 nalUnitHeaderLengthOut: &nalLen) == noErr,
+              count == 3, nalLen == 4 else { return nil }
         var sets: [Data] = []
         for i in 0..<count {
             var ptr: UnsafePointer<UInt8>?
             var size = 0
             guard CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(desc, parameterSetIndex: i, parameterSetPointerOut: &ptr,
                                                                      parameterSetSizeOut: &size, parameterSetCountOut: nil,
-                                                                     nalUnitHeaderLengthOut: nil) == noErr, let ptr else { return nil }
+                                                                     nalUnitHeaderLengthOut: nil) == noErr, let ptr,
+                  (1...65_535).contains(size) else { return nil }
             sets.append(Data(bytes: ptr, count: size))
         }
         return ParameterSets(nalUnitHeaderLength: Int(nalLen), sets: sets)

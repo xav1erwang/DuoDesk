@@ -87,7 +87,10 @@ enum Behavior {
     case malformedAfter(Double, Malformation)
 }
 
-enum Malformation { case missingBlock, emptyBlock, oversizedBlock, copyFailure, slowCopy }
+enum Malformation {
+    case missingBlock, emptyBlock, oversizedBlock, copyFailure, slowCopy
+    case missingFormat, badParameterCount, badNALLength, emptyParameter, oversizedParameter, parameterReadFailure
+}
 
 struct Call {
     let session: Int
@@ -234,6 +237,12 @@ final class VTCompressionSession {
                     let origin = Int64(session) * 1_000_000 + Int64(n)
                     FakeVT.lock.run { FakeVT.copyDelays[origin] = 0.08 }
                     sample = Self.sample(session: session, call: n, pts: pts, key: forced)
+                case .missingFormat: sample = Self.sample(session: session, call: n, pts: pts, key: forced, formatWidth: nil)
+                case .badParameterCount: sample = Self.sample(session: session, call: n, pts: pts, key: forced, formatWidth: 17)
+                case .badNALLength: sample = Self.sample(session: session, call: n, pts: pts, key: forced, formatWidth: 18)
+                case .emptyParameter: sample = Self.sample(session: session, call: n, pts: pts, key: forced, formatWidth: 19)
+                case .oversizedParameter: sample = Self.sample(session: session, call: n, pts: pts, key: forced, formatWidth: 20)
+                case .parameterReadFailure: sample = Self.sample(session: session, call: n, pts: pts, key: forced, formatWidth: 21)
                 }
                 handler(noErr, [], sample)
             }
@@ -291,7 +300,7 @@ final class VTCompressionSession {
 
     /// 8 bytes: session × 1,000,000 + the call number, so the check knows which call of which session
     /// an output belongs to (`FakeVT.origin`).
-    static func sample(session: Int, call: Int, pts: CMTime, key: Bool) -> CMSampleBuffer? {
+    static func sample(session: Int, call: Int, pts: CMTime, key: Bool, formatWidth: Int32? = 16) -> CMSampleBuffer? {
         var block: CMBlockBuffer?
         guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: 8, blockAllocator: nil,
                                                  customBlockSource: nil, offsetToData: 0, dataLength: 8,
@@ -304,7 +313,12 @@ final class VTCompressionSession {
         var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
         var size = 8
         var sb: CMSampleBuffer?
-        guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: nil, sampleCount: 1,
+        var format: CMVideoFormatDescription?
+        if let formatWidth {
+            guard CMVideoFormatDescriptionCreate(allocator: nil, codecType: kCMVideoCodecType_HEVC, width: formatWidth,
+                                                  height: 16, extensions: nil, formatDescriptionOut: &format) == noErr else { return nil }
+        }
+        guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: 1,
                                         sampleTimingEntryCount: 1, sampleTimingArray: &timing,
                                         sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sb) == noErr,
               let sb else { return nil }
@@ -339,6 +353,30 @@ final class VTCompressionSession {
               sampleBufferOut: &sample) == noErr else { return nil }
         return sample
     }
+}
+
+// Test-only parameter sets stand in for a valid VPS/SPS/PPS. The format width selects a fault;
+// bytes are never decoded, and no real VideoToolbox encoder session is created.
+private let fakeParameterBytes: UnsafeMutablePointer<UInt8> = {
+    let p = UnsafeMutablePointer<UInt8>.allocate(capacity: 65_536)
+    p.initialize(repeating: 0x42, count: 65_536)
+    return p
+}()
+func CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(_ desc: CMFormatDescription, parameterSetIndex: Int,
+    parameterSetPointerOut: UnsafeMutablePointer<UnsafePointer<UInt8>?>?, parameterSetSizeOut: UnsafeMutablePointer<Int>?,
+    parameterSetCountOut: UnsafeMutablePointer<Int>?, nalUnitHeaderLengthOut: UnsafeMutablePointer<Int32>?) -> OSStatus {
+    let width = CMVideoFormatDescriptionGetDimensions(desc).width
+    guard (16...21).contains(width) else {
+        return CoreMedia.CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(desc, parameterSetIndex: parameterSetIndex,
+            parameterSetPointerOut: parameterSetPointerOut, parameterSetSizeOut: parameterSetSizeOut,
+            parameterSetCountOut: parameterSetCountOut, nalUnitHeaderLengthOut: nalUnitHeaderLengthOut)
+    }
+    if width == 21 && parameterSetIndex == 1 { return -12_700 }
+    parameterSetCountOut?.pointee = width == 17 ? 256 : 3
+    nalUnitHeaderLengthOut?.pointee = width == 18 ? 2 : 4
+    parameterSetSizeOut?.pointee = width == 19 && parameterSetIndex == 1 ? 0 : width == 20 && parameterSetIndex == 1 ? 65_536 : 4
+    parameterSetPointerOut?.pointee = UnsafePointer(fakeParameterBytes)
+    return noErr
 }
 
 /// Inject a copy failure only for a marked fake sample. All other copies use real CoreMedia.
