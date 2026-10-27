@@ -17,8 +17,8 @@ import QuartzCore
 //                                                   asked for 5, 20 or 40 ms after the last, then
 //                                                   still for 0.5 s: does a keyframe come out?
 //
-// The copy of HEVCEncoder.swift compiled here has one line added at the top of `handle(_:)`:
-// `harnessOutputPTS = CMSampleBufferGetPresentationTimeStamp(sb)`.
+// The copied encoder records the sample timestamp at `handle(_:)`; build.sh supports both the
+// older CMSampleBuffer and current validated-output signatures.
 
 var harnessOutputPTS = CMTime.invalid
 setvbuf(stdout, nil, _IOLBF, 0)

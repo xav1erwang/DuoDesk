@@ -83,7 +83,11 @@ enum Behavior {
     case dropSync(callbackAfter: Double?)
     /// Both the callback and synchronous infoFlagsOut report the same drop before return.
     case dropSyncCallbackBeforeReturn
+    /// VT reports success but the compressed sample cannot be used. Test-only faults.
+    case malformedAfter(Double, Malformation)
 }
+
+enum Malformation { case missingBlock, emptyBlock, oversizedBlock, copyFailure, slowCopy }
 
 struct Call {
     let session: Int
@@ -117,13 +121,15 @@ enum FakeVT {
     /// with the session's number (the delivery-order case of E7 holds a handler with `Inject`).
     static var beforeHandler: ((Int) -> Void)?
     static var afterHandler: ((Int) -> Void)?
+    static var copyFailures: Set<Int64> = []
+    static var copyDelays: [Int64: TimeInterval] = [:]
     private static var sessionCount = 0
 
     static func reset(plan p: @escaping (_ session: Int, _ call: Int, _ seq: Int, _ software: Bool) -> Behavior = { _, _, _, _ in .returnAfter(0.009) },
                       serial: Bool = false) {
         lock.run {
             plan = p; serialEngine = serial; calls = []; outputs = []; maxHeld = [:]; invalidated = [:]; createDelay = 0
-            beforeHandler = nil; afterHandler = nil
+            beforeHandler = nil; afterHandler = nil; copyFailures = []; copyDelays = [:]
         }
     }
     static func newSession() -> Int { lock.run { sessionCount += 1; return sessionCount } }
@@ -209,6 +215,29 @@ final class VTCompressionSession {
             infoFlagsOut?.pointee.insert(.frameDropped)
             handler(noErr, .frameDropped, nil)
             return noErr
+        case .malformedAfter(let delay, let kind):
+            FakeVT.lock.run { FakeVT.calls.append(call) }
+            lock.run { held[n] = pb }
+            let session = index
+            callbacks.asyncAfter(deadline: .now() + delay) { [self] in
+                lock.run { _ = held.removeValue(forKey: n) }
+                let sample: CMSampleBuffer?
+                switch kind {
+                case .missingBlock: sample = Self.emptySample(withBlock: false)
+                case .emptyBlock: sample = Self.emptySample(withBlock: true)
+                case .oversizedBlock: sample = Self.oversizedSample()
+                case .copyFailure:
+                    let origin = Int64(session) * 1_000_000 + Int64(n)
+                    FakeVT.lock.run { _ = FakeVT.copyFailures.insert(origin) }
+                    sample = Self.sample(session: session, call: n, pts: pts, key: forced)
+                case .slowCopy:
+                    let origin = Int64(session) * 1_000_000 + Int64(n)
+                    FakeVT.lock.run { FakeVT.copyDelays[origin] = 0.08 }
+                    sample = Self.sample(session: session, call: n, pts: pts, key: forced)
+                }
+                handler(noErr, [], sample)
+            }
+            return noErr
         case .blockCall:
             FakeVT.lock.run { FakeVT.calls.append(call) }
             withExtendedLifetime(pb) { never.wait() }   // never returns: this thread holds the frame for good
@@ -285,6 +314,48 @@ final class VTCompressionSession {
         }
         return sb
     }
+
+    static func emptySample(withBlock: Bool) -> CMSampleBuffer? {
+        var block: CMBlockBuffer?
+        if withBlock, CMBlockBufferCreateEmpty(allocator: nil, capacity: 0, flags: 0, blockBufferOut: &block) != noErr { return nil }
+        var format: CMVideoFormatDescription?
+        guard CMVideoFormatDescriptionCreate(allocator: nil, codecType: kCMVideoCodecType_HEVC, width: 16, height: 16,
+                                             extensions: nil, formatDescriptionOut: &format) == noErr else { return nil }
+        var sample: CMSampleBuffer?
+        guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: 0,
+                                        sampleTimingEntryCount: 0, sampleTimingArray: nil,
+                                        sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample) == noErr else { return nil }
+        return sample
+    }
+
+    static func oversizedSample() -> CMSampleBuffer? {
+        let length = StreamMessage.maxFramePayload + 1
+        var block: CMBlockBuffer?, sample: CMSampleBuffer?
+        guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: length,
+              blockAllocator: nil, customBlockSource: nil, offsetToData: 0, dataLength: length, flags: 0,
+              blockBufferOut: &block) == noErr,
+              CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: nil, sampleCount: 0,
+              sampleTimingEntryCount: 0, sampleTimingArray: nil, sampleSizeEntryCount: 0, sampleSizeArray: nil,
+              sampleBufferOut: &sample) == noErr else { return nil }
+        return sample
+    }
+}
+
+/// Inject a copy failure only for a marked fake sample. All other copies use real CoreMedia.
+func CMBlockBufferCopyDataBytes(_ source: CMBlockBuffer, atOffset: Int, dataLength: Int,
+                                destination: UnsafeMutableRawPointer) -> OSStatus {
+    if atOffset == 0, dataLength == 8 {
+        var origin: Int64 = 0
+        let status = withUnsafeMutableBytes(of: &origin) {
+            CoreMedia.CMBlockBufferCopyDataBytes(source, atOffset: 0, dataLength: 8, destination: $0.baseAddress!)
+        }
+        if status == noErr {
+            let behavior = FakeVT.lock.run { (FakeVT.copyFailures.contains(origin), FakeVT.copyDelays[origin] ?? 0) }
+            if behavior.1 > 0 { Thread.sleep(forTimeInterval: behavior.1) }
+            if behavior.0 { return -12_700 }
+        }
+    }
+    return CoreMedia.CMBlockBufferCopyDataBytes(source, atOffset: atOffset, dataLength: dataLength, destination: destination)
 }
 
 // MARK: - The VideoToolbox names HEVCEncoder.swift uses
@@ -348,6 +419,7 @@ let kVTVideoEncoderNotAvailableNowErr: OSStatus = -12915
 // MARK: - StreamProtocol's and SillHostCore's names
 
 struct ParameterSets { let nalUnitHeaderLength: Int; let sets: [Data] }
+struct StreamMessage { static let maxFramePayload = 32 << 20 }
 
 /// SillHostCore's counters, as HEVCEncoder.swift and EncoderProbe.swift use them.
 final class Stats {

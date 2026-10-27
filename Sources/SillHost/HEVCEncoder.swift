@@ -62,7 +62,7 @@ final class HEVCEncoder {
 
     /// Called on VideoToolbox's callback thread with one access unit (length-prefixed NALs).
     var onEncoded: ((_ data: Data, _ isKeyframe: Bool, _ parameterSets: ParameterSets?) -> Void)?
-    /// Actual VideoToolbox hand-over to callback time, in milliseconds; no cross-host clock comparison.
+    /// VideoToolbox hand-over to callback arrival, in milliseconds; no cross-host clock comparison.
     var onEncodeLatency: ((Double) -> Void)?
     /// The session stopped returning frames. Called once, on the watchdog's queue. The encoder is
     /// dead afterwards: it drops every further frame.
@@ -403,17 +403,27 @@ final class HEVCEncoder {
         let status = VTCompressionSessionEncodeFrame(session, imageBuffer: pixelBuffer, presentationTimeStamp: pts,
                                                      duration: .invalid, frameProperties: props, infoFlagsOut: &infoFlags) { [weak self] status, flags, sampleBuffer in
             guard let self else { return }
+            let callbackAt = CACurrentMediaTime()
             // A session the watchdog gave up on may still cough up late output. Its clients have
-            // moved on to a new session (new size, new parameter sets): never forward it.
-            let failed = status != noErr || flags.contains(.frameDropped) || sampleBuffer == nil
-            let bytes = failed ? nil : sampleBuffer.map { CMSampleBufferGetTotalSampleSize($0) }
-            guard self.frameReturned(id, bytes: bytes, failed: failed) else { return }
-            guard !failed, let sampleBuffer else {
+            // moved on to a new session (new size, new parameter sets): do not copy or forward it.
+            let current = self.lock.withLock { !self.mailbox.dead && self.mailbox.inside?.id == id }
+            guard current else { return }
+            let output: EncodedOutput?
+            if status == noErr, !flags.contains(.frameDropped), let sampleBuffer {
+                output = self.extract(sampleBuffer)
+            } else { output = nil }
+            // A successful VT status is not enough: a missing, empty, oversized or unreadable
+            // compressed block is a lost frame. Decide this before admitting a dependent frame.
+            let failed = output == nil
+            let keyframeReady = output.map { $0.isKey && $0.parameterSets != nil } ?? false
+            guard self.frameReturned(id, bytes: output?.data.count, failed: failed,
+                                     keyframeReady: keyframeReady, callbackAt: callbackAt) else { return }
+            guard let output else {
                 self.bump("enc.error")
                 return
             }
             self.bump("enc.out")
-            self.handle(sampleBuffer)
+            self.handle(output)
         }
         if status != noErr {
             // Refused outright; the handler may never run. Free the slot ourselves, or the watchdog
@@ -434,15 +444,19 @@ final class HEVCEncoder {
     /// none is waiting, retry the latest image after the normal stillness check. The request and
     /// hand-over share the lock, so a newer image cannot be overwritten by an older recovery.
     @discardableResult
-    private func frameReturned(_ id: Int, bytes: Int?, failed: Bool = false) -> Bool {
+    private func frameReturned(_ id: Int, bytes: Int?, failed: Bool = false, keyframeReady: Bool = false,
+                               callbackAt: CFTimeInterval? = nil) -> Bool {
         lock.lock()
         let now = CACurrentMediaTime()
         // The slow state is judged on frames that came back encoded, timed from their hand-over.
         var event: EncoderSlowState.Event?
         var latency: Double?
         if let bytes, !mailbox.dead, let inside = mailbox.inside, inside.id == id, inside.handed {
-            latency = (now - inside.since) * 1000
-            event = slowState?.returned(turnaround: now - inside.since, bytes: bytes, at: now)
+            // Keep the hardware slow-state measurement scoped to VT; user-space output copying
+            // now finishes before this lock, but it must not make an engine look artificially slow.
+            let turnaround = max(0, (callbackAt ?? now) - inside.since)
+            latency = turnaround * 1000
+            event = slowState?.returned(turnaround: turnaround, bytes: bytes, at: now)
         }
         let outcome = mailbox.returned(id, now: now)
         let accepted: Bool
@@ -450,6 +464,7 @@ final class HEVCEncoder {
         case .late, .duplicate: accepted = false
         case .freed, .next: accepted = true
         }
+        if accepted && !failed && keyframeReady { forcedRetries = 0 }
         var retry: (Admission?, CFTimeInterval?)?
         if accepted && failed {
             if forcedRetries < 3 {
@@ -547,25 +562,36 @@ final class HEVCEncoder {
         if !quiet { Stats.shared.bump(key) }
     }
 
-    private func handle(_ sb: CMSampleBuffer) {
+    private struct EncodedOutput {
+        let data: Data
+        let isKey: Bool
+        let parameterSets: ParameterSets?
+        let pts: CMTime
+    }
+
+    /// Copy the access unit while it still owns the encoder slot. A failed copy must request a
+    /// keyframe before the next pending input can be handed to VideoToolbox.
+    private func extract(_ sb: CMSampleBuffer) -> EncodedOutput? {
+        guard let block = CMSampleBufferGetDataBuffer(sb) else { return nil }
+        let length = CMBlockBufferGetDataLength(block)
+        guard length > 0, length <= StreamMessage.maxFramePayload else { return nil }
+        var data = Data(count: length)
+        let copied = data.withUnsafeMutableBytes { raw -> OSStatus in
+            guard let base = raw.baseAddress else { return kCMBlockBufferBadPointerParameterErr }
+            return CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: base)
+        }
+        guard copied == noErr else { return nil }
         var isKey = true
         if let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
            let first = arr.first, let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool {
             isKey = !notSync
         }
-        var ps: ParameterSets?
-        if isKey, let desc = CMSampleBufferGetFormatDescription(sb) {
-            ps = Self.parameterSets(from: desc)
-            lock.lock(); forcedRetries = 0; lock.unlock()
-        }
-        guard let block = CMSampleBufferGetDataBuffer(sb) else { return }
-        let length = CMBlockBufferGetDataLength(block)
-        var data = Data(count: length)
-        let copied = data.withUnsafeMutableBytes { raw -> OSStatus in
-            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: raw.baseAddress!)
-        }
-        guard copied == noErr else { return }
-        onEncoded?(data, isKey, ps)
+        let ps = isKey ? CMSampleBufferGetFormatDescription(sb).flatMap { Self.parameterSets(from: $0) } : nil
+        return EncodedOutput(data: data, isKey: isKey, parameterSets: ps, pts: CMSampleBufferGetPresentationTimeStamp(sb))
+    }
+
+    private func handle(_ output: EncodedOutput) {
+        onEncoded?(output.data, output.isKey, output.parameterSets)
     }
 
     static func parameterSets(from desc: CMFormatDescription) -> ParameterSets? {

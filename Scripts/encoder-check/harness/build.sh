@@ -6,8 +6,8 @@
 #   .build/encoder-check/harness-new    this working tree's HEVCEncoder, EncoderMailbox and
 #                                       EncoderSlowState
 # Each copy of HEVCEncoder.swift loses its `import StreamProtocol` line (StreamProtocol's sources are
-# compiled into the same module) and gains one line at the top of `handle(_:)` that records the
-# output's timestamp for the latency figure.
+# compiled into the same module) and gains one line at the top of the applicable `handle(_:)`
+# signature that records the output's timestamp for the latency figure.
 set -eu
 ROOT=${0:A:h:h:h:h}
 OUT=$ROOT/.build/encoder-check
@@ -23,6 +23,7 @@ build() {   # NAME TREE
   local d=$OUT/harness-src-$name; rm -rf $d; mkdir -p $d
   sed -e '/^import StreamProtocol$/d' \
       -e 's/^    private func handle(_ sb: CMSampleBuffer) {$/    private func handle(_ sb: CMSampleBuffer) {\n        harnessOutputPTS = CMSampleBufferGetPresentationTimeStamp(sb)/' \
+      -e 's/^    private func handle(_ output: EncodedOutput) {$/    private func handle(_ output: EncodedOutput) {\n        harnessOutputPTS = output.pts/' \
       $tree/Sources/SillHost/HEVCEncoder.swift > $d/HEVCEncoder.swift
   grep -q 'harnessOutputPTS = ' $d/HEVCEncoder.swift || { echo "patch failed for $name"; exit 1 }
   local extra=()
