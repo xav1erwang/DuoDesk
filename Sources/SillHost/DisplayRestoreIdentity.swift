@@ -2,7 +2,7 @@
 import Foundation
 
 /// The identity CoreGraphics reported for one saved display. Display IDs alone may be reused.
-struct DisplayRestoreIdentity: Hashable {
+struct DisplayRestoreIdentity: Codable, Hashable {
     let vendor: UInt32
     let model: UInt32
     let serial: UInt32

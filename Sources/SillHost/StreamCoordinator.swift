@@ -303,7 +303,8 @@ package final class StreamCoordinator {
         self.config = config
         self.synthetic = synthetic
         self.appKitLoop = appKitLoop
-        duoDesktop = DuoDesktopDisplay(layout: independentDuoDesktop && appKitLoop ? .nativePrimary : .mirrored)
+        duoDesktop = DuoDesktopDisplay(layout: independentDuoDesktop && appKitLoop ? .nativePrimary : .mirrored,
+                                       recoveryDirectory: synthetic ? nil : DisplayRecoveryStore.defaultDirectory)
         self.hostVersion = hostVersion
         let env = ProcessInfo.processInfo.environment
         let path = PointerTestHooks.pointerPath(synthetic: synthetic, environment: env)

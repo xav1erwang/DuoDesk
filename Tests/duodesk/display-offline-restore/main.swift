@@ -37,6 +37,19 @@ Task { @MainActor in
         fputs("FAIL: a new native desktop should report pending restoration\n", stderr); exit(1)
     }
     print("PASS: a new native desktop reports pending restoration; no display configuration was applied")
+    if let directory = ProcessInfo.processInfo.environment["DUO_RECOVERY_FIXTURE_DIR"] {
+        guard await DuoDesktopDisplay.inspectPersistedRecoveryGuardForTesting(directory: URL(fileURLWithPath: directory)) else {
+            fputs("FAIL: persisted mismatch must block preparation without display mutation\n", stderr); exit(1)
+        }
+        print("PASS: persisted mismatch blocks real preparation and retains the original journal without display mutation")
+        let cleanup = URL(fileURLWithPath: directory + "-cleanup")
+        guard let checks = DuoDesktopDisplay.inspectRecoveryCleanupForTesting(directory: cleanup),
+              checks.count == 3, checks.allSatisfy({ $0 }) else {
+            fputs("FAIL: pre-mutation recheck or retryable journal cleanup\n", stderr); exit(1)
+        }
+        print("PASS: changed inventory aborts before display mutation and clears the unused journal")
+        print("PASS: failed journal cleanup is retained and retried without display mutation")
+    }
     exit(0)
 }
 dispatchMain()

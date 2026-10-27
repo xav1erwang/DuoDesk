@@ -19,7 +19,7 @@ final class DuoDesktopDisplay {
         let mirrored: Bool
     }
     enum Failure: LocalizedError {
-        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging
+        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable
         var errorDescription: String? {
             switch self {
             case .invalidResolution: return "Duo 上屏原生分辨率无效。"
@@ -28,8 +28,9 @@ final class DuoDesktopDisplay {
             case .noDisplay: return "找不到可匹配 Duo 的 Mac 主显示器。"
             case .modeRejected: return "macOS 未能应用 Duo 的原生桌面尺寸和刷新率；本次连接不会降低分辨率。"
             case .displayUnavailable: return "无法捕获匹配 Duo 的桌面，请重新连接。"
-            case .restorePending: return "此前的 Mac 显示配置仍待恢复，原显示器可能已离线或系统拒绝恢复。"
+            case .restorePending: return "此前的 Mac 显示配置仍待恢复，原显示器可能已离线、配置已变化或系统拒绝恢复。"
             case .topologyChanging: return "Mac 显示器配置正在变化，无法安全记录原始状态；未启动新的原生桌面。"
+            case .recoveryUnavailable: return "无法安全保存 Mac 显示配置；未启动新的原生桌面。"
             }
         }
     }
@@ -55,16 +56,23 @@ final class DuoDesktopDisplay {
     private var originalMainID: CGDirectDisplayID = 0
     private var originalSystemMainID: CGDirectDisplayID = 0
     private var primaryOrigins: [CGDirectDisplayID: CGPoint] = [:]
+    private let recoveryDirectory: URL?
+    private var recoveryStore: DisplayRecoveryStore?
+    private var recoveryToken: UUID?
+    private var didAttemptDisplayChange = false
     #if DUO_DISPLAY_RESTORE_TESTING
     private var testInventory: (() -> [CGDirectDisplayID: DisplayRestoreIdentity]?)?
     private var testInterceptConfiguration = false
     private var testConfigurationAttempts = 0
+    private var testPreventDisplayMutation = false
     #endif
     private let mainDisplay: @MainActor () -> CGDirectDisplayID
     private let layout: Layout
-    init(mainDisplay: @escaping @MainActor () -> CGDirectDisplayID = { DuoDesktopDisplay.availableMainDisplayID() }, layout: Layout = .mirrored) {
+    init(mainDisplay: @escaping @MainActor () -> CGDirectDisplayID = { DuoDesktopDisplay.availableMainDisplayID() },
+         layout: Layout = .mirrored, recoveryDirectory: URL? = nil) {
         self.mainDisplay = mainDisplay
         self.layout = layout
+        self.recoveryDirectory = recoveryDirectory
     }
     /// A Screen Sharing display handover can leave CGMainDisplayID pointing at a removed
     /// display. AppKit already knows the replacement. Only accept an unambiguous, online
@@ -192,14 +200,34 @@ final class DuoDesktopDisplay {
             }
         }
         guard restore() else { throw Failure.restorePending }
+        let store: DisplayRecoveryStore?
+        do { store = try recoveryDirectory.map { try DisplayRecoveryStore(directory: $0) } }
+        catch { print("Duo display recovery storage unavailable: \(error)"); throw Failure.recoveryUnavailable }
         let main = mainDisplay()
-        originals = try snapshot()
-        guard main == mainDisplay() else { originals = []; throw Failure.topologyChanging }
-        guard let home = originals.first(where: { $0.id == main }) else { originals = []; throw Failure.noDisplay }
+        let systemMain = CGMainDisplayID()
+        let sampled = try snapshot()
+        guard main == mainDisplay(), systemMain == CGMainDisplayID() else { throw Failure.topologyChanging }
+        guard let home = sampled.first(where: { $0.id == main }) else { throw Failure.noDisplay }
+        let recoveryRecord: DisplayRecoveryRecord?
+        if let store {
+            let record = try Self.recoveryRecord(sampled, systemMain: systemMain)
+            do {
+                if let prior = try store.load() {
+                    guard prior.alreadyRestored(as: record) else { throw Failure.restorePending }
+                    try store.remove(token: prior.token)
+                    print("Duo desktop: interrupted session was already restored; recovery record cleared")
+                }
+            } catch let error as Failure { throw error }
+            catch { print("Duo display recovery record unavailable: \(error)"); throw Failure.restorePending }
+            recoveryRecord = record
+        } else { recoveryRecord = nil }
+        recoveryStore = store
+        originals = sampled
         originalIdentityCounts = Self.identityCounts(originals.compactMap(\.identity))
         observedOffline.removeAll()
         originalMainID = main
-        originalSystemMainID = CGMainDisplayID()
+        originalSystemMainID = systemMain
+        didAttemptDisplayChange = false
         do {
             let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
             let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
@@ -211,12 +239,22 @@ final class DuoDesktopDisplay {
                 ?? matchingModes.min { $0.width < $1.width }
             if let native {
                 if !Self.sameMode(native, home.mode) {
+                    try persistRecovery(recoveryRecord)
+                    #if DUO_DISPLAY_RESTORE_TESTING
+                    if testPreventDisplayMutation { throw Failure.modeRejected }
+                    #endif
+                    didAttemptDisplayChange = true
                     try configure { config in
                         CGConfigureDisplayWithDisplayMode(config, main, native, nil)
                     }
                 }
                 capturedID = main
             } else {
+                try persistRecovery(recoveryRecord)
+                #if DUO_DISPLAY_RESTORE_TESTING
+                if testPreventDisplayMutation { throw Failure.modeRejected }
+                #endif
+                didAttemptDisplayChange = true
                 let display = try VirtualDisplay(name: "DUO你电脑 · 原生桌面",
                                                  widthPt: wanted.encodedWidth / 2,
                                                  heightPt: wanted.encodedHeight / 2,
@@ -293,7 +331,15 @@ final class DuoDesktopDisplay {
     /// Synchronous for the app's Quit/signal path. Never writes persistent display preferences.
     @discardableResult
     func restore() -> Bool {
-        guard !originals.isEmpty || temporary != nil else { return true }
+        guard !originals.isEmpty || temporary != nil else { return finishRecovery() }
+        // If recording the journal failed, no display API has been called yet. Do not change a
+        // user's display just to clean up a transaction that never started.
+        if !didAttemptDisplayChange {
+            originals = []; originalIdentityCounts.removeAll(); observedOffline.removeAll()
+            capturedID = 0; originalMainID = 0; originalSystemMainID = 0; primaryOrigins = [:]
+            resolution = nil; requestedFPS = nil
+            return finishRecovery()
+        }
         var success = true
         var live: [Original] = [], unavailable: [Original] = []
         // Reidentification needs a stable, complete online inventory. A changed ID is not silently
@@ -388,14 +434,59 @@ final class DuoDesktopDisplay {
             originals = Self.retainPendingMirrorGroups(originals, pending: pending)
             observedOffline.formIntersection(Set(originals.map(\.id)))
             success = pending.isEmpty
-            if success { originalSystemMainID = 0; originalIdentityCounts.removeAll() }
-            if success { print("Duo desktop: original Mac display configuration restored") }
-            else { print("Duo desktop: \(pending.count) original display(s) still need restoration; snapshot retained") }
+            if success {
+                originalSystemMainID = 0; originalIdentityCounts.removeAll(); didAttemptDisplayChange = false
+                success = finishRecovery()
+                if success { print("Duo desktop: original Mac display configuration restored") }
+                else { print("Duo desktop: display configuration restored, but recovery record cleanup is pending") }
+            } else {
+                print("Duo desktop: \(pending.count) original display(s) still need restoration; snapshot retained")
+            }
         } else if !unavailable.isEmpty {
             print("Duo desktop: \(unavailable.count) original display(s) unavailable; restoration snapshot retained")
         }
         // Preserve the snapshot on failure: the next stop/reconnect/exit can retry restoration.
         return success
+    }
+
+    private static func recoveryRecord(_ originals: [Original], systemMain: CGDirectDisplayID) throws -> DisplayRecoveryRecord {
+        let saved = try originals.map { original -> DisplayRecoveryRecord.Display in
+            guard let identity = original.identity,
+                  let x = Int32(exactly: original.origin.x), let y = Int32(exactly: original.origin.y) else {
+                throw Failure.topologyChanging
+            }
+            return DisplayRecoveryRecord.Display(id: original.id, identity: identity, modeID: original.mode.ioDisplayModeID,
+                width: original.mode.width, height: original.mode.height,
+                pixelWidth: original.mode.pixelWidth, pixelHeight: original.mode.pixelHeight,
+                refresh: original.mode.refreshRate, originX: x, originY: y, mirror: original.mirror)
+        }
+        let record = DisplayRecoveryRecord(version: 1, token: UUID(), main: systemMain, displays: saved)
+        guard record.isValid else { throw Failure.topologyChanging }
+        return record
+    }
+
+    private func persistRecovery(_ record: DisplayRecoveryRecord?) throws {
+        guard let store = recoveryStore, let record else { return }
+        // Remember the token before writing: even an error after publication must clean up only
+        // our own record, and only after the display state has been safely handled.
+        recoveryToken = record.token
+        do { try store.save(record) }
+        catch { print("Duo display recovery journal could not be saved: \(error)"); throw Failure.recoveryUnavailable }
+        let main = CGMainDisplayID()
+        let latest = try Self.recoveryRecord(snapshot(), systemMain: main)
+        guard CGMainDisplayID() == main, record.sameState(as: latest) else { throw Failure.topologyChanging }
+    }
+
+    private func finishRecovery() -> Bool {
+        do {
+            if let recoveryStore, let recoveryToken { try recoveryStore.remove(token: recoveryToken) }
+            recoveryToken = nil
+            recoveryStore = nil
+            return true
+        } catch {
+            print("Duo display recovery journal could not be cleared: \(error)")
+            return false
+        }
     }
 
     /// First mirror the existing desktop so its windows join the native main workspace. Then
@@ -626,6 +717,7 @@ final class DuoDesktopDisplay {
         guard !isDisplayOnline(missing), let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return nil }
         let desktop = DuoDesktopDisplay()
         desktop.originals = [Original(id: missing, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)]
+        desktop.didAttemptDisplayChange = true
         let first = desktop.restore()
         let keptAfterFirst = !desktop.originals.isEmpty
         let second = desktop.restore()
@@ -704,6 +796,7 @@ final class DuoDesktopDisplay {
                  wasOffline: Bool, originalCount: Int) -> (Bool, Bool, Bool, Int) {
             let desktop = DuoDesktopDisplay()
             desktop.originals = [Original(id: id, mode: mode, origin: origin, mirror: mirror, identity: expected)]
+            desktop.didAttemptDisplayChange = true
             desktop.originalIdentityCounts = [expected: originalCount]
             if wasOffline { desktop.observedOffline.insert(id) }
             desktop.testInventory = { inventory }
@@ -718,6 +811,7 @@ final class DuoDesktopDisplay {
         let unique = run(expected: identified, inventory: [id: identified], wasOffline: true, originalCount: 1)
         let changing = DuoDesktopDisplay()
         changing.originals = [Original(id: id, mode: mode, origin: origin, mirror: mirror, identity: identified)]
+        changing.didAttemptDisplayChange = true
         changing.originalIdentityCounts = [identified: 1]
         var reads = 0
         changing.testInventory = { reads += 1; return [id: reads == 1 ? identified : other] }
@@ -737,12 +831,76 @@ final class DuoDesktopDisplay {
         guard !isDisplayOnline(missing), let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return nil }
         let desktop = DuoDesktopDisplay()
         desktop.originals = [Original(id: missing, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)]
+        desktop.didAttemptDisplayChange = true
         do {
             _ = try await desktop.prepareGraphics(DuoDesktopResolution(width: 2007, height: 1427), fps: 120)
             return false
         } catch Failure.restorePending {
             return desktop.originals.count == 1 && desktop.originals[0].id == missing
         } catch { return false }
+    }
+
+    /// A stale, mismatched journal must block the production preparation path without any display
+    /// change. The final mutation gate is independently intercepted, even if the guard regresses.
+    static func inspectPersistedRecoveryGuardForTesting(directory: URL) async -> Bool {
+        do {
+            let probe = DuoDesktopDisplay(recoveryDirectory: directory)
+            probe.testPreventDisplayMutation = true
+            probe.testInterceptConfiguration = true
+            let originals = try probe.snapshot()
+            let current = try recoveryRecord(originals, systemMain: CGMainDisplayID())
+            guard let first = current.displays.first else { return false }
+            let changed = DisplayRecoveryRecord.Display(id: first.id, identity: first.identity, modeID: first.modeID,
+                width: first.width, height: first.height, pixelWidth: first.pixelWidth, pixelHeight: first.pixelHeight,
+                refresh: first.refresh, originX: first.originX == 0 ? 1 : 0, originY: first.originY, mirror: first.mirror)
+            let prior = DisplayRecoveryRecord(version: 1, token: UUID(), main: current.main,
+                                              displays: [changed] + current.displays.dropFirst())
+            do { let store = try DisplayRecoveryStore(directory: directory); try store.save(prior) }
+            do {
+                _ = try await probe.prepareGraphics(DuoDesktopResolution(width: 2007, height: 1427), fps: 120)
+                return false
+            } catch Failure.restorePending { }
+            let store = try DisplayRecoveryStore(directory: directory)
+            return try store.load() == prior && probe.testConfigurationAttempts == 0
+        } catch { return false }
+    }
+
+    /// Neither failed publication nor a changed inventory may lead to a configuration write;
+    /// failed journal cleanup stays retryable without reconfiguring already-restored displays.
+    static func inspectRecoveryCleanupForTesting(directory: URL) -> [Bool]? {
+        do {
+            let desktop = DuoDesktopDisplay(recoveryDirectory: directory)
+            desktop.testInterceptConfiguration = true
+            let originals = try desktop.snapshot()
+            let current = try recoveryRecord(originals, systemMain: CGMainDisplayID())
+            guard let first = current.displays.first else { return nil }
+            let changed = DisplayRecoveryRecord.Display(id: first.id, identity: first.identity, modeID: first.modeID,
+                width: first.width, height: first.height, pixelWidth: first.pixelWidth, pixelHeight: first.pixelHeight,
+                refresh: first.refresh, originX: first.originX == 0 ? 1 : 0, originY: first.originY, mirror: first.mirror)
+            let mismatched = DisplayRecoveryRecord(version: 1, token: UUID(), main: current.main,
+                                                   displays: [changed] + current.displays.dropFirst())
+            desktop.originals = originals
+            desktop.recoveryStore = try DisplayRecoveryStore(directory: directory)
+            let mismatchRejected: Bool
+            do { try desktop.persistRecovery(mismatched); mismatchRejected = false }
+            catch Failure.topologyChanging { mismatchRejected = true }
+            let mismatchCleared = desktop.restore() && desktop.testConfigurationAttempts == 0
+            let firstCheck = mismatchRejected && mismatchCleared
+
+            desktop.originals = originals
+            let store = try DisplayRecoveryStore(directory: directory)
+            desktop.recoveryStore = store
+            try store.save(current)
+            desktop.recoveryToken = current.token
+            let path = directory.appendingPathComponent("pending-display.json").path
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+            let blocked = !desktop.restore() && FileManager.default.fileExists(atPath: path)
+                && desktop.testConfigurationAttempts == 0
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+            let retried = desktop.restore() && !FileManager.default.fileExists(atPath: path)
+                && desktop.testConfigurationAttempts == 0
+            return [firstCheck, blocked, retried]
+        } catch { return nil }
     }
     #endif
 }

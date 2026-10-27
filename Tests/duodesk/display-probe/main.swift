@@ -13,6 +13,7 @@ let slowNativeMode = CommandLine.arguments.contains("--slow-native")
 let nativePrimary = CommandLine.arguments.contains("--native-primary")
 let fullscreen = CommandLine.arguments.contains("--fullscreen")
 let inspectsSpaces = CommandLine.arguments.contains("--inspect-spaces")
+let recoveryDirectory = ProcessInfo.processInfo.environment["DUO_RECOVERY_FIXTURE_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
 
 struct ProbeDisplayState: Equatable, CustomStringConvertible {
     let id: CGDirectDisplayID
@@ -101,6 +102,7 @@ Task { @MainActor in
         guard let physicalMode, let beforeDisplays else { throw DuoDesktopDisplay.Failure.noDisplay }
         print("DISPLAY PROBE INVENTORY BEFORE: \(beforeDisplays)")
         guard !usesPrimary || !slowNativeMode else { throw DuoDesktopDisplay.Failure.invalidResolution }
+        guard recoveryDirectory == nil || !usesPrimary else { throw DuoDesktopDisplay.Failure.invalidResolution }
         guard !fullscreen || usesPrimary else { throw DuoDesktopDisplay.Failure.invalidResolution }
         guard !inspectsSpaces || (fullscreen && usesPrimary && nativePrimary) else { throw DuoDesktopDisplay.Failure.invalidResolution }
         if inspectsSpaces { spaceAudit = try DisplaySpaceAudit() }
@@ -171,11 +173,19 @@ Task { @MainActor in
         if let secondaryWindow { secondaryBounds = ownWindowBounds(secondaryWindow) }
         let baseline = CGDisplayCopyDisplayMode(target)
         if let fixture { try spaceAudit?.record("before", window: fixture, expectedDisplay: target) }
-        let test = DuoDesktopDisplay(mainDisplay: { target }, layout: nativePrimary ? .nativePrimary : .mirrored)
+        let test = DuoDesktopDisplay(mainDisplay: { target }, layout: nativePrimary ? .nativePrimary : .mirrored,
+                                     recoveryDirectory: recoveryDirectory)
         session = test
         guard !test.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
         let native = DuoDesktopResolution(width: 2007, height: 1427)
         var master = try await test.prepareGraphics(native, fps: switchesRate ? 60 : 120)
+        if let recoveryDirectory {
+            let path = recoveryDirectory.appendingPathComponent("pending-display.json")
+            let record = try JSONDecoder().decode(DisplayRecoveryRecord.self, from: Data(contentsOf: path))
+            guard record.isValid, record.main == physical, record.displays.contains(where: { $0.id == target }),
+                  record.displays.contains(where: { $0.id == physical }) else { throw DuoDesktopDisplay.Failure.modeRejected }
+            print("Recovery journal: original physical and disposable display state saved while native desktop is active")
+        }
         let correctRole = nativePrimary ? CGDisplayMirrorsDisplay(target) == kCGNullDirectDisplay : CGDisplayMirrorsDisplay(target) == master
         guard test.activeModeMatches, master == target || correctRole else { throw DuoDesktopDisplay.Failure.modeRejected }
         guard test.followsNativeCadence,
@@ -277,6 +287,12 @@ Task { @MainActor in
               let restored = CGDisplayCopyDisplayMode(target),
               restored.pixelWidth == baseline?.pixelWidth, restored.pixelHeight == baseline?.pixelHeight else {
             throw DuoDesktopDisplay.Failure.modeRejected
+        }
+        if let recoveryDirectory {
+            guard !FileManager.default.fileExists(atPath: recoveryDirectory.appendingPathComponent("pending-display.json").path) else {
+                throw DuoDesktopDisplay.Failure.restorePending
+            }
+            print("Recovery journal: cleared after verified restoration")
         }
         guard !test.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
         // Virtual-master removal and WindowServer notifications must not later undo restoration.
