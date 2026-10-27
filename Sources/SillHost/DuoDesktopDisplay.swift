@@ -19,7 +19,7 @@ final class DuoDesktopDisplay {
         let mirrored: Bool
     }
     enum Failure: LocalizedError {
-        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable
+        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending
         var errorDescription: String? {
             switch self {
             case .invalidResolution: return "Duo 上屏原生分辨率无效。"
@@ -28,6 +28,7 @@ final class DuoDesktopDisplay {
             case .noDisplay: return "找不到可匹配 Duo 的 Mac 主显示器。"
             case .modeRejected: return "macOS 未能应用 Duo 的原生桌面尺寸和刷新率；本次连接不会降低分辨率。"
             case .displayUnavailable: return "无法捕获匹配 Duo 的桌面，请重新连接。"
+            case .restorePending: return "此前的 Mac 显示配置仍待恢复，原显示器可能已离线或系统拒绝恢复。"
             }
         }
     }
@@ -175,7 +176,7 @@ final class DuoDesktopDisplay {
                 throw error
             }
         }
-        guard restore() else { throw Failure.modeRejected }
+        guard restore() else { throw Failure.restorePending }
         let main = mainDisplay()
         originals = try snapshot()
         guard let home = originals.first(where: { $0.id == main }) else { originals = []; throw Failure.noDisplay }
@@ -276,7 +277,10 @@ final class DuoDesktopDisplay {
     func restore() -> Bool {
         guard !originals.isEmpty || temporary != nil else { return true }
         var success = true
-        let live = originals.filter { Self.isDisplayOnline($0.id) }
+        var live: [Original] = [], unavailable: [Original] = []
+        for original in originals {
+            if Self.isDisplayOnline(original.id) { live.append(original) } else { unavailable.append(original) }
+        }
         // Detach first. Removing a mirror master after restoring a slave's mode can otherwise
         // make WindowServer reapply the slave's pre-mirror timing after this method returns.
         if temporary != nil, !live.isEmpty {
@@ -327,15 +331,21 @@ final class DuoDesktopDisplay {
         resolution = nil
         requestedFPS = nil
         if success {
+            var pending = unavailable
             for old in live {
-                guard Self.sameMode(CGDisplayCopyDisplayMode(old.id), old.mode),
-                      CGDisplayMirrorsDisplay(old.id) == old.mirror,
-                      CGDisplayBounds(old.id).origin == old.origin else { success = false; continue }
+                if !Self.isDisplayOnline(old.id) || !Self.sameMode(CGDisplayCopyDisplayMode(old.id), old.mode)
+                    || CGDisplayMirrorsDisplay(old.id) != old.mirror || CGDisplayBounds(old.id).origin != old.origin {
+                    pending.append(old)
+                }
             }
-        }
-        if success {
-            originals = []
-            print("Duo desktop: original Mac display configuration restored")
+            // A pending mirror may change its master when it returns. Keep that whole original
+            // mirror group until it can be verified together, but release unrelated restored screens.
+            originals = Self.retainPendingMirrorGroups(originals, pending: pending)
+            success = pending.isEmpty
+            if success { print("Duo desktop: original Mac display configuration restored") }
+            else { print("Duo desktop: \(pending.count) original display(s) still need restoration; snapshot retained") }
+        } else if !unavailable.isEmpty {
+            print("Duo desktop: \(unavailable.count) original display(s) unavailable; restoration snapshot retained")
         }
         // Preserve the snapshot on failure: the next stop/reconnect/exit can retry restoration.
         return success
@@ -432,6 +442,21 @@ final class DuoDesktopDisplay {
             && abs(a.refreshRate - b.refreshRate) < 0.5
     }
 
+    private static func retainPendingMirrorGroups(_ originals: [Original], pending: [Original]) -> [Original] {
+        var retained = Set(pending.map(\.id))
+        var changed = true
+        while changed {
+            changed = false
+            for old in originals where old.mirror != kCGNullDirectDisplay {
+                if retained.contains(old.id) || retained.contains(old.mirror) {
+                    if retained.insert(old.id).inserted { changed = true }
+                    if retained.insert(old.mirror).inserted { changed = true }
+                }
+            }
+        }
+        return originals.filter { retained.contains($0.id) }
+    }
+
     private func configure(_ body: (CGDisplayConfigRef) -> CGError) throws {
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let config else { throw Failure.modeRejected }
@@ -455,4 +480,42 @@ final class DuoDesktopDisplay {
         }
         throw Failure.displayUnavailable
     }
+
+    #if DUO_DISPLAY_RESTORE_TESTING
+    /// Exercise the real restore path with an unavailable ID; no live display is configured.
+    static func inspectOfflineRestoreForTesting() -> (Bool, Bool, Bool, Bool)? {
+        let missing = CGDirectDisplayID.max
+        guard !isDisplayOnline(missing), let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return nil }
+        let desktop = DuoDesktopDisplay()
+        desktop.originals = [Original(id: missing, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)]
+        let first = desktop.restore()
+        let keptAfterFirst = !desktop.originals.isEmpty
+        let second = desktop.restore()
+        return (first, keptAfterFirst, second, !desktop.originals.isEmpty)
+    }
+
+    static func inspectPendingMirrorGroupsForTesting() -> [[CGDirectDisplayID]]? {
+        guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return nil }
+        let main = Original(id: 101, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)
+        let slave = Original(id: 102, mode: mode, origin: .zero, mirror: 101)
+        let unrelated = Original(id: 103, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)
+        let originals = [main, slave, unrelated]
+        return [[slave], [main], [unrelated]].map { pending in
+            retainPendingMirrorGroups(originals, pending: pending).map(\.id)
+        }
+    }
+
+    static func inspectBlockedPrepareForTesting() async -> Bool? {
+        let missing = CGDirectDisplayID.max
+        guard !isDisplayOnline(missing), let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return nil }
+        let desktop = DuoDesktopDisplay()
+        desktop.originals = [Original(id: missing, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)]
+        do {
+            _ = try await desktop.prepareGraphics(DuoDesktopResolution(width: 2007, height: 1427), fps: 120)
+            return false
+        } catch Failure.restorePending {
+            return desktop.originals.count == 1 && desktop.originals[0].id == missing
+        } catch { return false }
+    }
+    #endif
 }
