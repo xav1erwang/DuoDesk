@@ -56,4 +56,16 @@ struct CaptureFramePacer {
         guard let deadline = next else { return }
         next = CMTimeAdd(deadline, interval)
     }
+
+    /// `wait` was measured from the sample's presentation timestamp, not from its arrival on
+    /// the callback queue. When the stream exposes its output clock, subtract the time already
+    /// spent in delivery. Unknown, inconsistent or implausibly distant clocks keep the original
+    /// conservative wait; never infer a relationship between unrelated clock epochs.
+    static func deliveryDelay(wait: TimeInterval, sampleTime: CMTime, clockTime: CMTime?) -> TimeInterval {
+        guard wait.isFinite, wait > 0, let clockTime, sampleTime.isNumeric, clockTime.isNumeric,
+              sampleTime.timescale > 0, clockTime.timescale > 0, sampleTime.epoch == clockTime.epoch else { return wait }
+        let elapsed = CMTimeGetSeconds(CMTimeSubtract(clockTime, sampleTime))
+        guard elapsed.isFinite, (0...10).contains(elapsed) else { return wait }
+        return max(0, wait - elapsed)
+    }
 }

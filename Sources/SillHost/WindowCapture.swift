@@ -191,7 +191,12 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         case .held(let replaced, let timer):
             if replaced { Stats.shared.bump("cap.cadenceDrop") }
             if let (wait, token) = timer {
-                queue.asyncAfter(deadline: .now() + wait) { [weak self] in self?.deliverPendingSample(token) }
+                // Sample PTS is on the stream's synchronization clock. `wait` starts at that
+                // timestamp, so waiting the full interval again after callback delivery adds
+                // avoidable latency. Fall back if the clock is unavailable or inconsistent.
+                let now = stream.synchronizationClock.map { CMClockGetTime($0) }
+                let delay = CaptureFramePacer.deliveryDelay(wait: wait, sampleTime: pts, clockTime: now)
+                queue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.deliverPendingSample(token) }
             }
         case .emit(let first, let replaced):
             if replaced { Stats.shared.bump("cap.cadenceDrop") }

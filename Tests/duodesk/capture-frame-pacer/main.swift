@@ -44,6 +44,28 @@ guard case .hold(let nextWait) = tail.consider(CMTime(value: 11, timescale: 100)
     fputs("FAIL: held-frame delivery did not advance the stable target clock\n", stderr); exit(1)
 }
 
+// The SCK timestamp and its synchronization clock share a timebase. A queued callback may
+// already have consumed part or all of the hold; unreliable clock samples must not shorten it.
+let timestamp = CMTime(value: 100, timescale: 1)
+func delay(_ now: CMTime?) -> Double {
+    CaptureFramePacer.deliveryDelay(wait: 0.008, sampleTime: timestamp, clockTime: now)
+}
+let epochMismatch = CMTime(value: 100_004, timescale: 1_000, flags: .valid, epoch: 1)
+let delayChecks: [(String, Bool)] = [
+    ("no clock", abs(delay(nil) - 0.008) < 0.000_000_1),
+    ("invalid clock", abs(delay(.invalid) - 0.008) < 0.000_000_1),
+    ("clock at presentation", abs(delay(timestamp) - 0.008) < 0.000_000_1),
+    ("delivery consumes 3ms", abs(delay(CMTime(value: 100_003, timescale: 1_000)) - 0.005) < 0.000_000_1),
+    ("deadline already elapsed", delay(CMTime(value: 100_010, timescale: 1_000)) == 0),
+    ("moderate queue stall", delay(CMTime(value: 100_300, timescale: 1_000)) == 0),
+    ("future sample fallback", abs(delay(CMTime(value: 99_999, timescale: 1_000)) - 0.008) < 0.000_000_1),
+    ("implausible clock gap fallback", abs(delay(CMTime(value: 111, timescale: 1)) - 0.008) < 0.000_000_1),
+    ("different epoch fallback", abs(delay(epochMismatch) - 0.008) < 0.000_000_1),
+    ("invalid sample fallback", abs(CaptureFramePacer.deliveryDelay(wait: 0.008, sampleTime: .invalid, clockTime: timestamp) - 0.008) < 0.000_000_1)
+]
+for (name, passed) in delayChecks { print("\(passed ? "PASS" : "FAIL") callback-clock delay: \(name)") }
+guard delayChecks.allSatisfy(\.1) else { exit(1) }
+
 // Model timer and source arrivals independently: output values must remain distinct original
 // samples, follow the requested clock under load, and include the last sample after motion stops.
 var continuous = CaptureFramePacer(fps: 120)
