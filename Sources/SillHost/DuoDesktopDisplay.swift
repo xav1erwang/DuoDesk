@@ -19,7 +19,7 @@ final class DuoDesktopDisplay {
         let mirrored: Bool
     }
     enum Failure: LocalizedError {
-        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending
+        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging
         var errorDescription: String? {
             switch self {
             case .invalidResolution: return "Duo 上屏原生分辨率无效。"
@@ -29,6 +29,7 @@ final class DuoDesktopDisplay {
             case .modeRejected: return "macOS 未能应用 Duo 的原生桌面尺寸和刷新率；本次连接不会降低分辨率。"
             case .displayUnavailable: return "无法捕获匹配 Duo 的桌面，请重新连接。"
             case .restorePending: return "此前的 Mac 显示配置仍待恢复，原显示器可能已离线或系统拒绝恢复。"
+            case .topologyChanging: return "Mac 显示器配置正在变化，无法安全记录原始状态；未启动新的原生桌面。"
             }
         }
     }
@@ -179,6 +180,7 @@ final class DuoDesktopDisplay {
         guard restore() else { throw Failure.restorePending }
         let main = mainDisplay()
         originals = try snapshot()
+        guard main == mainDisplay() else { originals = []; throw Failure.topologyChanging }
         guard let home = originals.first(where: { $0.id == main }) else { originals = []; throw Failure.noDisplay }
         originalMainID = main
         originalSystemMainID = CGMainDisplayID()
@@ -425,14 +427,49 @@ final class DuoDesktopDisplay {
     }
 
     private func snapshot() throws -> [Original] {
-        var count: UInt32 = 0
-        guard CGGetOnlineDisplayList(0, nil, &count) == .success else { throw Failure.noDisplay }
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { throw Failure.noDisplay }
-        return ids.compactMap { id in
-            guard let mode = CGDisplayCopyDisplayMode(id) else { return nil }
-            return Original(id: id, mode: mode, origin: CGDisplayBounds(id).origin, mirror: CGDisplayMirrorsDisplay(id))
+        let main = CGMainDisplayID()
+        let captured = try Self.stableSnapshot {
+            var count: UInt32 = 0
+            guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else {
+                throw Failure.topologyChanging
+            }
+            let expected = count
+            var ids = [CGDirectDisplayID](repeating: 0, count: Int(expected))
+            guard CGGetOnlineDisplayList(expected, &ids, &count) == .success, count == expected else {
+                throw Failure.topologyChanging
+            }
+            return try ids.map { id in
+                guard Self.isDisplayOnline(id), let mode = CGDisplayCopyDisplayMode(id),
+                      mode.width > 0, mode.height > 0, mode.pixelWidth > 0, mode.pixelHeight > 0,
+                      mode.refreshRate.isFinite else { throw Failure.topologyChanging }
+                let origin = CGDisplayBounds(id).origin
+                guard Int32(exactly: origin.x) != nil, Int32(exactly: origin.y) != nil else {
+                    throw Failure.topologyChanging
+                }
+                return Original(id: id, mode: mode, origin: origin, mirror: CGDisplayMirrorsDisplay(id))
+            }
         }
+        guard CGMainDisplayID() == main else { throw Failure.topologyChanging }
+        return captured
+    }
+
+    /// Reject partial or changing inventories before a display configuration can begin.
+    private static func stableSnapshot(_ read: () throws -> [Original]) throws -> [Original] {
+        func checkedRead() throws -> [Original] {
+            let result = try read().sorted { $0.id < $1.id }
+            let ids = result.map(\.id)
+            guard !ids.isEmpty, !ids.contains(kCGNullDirectDisplay), Set(ids).count == ids.count else {
+                throw Failure.topologyChanging
+            }
+            return result
+        }
+        let first = try checkedRead(), second = try checkedRead()
+        guard first.count == second.count, zip(first, second).allSatisfy({ before, after in
+            before.id == after.id && sameMode(before.mode, after.mode)
+                && before.mode.refreshRate == after.mode.refreshRate
+                && before.origin == after.origin && before.mirror == after.mirror
+        }) else { throw Failure.topologyChanging }
+        return second
     }
 
     private static func sameMode(_ a: CGDisplayMode?, _ b: CGDisplayMode) -> Bool {
@@ -503,6 +540,37 @@ final class DuoDesktopDisplay {
         return [[slave], [main], [unrelated]].map { pending in
             retainPendingMirrorGroups(originals, pending: pending).map(\.id)
         }
+    }
+
+    static func inspectSnapshotStabilityForTesting() -> [Bool]? {
+        guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return nil }
+        let first = Original(id: 101, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)
+        let second = Original(id: 102, mode: mode, origin: CGPoint(x: 100, y: 0), mirror: kCGNullDirectDisplay)
+        let moved = Original(id: 102, mode: mode, origin: CGPoint(x: 101, y: 0), mirror: kCGNullDirectDisplay)
+        let mirrored = Original(id: 102, mode: mode, origin: CGPoint(x: 100, y: 0), mirror: 101)
+        let invalid = Original(id: kCGNullDirectDisplay, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)
+        func accepts(_ before: [Original], _ after: [Original]) -> Bool {
+            var calls = 0
+            return (try? stableSnapshot {
+                calls += 1
+                return calls == 1 ? before : after
+            }) != nil
+        }
+        return [accepts([first, second], [second, first]),
+                !accepts([first, second], [first]),
+                !accepts([first], [first, second]),
+                !accepts([first, second], [first, moved]),
+                !accepts([first, second], [first, mirrored]),
+                !accepts([first, first], [first, first]),
+                !accepts([invalid], [invalid]),
+                !accepts([], []),
+                (try? stableSnapshot { throw Failure.topologyChanging }) == nil]
+    }
+
+    static func inspectLiveSnapshotForTesting() -> Bool {
+        guard let originals = try? DuoDesktopDisplay().snapshot() else { return false }
+        let main = availableMainDisplayID()
+        return originals.contains { $0.id == main && isDisplayOnline($0.id) }
     }
 
     static func inspectBlockedPrepareForTesting() async -> Bool? {

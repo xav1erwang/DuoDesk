@@ -216,46 +216,58 @@ func run() async {
         let height = Int((filter.contentRect.height * CGFloat(filter.pointPixelScale)).rounded())
         print("OWN WINDOW FILTER: owner=\(owned.owningApplication?.processID ?? 0), ownPID=\(getpid()), frame=\(filter.contentRect), scale=\(filter.pointPixelScale), nativePixels=\(width)×\(height)")
         guard width == 2008, height == 1428 else { throw PixelMotionAudit.Failure.invalidFrames }
-        let captured = try Frames(), decoded = try Frames()
-        let recovery = RecoveryBox()
-        let received = HardwareHEVCDecoder(onFormat: { size, _ in
-            if size != CGSize(width: 2008, height: 1428) { decoded.fail("unexpected hardware-decoder dimensions") }
-        }, onSample: { sample, _ in
-            if let image = CMSampleBufferGetImageBuffer(sample) { decoded.receive(image) }
-        }, onFailure: { message, _ in decoded.fail(message) }, onNeedsKeyframe: { _ in recovery.request() })
-        received.require(DuoDesktopResolution(width: 2007, height: 1427))
-        let compressor = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 80_000_000,
-                                         prioritizeSpeed: true, software: false)
-        if CommandLine.arguments.contains("--quic-loopback") {
-            let channel = try await LoopbackVideo.connect(decoder: received, encoder: compressor)
-            recovery.set(channel)
-            compressor.onEncoded = { bytes, keyframe, parameters in
-                channel.sendEncoded(bytes, keyframe: keyframe, parameters: parameters)
-            }
-            loopback = channel
-        } else {
-            compressor.onEncoded = { bytes, keyframe, parameters in
-                if let parameters { received.apply(parameters) }
-                received.enqueue(bytes, isKeyframe: keyframe)
-            }
+        let diagnostic = CommandLine.arguments.contains("--diagnose")
+        let captureOnly = CommandLine.arguments.contains("--capture-only")
+        guard !captureOnly || (diagnostic && !CommandLine.arguments.contains("--quic-loopback")
+                               && !CommandLine.arguments.contains("--request-keyframe")) else {
+            throw PixelMotionAudit.Failure.unavailable
         }
-        compressor.onHung = { decoded.fail("hardware encoder stalled") }
+        let captured = try Frames()
+        var decoded: Frames?
+        if !captureOnly {
+            let frames = try Frames()
+            let recovery = RecoveryBox()
+            let received = HardwareHEVCDecoder(onFormat: { size, _ in
+                if size != CGSize(width: 2008, height: 1428) { frames.fail("unexpected hardware-decoder dimensions") }
+            }, onSample: { sample, _ in
+                if let image = CMSampleBufferGetImageBuffer(sample) { frames.receive(image) }
+            }, onFailure: { message, _ in frames.fail(message) }, onNeedsKeyframe: { _ in recovery.request() })
+            received.require(DuoDesktopResolution(width: 2007, height: 1427))
+            let compressor = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 80_000_000,
+                                             prioritizeSpeed: true, software: false)
+            if CommandLine.arguments.contains("--quic-loopback") {
+                let channel = try await LoopbackVideo.connect(decoder: received, encoder: compressor)
+                recovery.set(channel)
+                compressor.onEncoded = { bytes, keyframe, parameters in
+                    channel.sendEncoded(bytes, keyframe: keyframe, parameters: parameters)
+                }
+                loopback = channel
+            } else {
+                compressor.onEncoded = { bytes, keyframe, parameters in
+                    if let parameters { received.apply(parameters) }
+                    received.enqueue(bytes, isKeyframe: keyframe)
+                }
+            }
+            compressor.onHung = { frames.fail("hardware encoder stalled") }
+            capture.onFrame = { image, pts in captured.receive(image); compressor.encode(image, pts: pts) }
+            encoder = compressor; decoder = received; decoded = frames
+        } else {
+            capture.onFrame = { image, _ in captured.receive(image) }
+            print("OWN WINDOW CAPTURE-ONLY DIAGNOSTIC: no encoder, decoder, network or desktop acceptance")
+        }
         #if DUO_CAPTURE_DIAGNOSTICS
         capture.onSampleObservation = { info in captured.observe(info) }
         #endif
-        capture.onFrame = { image, pts in captured.receive(image); compressor.encode(image, pts: pts) }
         capture.onStopped = { stop in captured.fail(stop.error.localizedDescription) }
-        encoder = compressor; decoder = received
         let resampled = CommandLine.arguments.contains("--resampled")
         guard !virtualSecondary || !resampled else { throw PixelMotionAudit.Failure.unavailable }
         try await capture.start(filter: filter, width: 2008, height: 1428, fps: 120, showsCursor: false,
                                 nativeCadence: virtualSecondary, resampleCadence: resampled)
         try await Task.sleep(for: .seconds(2))
-        let diagnostic = CommandLine.arguments.contains("--diagnose")
         if CommandLine.arguments.contains("--request-keyframe"), loopback == nil { throw LoopbackVideo.Failure.configuration }
         // One second stationary, one second scrolling warmup, then a fixed active interval.
         let duration = diagnostic ? 12 : 32
-        let capturedStart = captured.begin(seconds: duration), decodedStart = decoded.begin(seconds: duration)
+        let capturedStart = captured.begin(seconds: duration), decodedStart = decoded?.begin(seconds: duration)
         var keyframeRequest: (before: Int, deadline: Double)?
         for step in 0..<(duration * 2) {
             try await Task.sleep(for: .milliseconds(500))
@@ -272,32 +284,34 @@ func run() async {
                 keyframeRequest = nil
                 print("OWN LOOPBACK QUIC: requested keyframe received within 1.5 seconds")
             }
-            try captured.check(); try decoded.check()
+            try captured.check(); try decoded?.check()
             try loopback?.check()
             try temporaryDisplay?.checkOwnedWindow(window)
         }
         await capture.stop(); capture.onFrame = nil
         try await Task.sleep(for: .milliseconds(250))
         let (samples, wrong) = captured.summary
-        let (outputs, badOutputs) = decoded.summary
         print("OWN WINDOW CAPTURE: samples=\(samples), wrongDimensions=\(wrong)")
         print(await captured.audit.report(from: capturedStart, seconds: duration))
         #if DUO_CAPTURE_DIAGNOSTICS
         print(captured.metadataReport())
         if CommandLine.arguments.contains("--scroll-correlation") { print(captured.scrollTimingReport(scrollTimes)) }
         #endif
-        print("OWN WINDOW HARDWARE DECODE: outputs=\(outputs), wrongDimensions=\(badOutputs)")
-        print(await decoded.audit.report(from: decodedStart, seconds: duration))
+        if let decoded, let decodedStart {
+            let (outputs, badOutputs) = decoded.summary
+            print("OWN WINDOW HARDWARE DECODE: outputs=\(outputs), wrongDimensions=\(badOutputs)")
+            print(await decoded.audit.report(from: decodedStart, seconds: duration))
+        }
         if let loopback {
             let counters = loopback.counters
             print("OWN LOOPBACK QUIC COUNTERS: frames=\(counters.frames), keyframes=\(counters.keyframes), parameterSets=\(counters.parameters), resets=\(counters.resets)")
             print(loopback.latencyReport)
             Stats.shared.dump()
         }
-        try captured.audit.validate(); try decoded.audit.validate()
-        passed = !diagnostic && wrong == 0 && badOutputs == 0 && (captured.audit.changedFramesPerSecond ?? 0) >= 120
-            && (decoded.audit.changedFramesPerSecond ?? 0) >= 120
-        print("OWN WINDOW RESULT: target120=\(passed); diagnosticOnly=\(diagnostic); virtualSecondary=\(virtualSecondary); resampled=\(resampled); loopbackQUIC=\(loopback != nil); completeDesktop=false; publicNetwork=false; realDuo=false")
+        try captured.audit.validate(); try decoded?.audit.validate()
+        passed = !diagnostic && !captureOnly && wrong == 0 && decoded?.summary.1 == 0
+            && (captured.audit.changedFramesPerSecond ?? 0) >= 120 && (decoded?.audit.changedFramesPerSecond ?? 0) >= 120
+        print("OWN WINDOW RESULT: target120=\(passed); diagnosticOnly=\(diagnostic); captureOnly=\(captureOnly); virtualSecondary=\(virtualSecondary); resampled=\(resampled); loopbackQUIC=\(loopback != nil); completeDesktop=false; publicNetwork=false; realDuo=false")
     } catch {
         print("OWN WINDOW CHECK FAILED: \(error)")
     }
