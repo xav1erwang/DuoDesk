@@ -2045,12 +2045,12 @@ package final class StreamCoordinator {
     /// window back and dies of the signal with no goodbye (`releaseKeysForExit`): its devices notice
     /// by liveness.
     package func shutdownForExit() {
+        shuttingDown = true
         injector.releaseAll()
         server.goodbyeAll(Goodbye(reason: Goodbye.quit), within: 0.1)
-        shuttingDown = true
-        restoreFits(keeping: nil)
-        stage.release()
-        _ = duoDesktop.restore()
+        ShutdownRestoreOrder.run(display: { _ = duoDesktop.restore() },
+                                 windows: { restoreFits(keeping: nil) },
+                                 stage: { stage.release() })
     }
 
     /// The CLI's default path at a signal (HostShutdown.installKeyRelease), just before it dies of it:
@@ -2058,9 +2058,10 @@ package final class StreamCoordinator {
     /// device goes back to its own frame (a line each, only when a window was sized); nothing else
     /// happens (no goodbye), as before.
     package func releaseKeysForExit() {
+        shuttingDown = true
         injector.releaseAll()
-        restoreFits(keeping: nil)
-        _ = duoDesktop.restore()
+        ShutdownRestoreOrder.run(display: { _ = duoDesktop.restore() },
+                                 windows: { restoreFits(keeping: nil) }, stage: {})
     }
 
     // MARK: A window Sill sized goes back (WindowRestore, issue #57)

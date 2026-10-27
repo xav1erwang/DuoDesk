@@ -7,6 +7,6 @@ mkdir -p "$out"
 swiftc -O -emit-library -emit-module -module-name StreamProtocol Sources/StreamProtocol/*.swift \
   -emit-module-path "$out/StreamProtocol.swiftmodule" -o "$out/libStreamProtocol.dylib"
 swiftc -O -D DUO_DISPLAY_RESTORE_TESTING -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
-  Sources/SillHost/VirtualDisplay.swift Sources/SillHost/DuoDesktopDisplay.swift \
+  Sources/SillHost/VirtualDisplay.swift Sources/SillHost/DisplayRestoreIdentity.swift Sources/SillHost/DuoDesktopDisplay.swift \
   Tests/duodesk/display-offline-restore/main.swift -o "$out/check"
 "$out/check"

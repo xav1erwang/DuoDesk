@@ -17,12 +17,21 @@ guard groups == [[101, 102], [101, 102], [103]] else {
 print("PASS: pending mirror groups retain both members and release unrelated restored screens")
 print("PASS: unavailable original display remains pending across restore attempts")
 let snapshots = MainActor.assumeIsolated { DuoDesktopDisplay.inspectSnapshotStabilityForTesting() }
-guard let snapshots, snapshots.count == 9, snapshots.allSatisfy({ $0 }),
+guard let snapshots, snapshots.count == 10, snapshots.allSatisfy({ $0 }),
       MainActor.assumeIsolated({ DuoDesktopDisplay.inspectLiveSnapshotForTesting() }) else {
     fputs("FAIL: display snapshot stability or read-only live inventory\n", stderr); exit(1)
 }
-print("PASS: stable snapshot rejects added, removed, moved, mirrored, duplicate, empty, zero and unreadable displays")
-print("PASS: current live display inventory is complete and stable")
+print("PASS: stable snapshot rejects added, removed, moved, mirrored, replaced, duplicate, empty, zero and unreadable displays")
+print("PASS: current live display inventory and identity counts are complete and stable")
+guard MainActor.assumeIsolated({ DuoDesktopDisplay.inspectSystemMainVerificationForTesting() }) == true else {
+    fputs("FAIL: original system main display must remain pending if it changes\n", stderr); exit(1)
+}
+print("PASS: original system main is verified and a stale unsaved main is ignored")
+guard let identityGuards = MainActor.assumeIsolated({ DuoDesktopDisplay.inspectRestoreIdentityGuardForTesting() }),
+      identityGuards.count == 6, identityGuards.allSatisfy({ $0 }) else {
+    fputs("FAIL: real restore identity guard or intercepted configuration\n", stderr); exit(1)
+}
+print("PASS: restore rejects changed, serial-less, duplicate and unstable identities, including replacement during restore; unique recovery is permitted with configuration intercepted")
 Task { @MainActor in
     guard await DuoDesktopDisplay.inspectBlockedPrepareForTesting() == true else {
         fputs("FAIL: a new native desktop should report pending restoration\n", stderr); exit(1)

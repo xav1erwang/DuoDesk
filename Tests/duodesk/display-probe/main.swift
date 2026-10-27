@@ -14,6 +14,37 @@ let nativePrimary = CommandLine.arguments.contains("--native-primary")
 let fullscreen = CommandLine.arguments.contains("--fullscreen")
 let inspectsSpaces = CommandLine.arguments.contains("--inspect-spaces")
 
+struct ProbeDisplayState: Equatable, CustomStringConvertible {
+    let id: CGDirectDisplayID
+    let mode: Int32
+    let width: Int, height: Int, pixelWidth: Int, pixelHeight: Int
+    let refresh: Double
+    let origin: CGPoint
+    let mirror: CGDirectDisplayID
+    let main: Bool
+    var description: String {
+        "\(id):mode=\(mode),points=\(width)x\(height),pixels=\(pixelWidth)x\(pixelHeight),hz=\(refresh),origin=\(origin),mirror=\(mirror),main=\(main)"
+    }
+}
+
+func onlineDisplayStates() -> [ProbeDisplayState]? {
+    var count: UInt32 = 0
+    guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
+    let expected = count
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(expected))
+    guard CGGetOnlineDisplayList(expected, &ids, &count) == .success, count == expected,
+          Set(ids).count == ids.count, !ids.contains(kCGNullDirectDisplay) else { return nil }
+    var result: [ProbeDisplayState] = []
+    for id in ids.sorted() {
+        guard CGDisplayIsOnline(id) > 0, let mode = CGDisplayCopyDisplayMode(id), mode.refreshRate.isFinite else { return nil }
+        result.append(ProbeDisplayState(id: id, mode: mode.ioDisplayModeID, width: mode.width, height: mode.height,
+                                        pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight,
+                                        refresh: mode.refreshRate, origin: CGDisplayBounds(id).origin,
+                                        mirror: CGDisplayMirrorsDisplay(id), main: CGMainDisplayID() == id))
+    }
+    return result
+}
+
 @MainActor
 final class FullscreenObserver: NSObject, NSWindowDelegate {
     var entered = false
@@ -65,8 +96,10 @@ Task { @MainActor in
     let physical = CGMainDisplayID()
     let physicalMode = CGDisplayCopyDisplayMode(physical)
     let physicalOrigin = CGDisplayBounds(physical).origin
+    let beforeDisplays = onlineDisplayStates()
     do {
-        guard let physicalMode else { throw DuoDesktopDisplay.Failure.noDisplay }
+        guard let physicalMode, let beforeDisplays else { throw DuoDesktopDisplay.Failure.noDisplay }
+        print("DISPLAY PROBE INVENTORY BEFORE: \(beforeDisplays)")
         guard !usesPrimary || !slowNativeMode else { throw DuoDesktopDisplay.Failure.invalidResolution }
         guard !fullscreen || usesPrimary else { throw DuoDesktopDisplay.Failure.invalidResolution }
         guard !inspectsSpaces || (fullscreen && usesPrimary && nativePrimary) else { throw DuoDesktopDisplay.Failure.invalidResolution }
@@ -280,10 +313,17 @@ Task { @MainActor in
         minimized?.close(); newWindow?.close()
         secondaryWindow?.close()
         fakeMac?.destroy()
+        var afterDisplays: [ProbeDisplayState]?
+        for _ in 0..<30 {
+            afterDisplays = onlineDisplayStates()
+            if afterDisplays == beforeDisplays { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        print("DISPLAY PROBE INVENTORY AFTER: \(String(describing: afterDisplays))")
         guard let current = CGDisplayCopyDisplayMode(physical),
               current.ioDisplayModeID == physicalMode.ioDisplayModeID,
               current.pixelWidth == physicalMode.pixelWidth, current.pixelHeight == physicalMode.pixelHeight,
-              abs(current.refreshRate - physicalMode.refreshRate) < 0.5,
+              current.refreshRate == physicalMode.refreshRate, afterDisplays == beforeDisplays,
               CGDisplayBounds(physical).origin == physicalOrigin, CGMainDisplayID() == physical else { throw DuoDesktopDisplay.Failure.modeRejected }
         print("DUO graphics PASS: exact native pixels, repeated prepare, original display restored; existing primary window \(usesPrimary ? "verified" : "not tested in disposable mode")")
         try spaceAudit?.finish(passed: true, cleanupRestored: true)
@@ -304,7 +344,9 @@ Task { @MainActor in
         fakeMac?.destroy()
         let restoredMode = CGDisplayCopyDisplayMode(physical)
         let exact = restored && restoredMode?.ioDisplayModeID == physicalMode?.ioDisplayModeID
+            && restoredMode?.refreshRate == physicalMode?.refreshRate
             && CGDisplayBounds(physical).origin == physicalOrigin && CGMainDisplayID() == physical
+            && onlineDisplayStates() == beforeDisplays
         try? spaceAudit?.finish(passed: false, cleanupRestored: exact, error: error.localizedDescription)
         print("DUO graphics FAILED: \(error.localizedDescription); cleanup restored=\(restored)")
         exit(1)

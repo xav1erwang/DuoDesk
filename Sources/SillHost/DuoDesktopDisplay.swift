@@ -38,14 +38,28 @@ final class DuoDesktopDisplay {
         let mode: CGDisplayMode
         let origin: CGPoint
         let mirror: CGDirectDisplayID
+        let identity: DisplayRestoreIdentity?
+        init(id: CGDirectDisplayID, mode: CGDisplayMode, origin: CGPoint, mirror: CGDirectDisplayID,
+             identity: DisplayRestoreIdentity? = nil) {
+            self.id = id; self.mode = mode; self.origin = origin; self.mirror = mirror; self.identity = identity
+        }
     }
     private var originals: [Original] = []
+    /// Keep counts from the full original inventory even after unrelated restored screens are released.
+    private var originalIdentityCounts: [DisplayRestoreIdentity: Int] = [:]
+    /// An ID observed offline or with different identity must be reidentified before any write.
+    private var observedOffline: Set<CGDirectDisplayID> = []
     private var temporary: VirtualDisplay?
     private var pendingMirror = false
     private var capturedID: CGDirectDisplayID = 0
     private var originalMainID: CGDirectDisplayID = 0
     private var originalSystemMainID: CGDirectDisplayID = 0
     private var primaryOrigins: [CGDirectDisplayID: CGPoint] = [:]
+    #if DUO_DISPLAY_RESTORE_TESTING
+    private var testInventory: (() -> [CGDirectDisplayID: DisplayRestoreIdentity]?)?
+    private var testInterceptConfiguration = false
+    private var testConfigurationAttempts = 0
+    #endif
     private let mainDisplay: @MainActor () -> CGDirectDisplayID
     private let layout: Layout
     init(mainDisplay: @escaping @MainActor () -> CGDirectDisplayID = { DuoDesktopDisplay.availableMainDisplayID() }, layout: Layout = .mirrored) {
@@ -182,6 +196,8 @@ final class DuoDesktopDisplay {
         originals = try snapshot()
         guard main == mainDisplay() else { originals = []; throw Failure.topologyChanging }
         guard let home = originals.first(where: { $0.id == main }) else { originals = []; throw Failure.noDisplay }
+        originalIdentityCounts = Self.identityCounts(originals.compactMap(\.identity))
+        observedOffline.removeAll()
         originalMainID = main
         originalSystemMainID = CGMainDisplayID()
         do {
@@ -280,9 +296,24 @@ final class DuoDesktopDisplay {
         guard !originals.isEmpty || temporary != nil else { return true }
         var success = true
         var live: [Original] = [], unavailable: [Original] = []
+        // Reidentification needs a stable, complete online inventory. A changed ID is not silently
+        // remapped; mode and mirror relationships still refer to the original CoreGraphics IDs.
+        let inventory = onlineIdentitySnapshot()
+        let onlineCounts = inventory.map { Self.identityCounts(Array($0.values)) }
         for original in originals {
-            if Self.isDisplayOnline(original.id) { live.append(original) } else { unavailable.append(original) }
+            // An unstable read is not proof that a monitor disconnected, but it also must not
+            // authorize any display write. Keep the snapshot for a later stable observation.
+            guard let inventory else { unavailable.append(original); continue }
+            guard let current = inventory[original.id], let expected = original.identity else {
+                observedOffline.insert(original.id); unavailable.append(original); continue
+            }
+            let trusted = expected.permitsRestore(current: current, wasOffline: observedOffline.contains(original.id),
+                                                   originalMatches: originalIdentityCounts[expected, default: 0],
+                                                   onlineMatches: onlineCounts?[expected, default: 0] ?? 0)
+            if trusted { live.append(original) }
+            else { observedOffline.insert(original.id); unavailable.append(original) }
         }
+        let trustedIDs = Set(live.map(\.id))
         // Detach first. Removing a mirror master after restoring a slave's mode can otherwise
         // make WindowServer reapply the slave's pre-mirror timing after this method returns.
         if temporary != nil, !live.isEmpty {
@@ -309,7 +340,7 @@ final class DuoDesktopDisplay {
                         }
                     }
                     for old in live {
-                        if !Self.sameMode(CGDisplayCopyDisplayMode(old.id), old.mode) {
+                        if !Self.sameRestoredMode(CGDisplayCopyDisplayMode(old.id), old.mode) {
                             let mode = CGConfigureDisplayWithDisplayMode(config, old.id, old.mode, nil)
                             if mode != .success { return mode }
                         }
@@ -318,7 +349,7 @@ final class DuoDesktopDisplay {
                             if origin != .success { return origin }
                         }
                     }
-                    for old in live where old.mirror != kCGNullDirectDisplay && Self.isDisplayOnline(old.mirror) && CGDisplayMirrorsDisplay(old.id) != old.mirror {
+                    for old in live where old.mirror != kCGNullDirectDisplay && trustedIDs.contains(old.mirror) && CGDisplayMirrorsDisplay(old.id) != old.mirror {
                         let result = CGConfigureDisplayMirrorOfDisplay(config, old.id, old.mirror)
                         if result != .success { return result }
                     }
@@ -328,22 +359,36 @@ final class DuoDesktopDisplay {
         }
         capturedID = 0
         originalMainID = 0
-        originalSystemMainID = 0
         primaryOrigins = [:]
         resolution = nil
         requestedFPS = nil
         if success {
             var pending = unavailable
+            let verifiedIdentities = onlineIdentitySnapshot()
             for old in live {
-                if !Self.isDisplayOnline(old.id) || !Self.sameMode(CGDisplayCopyDisplayMode(old.id), old.mode)
+                // A replacement or disconnect during the configuration must not be reported as
+                // success. An unstable inventory remains pending without guessing what happened.
+                guard let verifiedIdentities else { pending.append(old); continue }
+                guard verifiedIdentities[old.id] == old.identity else {
+                    observedOffline.insert(old.id); pending.append(old); continue
+                }
+                if !Self.isDisplayOnline(old.id) || !Self.sameRestoredMode(CGDisplayCopyDisplayMode(old.id), old.mode)
                     || CGDisplayMirrorsDisplay(old.id) != old.mirror || CGDisplayBounds(old.id).origin != old.origin {
                     pending.append(old)
                 }
             }
+            // Equal modes/origins do not by themselves prove the original system main display was
+            // restored, especially with a mirror group. Ignore a stale ID that was not in snapshot.
+            if let main = Self.unrestoredSystemMain(originals, expected: originalSystemMainID, current: CGMainDisplayID()),
+               !pending.contains(where: { $0.id == main.id }) {
+                pending.append(main)
+            }
             // A pending mirror may change its master when it returns. Keep that whole original
             // mirror group until it can be verified together, but release unrelated restored screens.
             originals = Self.retainPendingMirrorGroups(originals, pending: pending)
+            observedOffline.formIntersection(Set(originals.map(\.id)))
             success = pending.isEmpty
+            if success { originalSystemMainID = 0; originalIdentityCounts.removeAll() }
             if success { print("Duo desktop: original Mac display configuration restored") }
             else { print("Duo desktop: \(pending.count) original display(s) still need restoration; snapshot retained") }
         } else if !unavailable.isEmpty {
@@ -446,7 +491,8 @@ final class DuoDesktopDisplay {
                 guard Int32(exactly: origin.x) != nil, Int32(exactly: origin.y) != nil else {
                     throw Failure.topologyChanging
                 }
-                return Original(id: id, mode: mode, origin: origin, mirror: CGDisplayMirrorsDisplay(id))
+                return Original(id: id, mode: mode, origin: origin, mirror: CGDisplayMirrorsDisplay(id),
+                                identity: Self.displayIdentity(id))
             }
         }
         guard CGMainDisplayID() == main else { throw Failure.topologyChanging }
@@ -467,7 +513,7 @@ final class DuoDesktopDisplay {
         guard first.count == second.count, zip(first, second).allSatisfy({ before, after in
             before.id == after.id && sameMode(before.mode, after.mode)
                 && before.mode.refreshRate == after.mode.refreshRate
-                && before.origin == after.origin && before.mirror == after.mirror
+                && before.origin == after.origin && before.mirror == after.mirror && before.identity == after.identity
         }) else { throw Failure.topologyChanging }
         return second
     }
@@ -477,6 +523,52 @@ final class DuoDesktopDisplay {
         return a.ioDisplayModeID == b.ioDisplayModeID && a.width == b.width && a.height == b.height
             && a.pixelWidth == b.pixelWidth && a.pixelHeight == b.pixelHeight
             && abs(a.refreshRate - b.refreshRate) < 0.5
+    }
+
+    private static func sameRestoredMode(_ a: CGDisplayMode?, _ b: CGDisplayMode) -> Bool {
+        guard let a else { return false }
+        return sameMode(a, b) && DisplayRestoreIdentity.exactRefreshRestored(current: a.refreshRate, original: b.refreshRate)
+    }
+
+    private static func displayIdentity(_ id: CGDirectDisplayID) -> DisplayRestoreIdentity {
+        DisplayRestoreIdentity(vendor: CGDisplayVendorNumber(id), model: CGDisplayModelNumber(id),
+                               serial: CGDisplaySerialNumber(id), builtIn: CGDisplayIsBuiltin(id) > 0)
+    }
+
+    private static func identityCounts(_ identities: [DisplayRestoreIdentity]) -> [DisplayRestoreIdentity: Int] {
+        identities.reduce(into: [:]) { $0[$1, default: 0] += 1 }
+    }
+
+    private struct OnlineIdentity: Equatable {
+        let id: CGDirectDisplayID
+        let identity: DisplayRestoreIdentity
+    }
+
+    /// Two complete reads prevent a partial or changing inventory from proving uniqueness.
+    private static func stableOnlineIdentities() -> [CGDirectDisplayID: DisplayRestoreIdentity]? {
+        func read() -> [OnlineIdentity]? {
+            var count: UInt32 = 0
+            guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
+            let expected = count
+            var ids = [CGDirectDisplayID](repeating: 0, count: Int(expected))
+            guard CGGetOnlineDisplayList(expected, &ids, &count) == .success, count == expected,
+                  !ids.contains(kCGNullDirectDisplay), Set(ids).count == ids.count,
+                  ids.allSatisfy(isDisplayOnline) else { return nil }
+            return ids.sorted().map { OnlineIdentity(id: $0, identity: displayIdentity($0)) }
+        }
+        guard let first = read(), let second = read(), first == second else { return nil }
+        return Dictionary(uniqueKeysWithValues: second.map { ($0.id, $0.identity) })
+    }
+
+    private static func stableOnlineIdentityCounts() -> [DisplayRestoreIdentity: Int]? {
+        stableOnlineIdentities().map { identityCounts(Array($0.values)) }
+    }
+
+    private func onlineIdentitySnapshot() -> [CGDirectDisplayID: DisplayRestoreIdentity]? {
+        #if DUO_DISPLAY_RESTORE_TESTING
+        if let testInventory { return testInventory() }
+        #endif
+        return Self.stableOnlineIdentities()
     }
 
     private static func retainPendingMirrorGroups(_ originals: [Original], pending: [Original]) -> [Original] {
@@ -494,7 +586,16 @@ final class DuoDesktopDisplay {
         return originals.filter { retained.contains($0.id) }
     }
 
+    private static func unrestoredSystemMain(_ originals: [Original], expected: CGDirectDisplayID,
+                                              current: CGDirectDisplayID) -> Original? {
+        guard expected != current else { return nil }
+        return originals.first { $0.id == expected }
+    }
+
     private func configure(_ body: (CGDisplayConfigRef) -> CGError) throws {
+        #if DUO_DISPLAY_RESTORE_TESTING
+        if testInterceptConfiguration { testConfigurationAttempts += 1; return }
+        #endif
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let config else { throw Failure.modeRejected }
         let result = body(config)
@@ -549,6 +650,10 @@ final class DuoDesktopDisplay {
         let moved = Original(id: 102, mode: mode, origin: CGPoint(x: 101, y: 0), mirror: kCGNullDirectDisplay)
         let mirrored = Original(id: 102, mode: mode, origin: CGPoint(x: 100, y: 0), mirror: 101)
         let invalid = Original(id: kCGNullDirectDisplay, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)
+        let oneIdentity = DisplayRestoreIdentity(vendor: 1, model: 2, serial: 3, builtIn: false)
+        let otherIdentity = DisplayRestoreIdentity(vendor: 1, model: 2, serial: 4, builtIn: false)
+        let identified = Original(id: 101, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay, identity: oneIdentity)
+        let replaced = Original(id: 101, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay, identity: otherIdentity)
         func accepts(_ before: [Original], _ after: [Original]) -> Bool {
             var calls = 0
             return (try? stableSnapshot {
@@ -564,13 +669,67 @@ final class DuoDesktopDisplay {
                 !accepts([first, first], [first, first]),
                 !accepts([invalid], [invalid]),
                 !accepts([], []),
-                (try? stableSnapshot { throw Failure.topologyChanging }) == nil]
+                (try? stableSnapshot { throw Failure.topologyChanging }) == nil,
+                !accepts([identified], [replaced])]
     }
 
     static func inspectLiveSnapshotForTesting() -> Bool {
         guard let originals = try? DuoDesktopDisplay().snapshot() else { return false }
         let main = availableMainDisplayID()
+        let savedCounts = identityCounts(originals.compactMap(\.identity))
         return originals.contains { $0.id == main && isDisplayOnline($0.id) }
+            && originals.allSatisfy { $0.identity != nil }
+            && stableOnlineIdentityCounts() == savedCounts
+    }
+
+    static func inspectSystemMainVerificationForTesting() -> Bool? {
+        guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { return nil }
+        let original = Original(id: 101, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)
+        return unrestoredSystemMain([original], expected: 101, current: 102)?.id == 101
+            && unrestoredSystemMain([original], expected: 101, current: 101) == nil
+            && unrestoredSystemMain([original], expected: 999, current: 101) == nil
+    }
+
+    /// Drive the real restore classifier against synthetic inventories. Any configuration attempt
+    /// is intercepted before CoreGraphics, so even an incorrect result cannot alter a display.
+    static func inspectRestoreIdentityGuardForTesting() -> [Bool]? {
+        let id = CGMainDisplayID()
+        guard isDisplayOnline(id), let mode = CGDisplayCopyDisplayMode(id) else { return nil }
+        let origin = CGDisplayBounds(id).origin, mirror = CGDisplayMirrorsDisplay(id)
+        let identified = DisplayRestoreIdentity(vendor: 42, model: 7, serial: 1234, builtIn: false)
+        let unidentifiable = DisplayRestoreIdentity(vendor: 42, model: 7, serial: 0, builtIn: false)
+        let other = DisplayRestoreIdentity(vendor: 42, model: 7, serial: 9876, builtIn: false)
+        let secondID: CGDirectDisplayID = id == 9_999 ? 9_998 : 9_999
+        func run(expected: DisplayRestoreIdentity, inventory: [CGDirectDisplayID: DisplayRestoreIdentity]?,
+                 wasOffline: Bool, originalCount: Int) -> (Bool, Bool, Bool, Int) {
+            let desktop = DuoDesktopDisplay()
+            desktop.originals = [Original(id: id, mode: mode, origin: origin, mirror: mirror, identity: expected)]
+            desktop.originalIdentityCounts = [expected: originalCount]
+            if wasOffline { desktop.observedOffline.insert(id) }
+            desktop.testInventory = { inventory }
+            desktop.testInterceptConfiguration = true
+            let result = desktop.restore()
+            return (result, !desktop.originals.isEmpty, desktop.observedOffline.contains(id), desktop.testConfigurationAttempts)
+        }
+        let changed = run(expected: identified, inventory: [id: other], wasOffline: false, originalCount: 1)
+        let missingSerial = run(expected: unidentifiable, inventory: [id: unidentifiable], wasOffline: true, originalCount: 1)
+        let duplicate = run(expected: identified, inventory: [id: identified, secondID: identified], wasOffline: true, originalCount: 1)
+        let unstable = run(expected: identified, inventory: nil, wasOffline: false, originalCount: 1)
+        let unique = run(expected: identified, inventory: [id: identified], wasOffline: true, originalCount: 1)
+        let changing = DuoDesktopDisplay()
+        changing.originals = [Original(id: id, mode: mode, origin: origin, mirror: mirror, identity: identified)]
+        changing.originalIdentityCounts = [identified: 1]
+        var reads = 0
+        changing.testInventory = { reads += 1; return [id: reads == 1 ? identified : other] }
+        changing.testInterceptConfiguration = true
+        let changedDuringRestore = changing.restore()
+        return [!changed.0 && changed.1 && changed.2 && changed.3 == 0,
+                !missingSerial.0 && missingSerial.1 && missingSerial.2 && missingSerial.3 == 0,
+                !duplicate.0 && duplicate.1 && duplicate.2 && duplicate.3 == 0,
+                !unstable.0 && unstable.1 && !unstable.2 && unstable.3 == 0,
+                unique.0 && !unique.1 && unique.3 == 1,
+                !changedDuringRestore && !changing.originals.isEmpty && changing.observedOffline.contains(id)
+                    && changing.testConfigurationAttempts == 1]
     }
 
     static func inspectBlockedPrepareForTesting() async -> Bool? {
