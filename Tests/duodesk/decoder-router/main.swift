@@ -14,7 +14,7 @@ final class Results: @unchecked Sendable {
     var state: (samples: Int, formats: Int, failures: Int) { lock.withLock { (samples, formats, failures) } }
 }
 func makeRouter(_ results: Results) -> HardwareDecoderRouter {
-    HardwareDecoderRouter(onFormat: { _, _ in results.format() }, onSample: { _, _ in results.sample() },
+    HardwareDecoderRouter(onFormat: { _, _ in results.format() }, onSample: { _, _, _ in results.sample() },
                           onFailure: { _, _ in results.failure() })
 }
 func wait(_ condition: () -> Bool, timeout: TimeInterval = 2) -> Bool {

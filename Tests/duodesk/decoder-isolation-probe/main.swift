@@ -62,7 +62,7 @@ func frame() throws -> CVPixelBuffer {
 struct Check {
     static func run() async throws {
         let results = Results(), bridge = Bridge()
-        let router = HardwareDecoderRouter(onFormat: { _, _ in }, onSample: { image, token in results.sample(image, token) },
+        let router = HardwareDecoderRouter(onFormat: { _, _ in }, onSample: { image, token, _ in results.sample(image, token) },
             onFailure: { error, _ in results.error(error) }, onNeedsKeyframe: { token in results.request(token); bridge.replay() },
             onReset: { token in results.reset(token) })
         router.require(DuoDesktopResolution(width: 2007, height: 1427))

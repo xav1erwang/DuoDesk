@@ -61,7 +61,7 @@ func frame(_ luminance: UInt8) throws -> CVPixelBuffer {
 struct Check {
     static func run() async throws {
         let results = Results()
-        let router = HardwareDecoderRouter(onFormat: { _, _ in }, onSample: { sample, _ in results.sample(sample) },
+        let router = HardwareDecoderRouter(onFormat: { _, _ in }, onSample: { sample, _, _ in results.sample(sample) },
             onFailure: { message, _ in results.fail(message) }, onNeedsKeyframe: { _ in results.request() })
         router.require(DuoDesktopResolution(width: 2007, height: 1427))
         let encoder = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 20_000_000,

@@ -10,7 +10,7 @@ final class HardwareDecoderRouter: @unchecked Sendable {
     private let lock = NSLock()
     private let recoveryQueue = DispatchQueue(label: "duodesk.decoder-router-recovery", qos: .userInitiated)
     private let onFormat: (CGSize, UInt64) -> Void
-    private let onSample: (CMSampleBuffer, UInt64) -> Void
+    private let onSample: (CMSampleBuffer, UInt64, VideoOutputPermit) -> Void
     private let onFailure: (String, UInt64) -> Void
     private let onNeedsKeyframe: (UInt64) -> Void
     private let onReset: (UInt64) -> Void
@@ -24,7 +24,7 @@ final class HardwareDecoderRouter: @unchecked Sendable {
     private var unavailableToken: UInt64?
     private var unavailableReported = false
 
-    init(onFormat: @escaping (CGSize, UInt64) -> Void, onSample: @escaping (CMSampleBuffer, UInt64) -> Void,
+    init(onFormat: @escaping (CGSize, UInt64) -> Void, onSample: @escaping (CMSampleBuffer, UInt64, VideoOutputPermit) -> Void,
          onFailure: @escaping (String, UInt64) -> Void, onNeedsKeyframe: @escaping (UInt64) -> Void = { _ in },
          onReset: @escaping (UInt64) -> Void = { _ in }) {
         self.onFormat = onFormat; self.onSample = onSample; self.onFailure = onFailure
@@ -136,8 +136,8 @@ final class HardwareDecoderRouter: @unchecked Sendable {
     }
 
     private func sample(_ image: CMSampleBuffer, token: UInt64, identity id: UUID) {
-        lock.lock(); let current = identity == id && decoder?.canOutput(token) == true; lock.unlock()
-        if current { onSample(image, token) }
+        lock.lock(); let permit = identity == id ? decoder?.admissionPermit(for: token) : nil; lock.unlock()
+        if let permit { onSample(image, token, permit) }
     }
 
     private func request(_ token: UInt64, identity id: UUID) {

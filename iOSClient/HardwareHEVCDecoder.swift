@@ -28,6 +28,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     private var generation: UInt64 = 0
     // Once retired, this instance cannot admit work even if an old network callback kept it.
     private var retired = false
+    private var outputPermit: VideoOutputPermit? = VideoOutputPermit() // guarded by lock
     // A queued parameter-set operation belongs to the connection/resolution that admitted it.
     // It must not mint a new generation after clear() has already fenced that connection out.
     private var inputEpoch: UInt64 = 0
@@ -98,6 +99,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
 
     deinit {
         watchdog?.cancel()
+        outputPermit?.invalidate()
         if let session { DispatchQueue.global(qos: .utility).async { VTDecompressionSessionInvalidate(session) } }
     }
 
@@ -109,9 +111,21 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }; return generation == value && !failed && !retired
     }
 
+    func admissionPermit(for value: UInt64) -> VideoOutputPermit? {
+        lock.lock(); defer { lock.unlock() }
+        return generation == value && !failed && !retired ? outputPermit : nil
+    }
+
+    /// Under lock. The permit's short admission critical section never calls back into us.
+    private func replaceOutputPermitLocked(allow: Bool) {
+        outputPermit?.invalidate()
+        outputPermit = allow ? VideoOutputPermit() : nil
+    }
+
     private func advance(ifInputEpoch epoch: UInt64) -> UInt64? {
         lock.lock(); defer { lock.unlock() }
         guard inputEpoch == epoch, !failed, !retired else { return nil }
+        replaceOutputPermitLocked(allow: true)
         generation &+= 1; inFlight = 0; inFlightBytes = 0; latestOutputSequence = 0; lastRecoveryRequest = -.infinity
         callbackProgressAt = nil
         cancelRecoveryTimerLocked()
@@ -123,6 +137,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         lock.lock()
         guard !retired else { let token = generation; lock.unlock(); return token }
         guard required != value else { let token = generation; lock.unlock(); return token }
+        replaceOutputPermitLocked(allow: true)
         required = value; inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
         callbackProgressAt = nil; failed = false
         latestOutputSequence = 0; lastRecoveryRequest = -.infinity; cancelRecoveryTimerLocked()
@@ -136,6 +151,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     func clear() -> UInt64 {
         lock.lock()
         guard !retired else { let token = generation; lock.unlock(); return token }
+        replaceOutputPermitLocked(allow: true)
         inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
         callbackProgressAt = nil; failed = false
         latestOutputSequence = 0; lastRecoveryRequest = -.infinity; cancelRecoveryTimerLocked()
@@ -150,6 +166,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     func fenceFailed() -> UInt64? {
         lock.lock(); defer { lock.unlock() }
         guard failed, !retired else { return nil }
+        replaceOutputPermitLocked(allow: false)
         inputEpoch &+= 1; generation &+= 1; inFlight = 0; inFlightBytes = 0; backlog.reset()
         callbackProgressAt = nil; latestOutputSequence = 0; lastRecoveryRequest = -.infinity
         cancelRecoveryTimerLocked(); cancelQueueCheckpointLocked()
@@ -192,6 +209,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     func retire(onDrained: @escaping () -> Void) -> UInt64 {
         lock.lock()
         guard !retired else { let token = generation; lock.unlock(); return token }
+        replaceOutputPermitLocked(allow: false)
         retired = true; failed = true; inputEpoch &+= 1; generation &+= 1
         inFlight = 0; inFlightBytes = 0; callbackProgressAt = nil; backlog.reset()
         latestOutputSequence = 0; cancelRecoveryTimerLocked(); cancelQueueCheckpointLocked()
@@ -218,6 +236,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     /// inputs and decoded pictures immediately; clear/require starts a fresh generation.
     private func claimFailureLocked(_ token: UInt64) -> (pending: Int, active: Int)? {
         guard generation == token, !failed, !retired else { return nil }
+        replaceOutputPermitLocked(allow: false)
         failed = true; inputEpoch &+= 1; backlog.reset(); cancelRecoveryTimerLocked(); cancelQueueCheckpointLocked()
         return (backlog.frames, inFlight)
     }

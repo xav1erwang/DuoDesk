@@ -1,6 +1,7 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 import AVFoundation
 import CoreMedia
+import StreamProtocol
 
 /// The receiver belongs to one actor. Enqueue waits for its internal capacity; the small stream
 /// keeps only recent images while it waits. Reset can reenter that actor to flush a suspended
@@ -33,6 +34,7 @@ final class HardwareVideoPresenter: @unchecked Sendable {
         let image: CMSampleBuffer
         let generation: UInt64
         let revision: UInt64
+        let permit: VideoOutputPermit?
     }
     private let events: AsyncStream<Event>.Continuation
     private let worker: Task<Void, Never>
@@ -80,10 +82,11 @@ final class HardwareVideoPresenter: @unchecked Sendable {
         func present(_ event: Event) async {
             let token = event.generation, image = event.image
             let eventRevision = event.revision
-            guard !stopped, token >= generation, fence.accepts(token, revision: eventRevision) else { return }
+            guard !stopped, event.permit?.isValid != false,
+                  token >= generation, fence.accepts(token, revision: eventRevision) else { return }
             if eventRevision > revision { await reset(token, revision: eventRevision) }
             guard !stopped, !flushing, !enqueuing, token == generation, eventRevision == revision,
-                  fence.accepts(token, revision: eventRevision) else { return }
+                  event.permit?.isValid != false, fence.accepts(token, revision: eventRevision) else { return }
             let sequence = CMSampleBufferGetPresentationTimeStamp(image).value
             guard sequence > lastSequence else { return }
             received += 1
@@ -107,12 +110,13 @@ final class HardwareVideoPresenter: @unchecked Sendable {
                 CGSize(width: CVPixelBufferGetWidth($0), height: CVPixelBufferGetHeight($0))
             }
             let ready = CMReadySampleBuffer<CMSampleBuffer.DynamicContent>(unsafeBuffer: copy)
+            guard event.permit?.isValid != false else { return }
             enqueuing = true
             defer { enqueuing = false }
             do {
                 let result = try await receiver.enqueue(ready)
                 guard !stopped, token == generation, eventRevision == revision,
-                      fence.accepts(token, revision: eventRevision) else { return }
+                      event.permit?.isValid != false, fence.accepts(token, revision: eventRevision) else { return }
                 switch result {
                 case .enqueued:
                     let first = !hasImage
@@ -129,7 +133,8 @@ final class HardwareVideoPresenter: @unchecked Sendable {
             } catch is CancellationError {
                 // The owning worker was stopped. No image or failure escapes a cancelled task.
             } catch {
-                if !stopped, token == generation, eventRevision == revision, fence.accepts(token, revision: eventRevision) {
+                if !stopped, token == generation, eventRevision == revision, event.permit?.isValid != false,
+                   fence.accepts(token, revision: eventRevision) {
                     onFailure("视频呈现失败，请重新连接。", token, eventRevision)
                 }
             }
@@ -201,16 +206,19 @@ final class HardwareVideoPresenter: @unchecked Sendable {
         fence.lock.lock(); let revision = fence.revision; fence.lock.unlock()
         return { [fence] in fence.isReady(generation, revision: revision) }
     }
-    func enqueue(_ image: CMSampleBuffer, generation: UInt64) {
-        fence.lock.lock()
-        guard generation >= fence.minimum else { fence.lock.unlock(); return }
-        let result = events.yield(Event(image: image, generation: generation, revision: fence.revision))
-        let now = ProcessInfo.processInfo.systemUptime
-        let reportDrop: Bool
-        if case .dropped = result, now - fence.lastDropLog >= 1 {
-            fence.lastDropLog = now; reportDrop = true
-        } else { reportDrop = false }
-        fence.lock.unlock()
+    func enqueue(_ image: CMSampleBuffer, generation: UInt64, permit: VideoOutputPermit? = nil) {
+        var reportDrop = false
+        let admit = { [self] in
+            fence.lock.lock()
+            guard generation >= fence.minimum else { fence.lock.unlock(); return }
+            let result = events.yield(Event(image: image, generation: generation, revision: fence.revision, permit: permit))
+            let now = ProcessInfo.processInfo.systemUptime
+            if case .dropped = result, now - fence.lastDropLog >= 1 {
+                fence.lastDropLog = now; reportDrop = true
+            }
+            fence.lock.unlock()
+        }
+        if let permit { permit.admit(admit) } else { admit() }
         if reportDrop {
             print("Video presentation queue full: discarded an obsolete decoded image")
         }

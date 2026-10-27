@@ -1,4 +1,27 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
+import Foundation
+
+/// A decoded image may be delayed between its decoder's last check and presentation admission.
+/// Invalidation and the short admission operation share one lock, so an old image cannot enter
+/// the presentation queue after its generation has been invalidated. Never wait or call back
+/// into the decoder inside the admission closure.
+public final class VideoOutputPermit: @unchecked Sendable {
+    private let lock = NSLock()
+    private var valid = true
+    public init() { }
+
+    public var isValid: Bool { lock.withLock { valid } }
+
+    public func invalidate() { lock.withLock { valid = false } }
+
+    @discardableResult
+    public func admit(_ body: () -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard valid else { return false }
+        body()
+        return true
+    }
+}
 
 /// Bounded compressed HEVC admission. Delta frames after a discarded frame must wait for a
 /// keyframe. The owner serializes admission, generation checks, resets and completions.

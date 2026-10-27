@@ -47,9 +47,10 @@ final class HEVCDisplayView: UIView {
         let presenter = videoPresenter
         return HardwareDecoderRouter(onFormat: { _, token in
             presenter.reset(token)
-        }, onSample: { sample, token in
-            presenter.enqueue(sample, generation: token)
+        }, onSample: { sample, token, permit in
+            presenter.enqueue(sample, generation: token, permit: permit)
         }, onFailure: { [weak self] message, token in
+            presenter.refreshSurface(token)
             Task { @MainActor [weak self] in
                 guard let self, self.hardwareDecoder.isCurrent(token) else { return }
                 self.onDecoderFailure?(message)
