@@ -73,6 +73,10 @@ enum Behavior {
     case blockCall
     /// The encode call blocks this long, then refuses the frame: an error status, no output.
     case refuse(after: Double)
+    /// Refusal and an additional callback, in either order, for callback-deduplication checks.
+    case refuseWithCallback(delay: Double, beforeReturn: Bool, success: Bool)
+    /// Accepted, then a failed output callback after the specified delay.
+    case errorAfter(Double)
 }
 
 struct Call {
@@ -162,6 +166,24 @@ final class VTCompressionSession {
             call.refused = true
             FakeVT.lock.run { FakeVT.calls.append(call) }
             return -12902
+        case .refuseWithCallback(let delay, let beforeReturn, let success):
+            call.refused = true
+            FakeVT.lock.run { FakeVT.calls.append(call) }
+            let session = index
+            let notify = {
+                if success { handler(noErr, [], Self.sample(session: session, call: n, pts: pts, key: forced)) }
+                else { handler(-12902, [], nil) }
+            }
+            if beforeReturn { notify() } else { callbacks.asyncAfter(deadline: .now() + delay, execute: notify) }
+            return -12902
+        case .errorAfter(let delay):
+            FakeVT.lock.run { FakeVT.calls.append(call) }
+            lock.run { held[n] = pb }
+            callbacks.asyncAfter(deadline: .now() + delay) { [self] in
+                lock.run { _ = held.removeValue(forKey: n) }
+                handler(-12902, [], nil)
+            }
+            return noErr
         case .blockCall:
             FakeVT.lock.run { FakeVT.calls.append(call) }
             withExtendedLifetime(pb) { never.wait() }   // never returns: this thread holds the frame for good
@@ -259,6 +281,12 @@ func VTCompressionSessionCreate(allocator: CFAllocator?, width: Int32, height: I
     return noErr
 }
 @discardableResult func VTSessionSetProperty(_ session: VTCompressionSession, key: CFString, value: CFTypeRef?) -> OSStatus { noErr }
+@discardableResult
+func VTSessionCopyProperty(_ session: VTCompressionSession, key: CFString, allocator: CFAllocator?,
+                           valueOut: UnsafeMutablePointer<Unmanaged<CFTypeRef>?>) -> OSStatus {
+    valueOut.pointee = Unmanaged.passRetained(kCFBooleanTrue as CFTypeRef)
+    return noErr
+}
 @discardableResult func VTCompressionSessionPrepareToEncodeFrames(_ session: VTCompressionSession) -> OSStatus { noErr }
 func VTCompressionSessionEncodeFrame(_ session: VTCompressionSession, imageBuffer: CVImageBuffer, presentationTimeStamp: CMTime,
                                      duration: CMTime, frameProperties: CFDictionary?,
@@ -283,6 +311,9 @@ let kVTCompressionPropertyKey_DataRateLimits = "DataRateLimits" as CFString
 let kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality = "PrioritizeEncodingSpeedOverQuality" as CFString
 let kVTEncodeFrameOptionKey_ForceKeyFrame = "ForceKeyFrame" as CFString
 let kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder = "EnableHardwareAcceleratedVideoEncoder" as CFString
+let kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder = "RequireHardwareAcceleratedVideoEncoder" as CFString
+let kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder = "UsingHardwareAcceleratedVideoEncoder" as CFString
+let kVTVideoEncoderNotAvailableNowErr: OSStatus = -12915
 
 // MARK: - StreamProtocol's and SillHostCore's names
 

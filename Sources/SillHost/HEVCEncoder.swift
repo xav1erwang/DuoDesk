@@ -267,8 +267,14 @@ final class HEVCEncoder {
     /// until the next repaint, and `lastFrame` fall back to it).
     func requestKeyframe() {
         lock.lock()
+        let request = prepareKeyframeRequestLocked(now: CACurrentMediaTime())
+        lock.unlock()
+        finishKeyframeRequest(request)
+    }
+
+    /// Under `lock`: mark the request before a waiting frame can be handed to VideoToolbox.
+    private func prepareKeyframeRequestLocked(now: CFTimeInterval) -> (Admission?, CFTimeInterval?) {
         mailbox.keyframeRequested = true
-        let now = CACurrentMediaTime()
         var admission: Admission?
         var lookAgainIn: CFTimeInterval?
         if now - lastFrameAt >= Self.stillAfter {
@@ -276,7 +282,11 @@ final class HEVCEncoder {
         } else {
             lookAgainIn = lastFrameAt + Self.stillAfter + 0.01 - now
         }
-        lock.unlock()
+        return (admission, lookAgainIn)
+    }
+
+    private func finishKeyframeRequest(_ request: (Admission?, CFTimeInterval?)) {
+        let (admission, lookAgainIn) = request
         if let admission { count(admission) }
         // The watchdog's queue: never blocked by VideoToolbox, and this takes the lock only briefly.
         if let lookAgainIn { watchdogQueue.asyncAfter(deadline: .now() + lookAgainIn) { [weak self] in self?.keyframeCheck() } }
@@ -395,13 +405,13 @@ final class HEVCEncoder {
             // A session the watchdog gave up on may still cough up late output. Its clients have
             // moved on to a new session (new size, new parameter sets): never forward it.
             let bytes = status == noErr ? sampleBuffer.map { CMSampleBufferGetTotalSampleSize($0) } : nil
-            guard self.frameReturned(id, bytes: bytes) else { return }
+            let failed = status != noErr || sampleBuffer == nil
+            guard self.frameReturned(id, bytes: bytes, retryForced: forced && failed) else { return }
             guard status == noErr, let sampleBuffer else {
                 self.bump("enc.error")
                 // VideoToolbox dropped the frame (real-time mode over its data-rate cap). A forced
                 // keyframe must not go with it: on a static window nothing would ask again and a
                 // client waiting for a keyframe would wait for good.
-                if forced { self.retryKeyframe() }
                 return
             }
             self.bump("enc.out")
@@ -411,26 +421,16 @@ final class HEVCEncoder {
             // Refused outright; the handler may never run. Free the slot ourselves, or the watchdog
             // would call a transient error a hang and drop the stream to the software encoder.
             bump("enc.refused")
-            if forced { retryKeyframe() }
-            frameReturned(id, bytes: nil)
+            frameReturned(id, bytes: nil, retryForced: forced)
         }
     }
 
-    /// The forced keyframe was dropped: ask again, a bounded number of times per request.
-    private func retryKeyframe() {
-        lock.lock()
-        let again = forcedRetries < 3
-        if again { forcedRetries += 1 }
-        lock.unlock()
-        if again { requestKeyframe() }
-    }
-
     /// VT callback thread (or `submit` on a refusal): the frame's place is free; the waiting frame,
-    /// if there is one, takes it. Returns false when the session is dead, so late output is not
-    /// forwarded. A duplicate notice for a frame already back (an error status *and* a handler
-    /// call) frees nothing. `bytes`: it came back encoded, this long (nil: refused or dropped).
+    /// if there is one, takes it. A dead session or duplicate notice neither forwards output nor
+    /// retries a keyframe. A genuine failed forced frame requests at most one retry under the same
+    /// lock as its return, before a waiting frame may consume that request.
     @discardableResult
-    private func frameReturned(_ id: Int, bytes: Int?) -> Bool {
+    private func frameReturned(_ id: Int, bytes: Int?, retryForced: Bool = false) -> Bool {
         lock.lock()
         let now = CACurrentMediaTime()
         // The slow state is judged on frames that came back encoded, timed from their hand-over.
@@ -441,15 +441,23 @@ final class HEVCEncoder {
             event = slowState?.returned(turnaround: now - inside.since, bytes: bytes, at: now)
         }
         let outcome = mailbox.returned(id, now: now)
+        let accepted: Bool
+        switch outcome {
+        case .late, .duplicate: accepted = false
+        case .freed, .next: accepted = true
+        }
+        var retry: (Admission?, CFTimeInterval?)?
+        if accepted && retryForced && forcedRetries < 3 {
+            forcedRetries += 1
+            retry = prepareKeyframeRequestLocked(now: now)
+        }
         // Queued before the lock is released, like every frame let in (`admitLocked`).
         if case .next(let (pb, pts), let next) = outcome { encodeQueue.async { [weak self] in self?.submit(pb, pts: pts, id: next) } }
         lock.unlock()
+        if let retry { finishKeyframeRequest(retry) }
         if let latency { onEncodeLatency?(latency) }
         if let event { slowStateSays(event) }
-        switch outcome {
-        case .late: return false
-        case .duplicate, .freed, .next: return true
-        }
+        return accepted
     }
 
     /// watchdogQueue, every 0.5 s. `encodeQueue` may be blocked inside VideoToolbox for good at this

@@ -1,6 +1,7 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 // A normal AppKit document window with no generated frame markers.
 import AppKit
+import Darwin
 import QuartzCore
 
 @MainActor
@@ -16,6 +17,7 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
     private let requestedFrameSize: NSSize?
     private let usesStdin: Bool
     var onReady: (@MainActor () -> Void)?
+    var onScrollSample: (@MainActor (UInt64) -> Void)?
 
     init(frameSize: NSSize? = nil, usesStdin: Bool = true) {
         requestedFrameSize = frameSize; self.usesStdin = usesStdin
@@ -141,6 +143,11 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
         print("NATIVE DOCUMENT SCROLLING: clock=\(clockKind), screenFPS=\(screen.maximumFramesPerSecond), 1.5 points per display callback")
     }
 
+    func stopScrolling() {
+        clock?.invalidate(); clock = nil
+        timer?.cancel(); timer = nil
+    }
+
     @objc private func tick(_ link: CADisplayLink) {
         advanceFrame(intervalMs: (link.targetTimestamp - link.timestamp) * 1000)
     }
@@ -152,6 +159,7 @@ final class DocumentWorkload: NSObject, NSApplicationDelegate {
         let y = min(maximum, scroll.contentView.bounds.origin.y + 1.5)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
         scroll.reflectScrolledClipView(scroll.contentView)
+        onScrollSample?(mach_absolute_time())
         if ticks % 120 == 0 {
             let screen = window?.screen
             let number = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? 0

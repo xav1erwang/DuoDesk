@@ -4,6 +4,7 @@
 import AppKit
 import CoreMedia
 import CoreVideo
+import Darwin
 import ScreenCaptureKit
 import StreamProtocol
 
@@ -21,12 +22,12 @@ final class Frames: @unchecked Sendable {
     private var count = 0, wrongSize = 0
     private var failure: String?
     #if DUO_CAPTURE_DIAGNOSTICS
-    private var pendingObservation: WindowCapture.SampleObservation?
-    private var observations: [(time: Double, info: WindowCapture.SampleObservation)] = []
+    private var pendingObservation: (info: WindowCapture.SampleObservation, arrival: UInt64)?
+    private var observations: [(time: Double, info: WindowCapture.SampleObservation, arrival: UInt64)] = []
     private var printedDirtyType = false
     func observe(_ info: WindowCapture.SampleObservation) {
         lock.withLock {
-            pendingObservation = info
+            pendingObservation = (info, mach_absolute_time())
             if !printedDirtyType, let type = info.dirtyElementType {
                 printedDirtyType = true
                 print("SCK DIRTY RECT ELEMENT TYPE: \(type), center=\(String(describing: info.dirtyCenter))")
@@ -52,7 +53,7 @@ final class Frames: @unchecked Sendable {
                 wrongSize += 1; return false
             }
             #if DUO_CAPTURE_DIAGNOSTICS
-            if let info { observations.append((time, info)) }
+            if let info { observations.append((time, info.info, info.arrival)) }
             #endif
             count += 1; return true
         }
@@ -102,6 +103,57 @@ final class Frames: @unchecked Sendable {
         }
         return "SCK METADATA CORRELATION: lumaDeltaBelowThree={\(unchanged.description)}; lumaDeltaPresent={\(changed.description)}; unmatched=\(unmatched)"
     }
+
+    /// Compare completed scroll calls with WindowServer display timestamps; this does not
+    /// establish which scroll produced a particular image or identify a single bottleneck.
+    func scrollTimingReport(_ scrollTimes: [UInt64]) -> String {
+        struct Tally {
+            var zero = 0, one = 0, multiple = 0
+            mutating func add(_ count: Int) {
+                if count == 0 { zero += 1 } else if count == 1 { one += 1 } else { multiple += 1 }
+            }
+            var description: String { "zero=\(zero),one=\(one),multiple=\(multiple)" }
+        }
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.numer != 0, timebase.denom != 0 else {
+            return "SCROLL TIMING: mach timebase unavailable"
+        }
+        let ticksPerNanosecond = Double(timebase.denom) / Double(timebase.numer)
+        let offsets = [0.0, 8_333_333.0, 16_666_667.0].map { UInt64(($0 * ticksPerNanosecond).rounded()) }
+        let sorted = scrollTimes.sorted()
+        func upperBound(_ value: UInt64) -> Int {
+            var lower = 0, upper = sorted.count
+            while lower < upper {
+                let middle = (lower + upper) / 2
+                if sorted[middle] <= value { lower = middle + 1 } else { upper = middle }
+            }
+            return lower
+        }
+        let snapshot = lock.withLock { (start, end, observations) }
+        let index = Dictionary(uniqueKeysWithValues: snapshot.2.enumerated().map { ($0.element.time, $0.offset) })
+        var unchanged = [Tally](repeating: Tally(), count: offsets.count)
+        var changed = [Tally](repeating: Tally(), count: offsets.count)
+        var missing = 0, arrivalBeforeDisplay = 0
+        var callbackLagMS: [Double] = []
+        for item in audit.comparisonSnapshot() where item.time >= snapshot.0 + 2 && item.time < snapshot.1 {
+            guard let position = index[item.time], position > 0,
+                  let current = snapshot.2[position].info.displayTime,
+                  let previous = snapshot.2[position - 1].info.displayTime,
+                  current > previous, previous >= (offsets.last ?? 0) else { missing += 1; continue }
+            let arrival = snapshot.2[position].arrival
+            if arrival >= current {
+                callbackLagMS.append(Double(arrival - current) / ticksPerNanosecond / 1_000_000)
+            } else { arrivalBeforeDisplay += 1 }
+            for (i, offset) in offsets.enumerated() {
+                let count = upperBound(current - offset) - upperBound(previous - offset)
+                if item.full == 0 { unchanged[i].add(count) } else { changed[i].add(count) }
+            }
+        }
+        let lags = callbackLagMS.sorted()
+        let p50 = lags.isEmpty ? 0 : lags[lags.count / 2]
+        let p95 = lags.isEmpty ? 0 : lags[(lags.count * 95 + 99) / 100 - 1]
+        return "SCROLL TIMING: sourceCalls=\(sorted.count), offsetsMs=[0,8.333,16.667], lumaBelowThree=\(unchanged.map(\.description)), lumaPresent=\(changed.map(\.description)), missing=\(missing), arrivalBeforeDisplay=\(arrivalBeforeDisplay), displayToCallbackMsP50=\(p50), p95=\(p95); interval counts only, not frame attribution"
+    }
     #endif
 }
 
@@ -134,15 +186,26 @@ func run() async {
     var encoder: HEVCEncoder?
     var decoder: HardwareHEVCDecoder?
     var loopback: LoopbackVideo?
+    var temporaryDisplay: VirtualWindowDisplay?
+    var scrollTimes: [UInt64] = []
+    if CommandLine.arguments.contains("--scroll-correlation") {
+        workload.onScrollSample = { scrollTimes.append($0) }
+    }
     var passed = false
     let initialGrant = CGPreflightScreenCaptureAccess()
-    print("OWN WINDOW START: globalRecording=\(initialGrant); completeDesktop=false; no display mode changes")
+    print("OWN WINDOW START: globalRecording=\(initialGrant); completeDesktop=false; no physical display mode writes")
     do {
         guard !initialGrant, let window = workload.window else { throw PixelMotionAudit.Failure.unavailable }
         try await Task.sleep(for: .milliseconds(400))
         if let requested = ProcessInfo.processInfo.environment["DUODESK_WORKLOAD_SCREEN_ID"].flatMap(UInt32.init) {
             let actual = (window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
             guard actual == requested else { throw PixelMotionAudit.Failure.unavailable }
+        }
+        let virtualSecondary = CommandLine.arguments.contains("--virtual-secondary")
+        if virtualSecondary {
+            let display = try VirtualWindowDisplay()
+            temporaryDisplay = display
+            try await display.prepare(window: window)
         }
         guard let content = await currentProcessContent(),
               let owned = content.windows.first(where: {
@@ -184,8 +247,9 @@ func run() async {
         capture.onStopped = { stop in captured.fail(stop.error.localizedDescription) }
         encoder = compressor; decoder = received
         let resampled = CommandLine.arguments.contains("--resampled")
+        guard !virtualSecondary || !resampled else { throw PixelMotionAudit.Failure.unavailable }
         try await capture.start(filter: filter, width: 2008, height: 1428, fps: 120, showsCursor: false,
-                                resampleCadence: resampled)
+                                nativeCadence: virtualSecondary, resampleCadence: resampled)
         try await Task.sleep(for: .seconds(2))
         let diagnostic = CommandLine.arguments.contains("--diagnose")
         if CommandLine.arguments.contains("--request-keyframe"), loopback == nil { throw LoopbackVideo.Failure.configuration }
@@ -210,6 +274,7 @@ func run() async {
             }
             try captured.check(); try decoded.check()
             try loopback?.check()
+            try temporaryDisplay?.checkOwnedWindow(window)
         }
         await capture.stop(); capture.onFrame = nil
         try await Task.sleep(for: .milliseconds(250))
@@ -219,6 +284,7 @@ func run() async {
         print(await captured.audit.report(from: capturedStart, seconds: duration))
         #if DUO_CAPTURE_DIAGNOSTICS
         print(captured.metadataReport())
+        if CommandLine.arguments.contains("--scroll-correlation") { print(captured.scrollTimingReport(scrollTimes)) }
         #endif
         print("OWN WINDOW HARDWARE DECODE: outputs=\(outputs), wrongDimensions=\(badOutputs)")
         print(await decoded.audit.report(from: decodedStart, seconds: duration))
@@ -231,13 +297,16 @@ func run() async {
         try captured.audit.validate(); try decoded.audit.validate()
         passed = !diagnostic && wrong == 0 && badOutputs == 0 && (captured.audit.changedFramesPerSecond ?? 0) >= 120
             && (decoded.audit.changedFramesPerSecond ?? 0) >= 120
-        print("OWN WINDOW RESULT: target120=\(passed); diagnosticOnly=\(diagnostic); resampled=\(resampled); loopbackQUIC=\(loopback != nil); completeDesktop=false; publicNetwork=false; realDuo=false")
+        print("OWN WINDOW RESULT: target120=\(passed); diagnosticOnly=\(diagnostic); virtualSecondary=\(virtualSecondary); resampled=\(resampled); loopbackQUIC=\(loopback != nil); completeDesktop=false; publicNetwork=false; realDuo=false")
     } catch {
         print("OWN WINDOW CHECK FAILED: \(error)")
     }
     await capture.stop(); capture.onFrame = nil
     _ = encoder?.abandon(); loopback?.close(); decoder?.clear()
+    workload.stopScrolling()
+    workload.onScrollSample = nil
     workload.window?.close()
+    if let temporaryDisplay, !(await temporaryDisplay.cleanup()) { passed = false }
     ProcessInfo.processInfo.endActivity(activity)
     print("OWN WINDOW END: globalRecording=\(CGPreflightScreenCaptureAccess()); no screen capture or permission prompt was requested for another process")
     exit(passed ? 0 : 1)

@@ -13,7 +13,8 @@ swiftc -O -D DUO_CAPTURE_DIAGNOSTICS -package-name Sill -I "$out" -L "$app/Conte
   Sources/SillHost/*.swift iOSClient/HardwareHEVCDecoder.swift \
   Tests/duodesk/capture-probe/PixelMotionAudit.swift Tests/duodesk/picker-capture-probe/FrameAudit.swift \
   Tests/duodesk/picker-capture-probe/DesktopContentAudit.swift Tests/duodesk/native-document-workload/DocumentWorkload.swift \
-  Tests/duodesk/own-window-capture/LoopbackVideo.swift Tests/duodesk/own-window-capture/main.swift -o "$app/Contents/MacOS/OwnWindowCapture"
+  Tests/duodesk/own-window-capture/LoopbackVideo.swift Tests/duodesk/own-window-capture/VirtualWindowDisplay.swift \
+  Tests/duodesk/own-window-capture/main.swift -o "$app/Contents/MacOS/OwnWindowCapture"
 python3 - "$app/Contents/Info.plist" <<'PY'
 import plistlib, sys
 from pathlib import Path

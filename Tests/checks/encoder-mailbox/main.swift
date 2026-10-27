@@ -229,8 +229,7 @@ final class StandIn {
         if refuse(f) {
             refused += 1
             settle(f, "refused")
-            if h.keyframe { retryKeyframe() }
-            _ = frameReturned(id)
+            _ = frameReturned(id, retryForced: h.keyframe)
             if duplicateAfterRefusal(f) {
                 clock.after(0.004) { [self] in handler(id, f, h, ok: false) }
             }
@@ -277,12 +276,14 @@ final class StandIn {
     // The output handler.
     private func handler(_ id: Int, _ f: Frame, _ h: Box.HandOver, ok: Bool) {
         guard !gone else { settle(f, "back after release"); return }
-        let (forward, duplicate) = frameReturned(id)
-        guard forward else { late += 1; settle(f, "late: dead"); return }
+        let (forward, duplicate) = frameReturned(id, retryForced: !ok && h.keyframe)
+        guard forward else {
+            if !duplicate { late += 1; settle(f, "late: dead") }
+            return
+        }
         guard ok else {
             errors += 1
             if !duplicate { settle(f, "error") }
-            if h.keyframe { retryKeyframe() }
             return
         }
         expect(!duplicate, "a duplicate notice came with an output")
@@ -294,14 +295,16 @@ final class StandIn {
 
     // HEVCEncoder.frameReturned. Returns (forward, duplicate).
     @discardableResult
-    private func frameReturned(_ id: Int) -> (Bool, Bool) {
+    private func frameReturned(_ id: Int, retryForced: Bool = false) -> (Bool, Bool) {
         let outcome = box.returned(id, now: clock.now)
         var result = (true, false)
         switch outcome {
         case .late: result = (false, false)
-        case .duplicate: duplicates += 1; result = (true, true)
-        case .freed: break
-        case .next(let f, let next): async(f, next)
+        case .duplicate: duplicates += 1; result = (false, true)
+        case .freed: if retryForced { retryKeyframe() }
+        case .next(let f, let next):
+            if retryForced { retryKeyframe() }
+            async(f, next)
         }
         invariants("frameReturned")
         return result
@@ -534,7 +537,7 @@ do {
     expect(s.refused == refusals && refusals >= 5, "refused \(s.refused), handed over refused \(refusals)")
     expect(s.duplicates == dupNotices && dupNotices >= 2, "duplicates \(s.duplicates), expected \(dupNotices)")
     let failed = s.handOvers.filter { s.failOutput($0.frame) }.count
-    expect(s.errors == failed + dupNotices && failed >= 5, "errors \(s.errors), expected \(failed) failed outputs and \(dupNotices) duplicate notices")
+    expect(s.errors == failed && failed >= 5, "errors \(s.errors), expected \(failed) failed outputs with \(dupNotices) duplicate notices ignored")
     expect(Set(s.outputs.map(\.frame.serial)).count == s.outputs.count, "a frame was output twice")
     let pts = s.handOvers.map(\.pts)
     expect(zip(pts, pts.dropFirst()).allSatisfy { CMTimeCompare($0, $1) < 0 }, "random turnarounds: timestamps went backwards")
