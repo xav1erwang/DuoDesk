@@ -13,7 +13,7 @@ swiftc -O -D DUO_CAPTURE_DIAGNOSTICS -D DUO_RENDER_TRACE -package-name Sill -I "
   Sources/SillHost/*.swift iOSClient/HardwareHEVCDecoder.swift \
   Tests/duodesk/capture-probe/PixelMotionAudit.swift Tests/duodesk/picker-capture-probe/FrameAudit.swift \
   Tests/duodesk/picker-capture-probe/DesktopContentAudit.swift Tests/duodesk/native-document-workload/DocumentWorkload.swift \
-  Tests/duodesk/own-window-capture/FlowStageCounts.swift Tests/duodesk/own-window-capture/PhaseSelection.swift Tests/duodesk/own-window-capture/SamplePhaseStudy.swift \
+  Tests/duodesk/own-window-capture/FlowStageCounts.swift Tests/duodesk/own-window-capture/PhaseSelection.swift Tests/duodesk/own-window-capture/MarkerContentCorrelation.swift Tests/duodesk/own-window-capture/SamplePhaseStudy.swift \
   Tests/duodesk/own-window-capture/LoopbackVideo.swift Tests/duodesk/own-window-capture/VirtualWindowDisplay.swift Tests/duodesk/own-window-capture/RenderPhaseTrace.swift Tests/duodesk/own-window-capture/RenderSequenceCorrelation.swift \
   Tests/duodesk/own-window-capture/main.swift -o "$app/Contents/MacOS/OwnWindowCapture"
 python3 - "$app/Contents/Info.plist" <<'PY'

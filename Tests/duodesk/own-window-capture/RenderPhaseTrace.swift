@@ -36,6 +36,7 @@ final class RenderPhaseMarker: NSView {
 final class RenderPhaseSampler: @unchecked Sendable {
     struct Result { let sequence: Int?; let lockWaitTicks: UInt64 }
     private let points: [(Int, Int)]
+    var pixelPoints: [(Int, Int)] { points }
 
     init(markerRect: CGRect, windowHeight: CGFloat, scale: CGFloat) {
         points = (0..<(RenderPhaseMarker.bits + 4)).map { index in

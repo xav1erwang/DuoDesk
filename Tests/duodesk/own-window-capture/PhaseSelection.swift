@@ -8,6 +8,11 @@ enum PhaseSelection {
         let pts: Double
         let arrived: Double
         let signature: [UInt8]
+        let marker: Int?
+
+        init(pts: Double, arrived: Double, signature: [UInt8], marker: Int? = nil) {
+            self.pts = pts; self.arrived = arrived; self.signature = signature; self.marker = marker
+        }
     }
     struct Output {
         let pts: Double

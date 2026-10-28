@@ -11,7 +11,9 @@ import StreamProtocol
 setbuf(stdout, nil)
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
-if CommandLine.arguments.contains("--render-correlation") { setenv("DUODESK_RENDER_TRACE", "1", 1) }
+if CommandLine.arguments.contains("--render-correlation") || CommandLine.arguments.contains("--sample-marker") {
+    setenv("DUODESK_RENDER_TRACE", "1", 1)
+}
 let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
                                                      reason: "Native document capture measurement")
 let workload = MainActor.assumeIsolated { DocumentWorkload(frameSize: NSSize(width: 1004, height: 714), usesStdin: false) }
@@ -362,8 +364,11 @@ func run() async {
     #if DUO_RENDER_TRACE
     var phaseDraws: [(Int, UInt64)] = []
     let renderCorrelation = CommandLine.arguments.contains("--render-correlation")
+    let sampleMarker = CommandLine.arguments.contains("--sample-marker")
     let compareDisplay = CommandLine.arguments.contains("--compare-display-filter")
-    if renderCorrelation { workload.onRenderPhaseDraw = { sequence, time in phaseDraws.append((sequence, time)) } }
+    if renderCorrelation || sampleMarker { workload.onRenderPhaseDraw = { sequence, time in phaseDraws.append((sequence, time)) } }
+    #else
+    let sampleMarker = false
     #endif
     if CommandLine.arguments.contains("--scroll-correlation") {
         workload.onScrollSample = { scrollTimes.append($0) }
@@ -487,7 +492,17 @@ func run() async {
         guard !phaseRequested || (diagnostic && captureOnly && resampled && !virtualSecondary) else {
             throw PixelMotionAudit.Failure.unavailable
         }
-        let phaseStudy = phaseRequested ? try SamplePhaseStudy() : nil
+        guard !sampleMarker || phaseRequested else { throw PixelMotionAudit.Failure.unavailable }
+        var markerPoints: [(Int, Int)]?
+        #if DUO_RENDER_TRACE
+        if sampleMarker {
+            guard let rect = workload.renderMarkerRectInWindow else { throw PixelMotionAudit.Failure.unavailable }
+            markerPoints = RenderPhaseSampler(markerRect: rect, windowHeight: window.frame.height,
+                                               scale: CGFloat(filter.pointPixelScale)).pixelPoints
+            print("GPU SAMPLE MARKER: owned window only, marker outside document center, rect=\(rect), scale=\(filter.pointPixelScale)")
+        }
+        #endif
+        let phaseStudy = phaseRequested ? try SamplePhaseStudy(markerPoints: markerPoints) : nil
         #if DUO_CAPTURE_DIAGNOSTICS
         if let phaseStudy {
             capture.onUnpacedSample = { image, pts, arrival in phaseStudy.inspect(image, pts: pts, arrived: arrival) }
@@ -544,6 +559,18 @@ func run() async {
         print("OWN WINDOW CAPTURE: samples=\(samples), wrongDimensions=\(wrong)")
         print(await captured.audit.report(from: capturedStart, seconds: duration))
         if let phaseStudy { print(await phaseStudy.report(fullPixelFPS: captured.audit.changedFramesPerSecond)) }
+        #if DUO_RENDER_TRACE
+        if sampleMarker, let phaseStudy {
+            print(phaseStudy.markerReport(draws: phaseDraws))
+            if let path = ProcessInfo.processInfo.environment["DUODESK_SAMPLE_TIMELINE_PATH"] {
+                guard ProcessInfo.processInfo.environment["DUODESK_WORKLOAD_OWN_TEXT"] == "1", path.hasPrefix("/") else {
+                    throw PixelMotionAudit.Failure.unavailable
+                }
+                try phaseStudy.writeTimeline(to: URL(fileURLWithPath: path), draws: phaseDraws)
+                print("MARKER TIMELINE: numeric timing, synthetic marker IDs and center hashes only; \(path)")
+            }
+        }
+        #endif
         if profileAuditLock { print(captured.audit.lockWaitReport()) }
         #if DUO_CAPTURE_DIAGNOSTICS
         print(captured.metadataReport())
