@@ -1,7 +1,9 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 // Test-only comparison of actual luma pixels. No pixels are written to disk.
+import CoreMedia
 import CoreVideo
 import Darwin
+import IOSurface
 import Metal
 
 /// Compares every luma pixel with the preceding frame on the GPU. The center region is inside the
@@ -11,7 +13,15 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
     private final class Surface: @unchecked Sendable {
         let image: CVPixelBuffer
         let texture: CVMetalTexture
-        init(image: CVPixelBuffer, texture: CVMetalTexture) { self.image = image; self.texture = texture }
+        // Some producers lend the image's storage through the CMSampleBuffer. Retain the
+        // sample, too, until every GPU operation using this surface has completed.
+        let sample: CMSampleBuffer?
+        let released: (@Sendable () -> Void)?
+        init(image: CVPixelBuffer, texture: CVMetalTexture, sample: CMSampleBuffer?,
+             released: (@Sendable () -> Void)?) {
+            self.image = image; self.texture = texture; self.sample = sample; self.released = released
+        }
+        deinit { released?() }
     }
     private final class Submission: @unchecked Sendable {
         let current: Surface
@@ -41,6 +51,8 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
     private let pending = DispatchGroup()
     private let lock = NSLock()
     private var inFlight = 0, sequence = 0, next = 1, failed = 0, dropped = 0
+    private var heldSurfaceIDs: Set<UInt32> = []
+    private var reusedHeldSurfaces = 0
     private var ready: [Int: ReducedResult] = [:]
     private var lockWaitTicks: [UInt64] = []
     private var comparisons: [(Double, Double, Double, Int)] = []
@@ -89,6 +101,19 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
     }
 
     func inspect(_ image: CVPixelBuffer, at time: Double, onResult: (@Sendable (Int32, Double) -> Void)?) {
+        inspect(image, retaining: nil, at: time)
+    }
+
+    /// Strict diagnostic path: retain the producer's sample and reject a surface that is
+    /// still held by the previous sample or an unfinished GPU comparison.
+    func inspect(_ sample: CMSampleBuffer, at time: Double) {
+        guard let image = CMSampleBufferGetImageBuffer(sample) else {
+            lock.withLock { failed += 1 }; return
+        }
+        inspect(image, retaining: sample, at: time)
+    }
+
+    private func inspect(_ image: CVPixelBuffer, retaining sample: CMSampleBuffer?, at time: Double) {
         let beforeLock = profileLockWait ? mach_absolute_time() : 0
         let number: Int? = lock.withLock {
             if profileLockWait { lockWaitTicks.append(mach_absolute_time() - beforeLock) }
@@ -97,10 +122,10 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
         }
         guard let number else { return }
         pending.enter()
-        submissionQueue.async { [self, image] in submit(image, number: number, time: time) }
+        submissionQueue.async { [self, image, sample] in submit(image, retaining: sample, number: number, time: time) }
     }
 
-    private func submit(_ image: CVPixelBuffer, number: Int, time: Double) {
+    private func submit(_ image: CVPixelBuffer, retaining sample: CMSampleBuffer?, number: Int, time: Double) {
         let width = CVPixelBufferGetWidth(image), height = CVPixelBufferGetHeight(image)
         let columns = (width + 15) / 16, rows = (height + 15) / 16
         do {
@@ -111,7 +136,23 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
             guard status == kCVReturnSuccess, let surface, let texture = CVMetalTextureGetTexture(surface) else {
                 throw PixelMotionAudit.Failure.texture
             }
-            let current = Surface(image: image, texture: surface)
+            var release: (@Sendable () -> Void)?
+            if sample != nil {
+                guard let ioSurface = CVPixelBufferGetIOSurface(image)?.takeUnretainedValue() else {
+                    throw PixelMotionAudit.Failure.texture
+                }
+                let id = IOSurfaceGetID(ioSurface)
+                let inserted = lock.withLock { () -> Bool in
+                    guard heldSurfaceIDs.insert(id).inserted else { reusedHeldSurfaces += 1; return false }
+                    return true
+                }
+                guard inserted else { throw PixelMotionAudit.Failure.invalidFrames }
+                release = { [weak self] in
+                    guard let self else { return }
+                    self.lock.withLock { _ = self.heldSurfaceIDs.remove(id) }
+                }
+            }
+            let current = Surface(image: image, texture: surface, sample: sample, released: release)
             let prior = previous ?? current
             guard CVPixelBufferGetWidth(prior.image) == width, CVPixelBufferGetHeight(prior.image) == height,
                   let previousTexture = CVMetalTextureGetTexture(prior.texture),
@@ -244,6 +285,12 @@ final class DesktopContentAudit: FrameAudit, @unchecked Sendable {
 
     func validate() throws {
         guard lock.withLock({ validationPassed }) else { throw PixelMotionAudit.Failure.invalidFrames }
+    }
+
+    /// Read only after `report` has drained the GPU work. This lets a continuous-motion restart
+    /// fixture check audit integrity without claiming that its first second was stationary.
+    func diagnosticHealth() -> (submitted: Int, failed: Int, dropped: Int, waiting: Int, reused: Int) {
+        lock.withLock { (sequence, failed, dropped, ready.count + inFlight, reusedHeldSurfaces) }
     }
 
     /// Aggregate-only diagnostic data: timestamps and differences, never image pixels.

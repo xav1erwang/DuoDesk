@@ -1,5 +1,6 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 // Checks the GPU audit itself with in-memory buffers; this is not a desktop FPS test.
+import CoreMedia
 import CoreVideo
 import Foundation
 
@@ -30,6 +31,21 @@ func image(_ index: Int) throws -> CVPixelBuffer {
         }
     }
     return buffer
+}
+
+func sample(_ index: Int) throws -> CMSampleBuffer {
+    let buffer = try image(index)
+    var format: CMVideoFormatDescription?
+    guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: buffer,
+                                                       formatDescriptionOut: &format) == noErr, let format else {
+        throw PixelMotionAudit.Failure.texture
+    }
+    var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
+    var result: CMSampleBuffer?
+    guard CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: buffer, formatDescription: format,
+                                                   sampleTiming: &timing, sampleBufferOut: &result) == noErr,
+          let result else { throw PixelMotionAudit.Failure.texture }
+    return result
 }
 
 @main
@@ -85,5 +101,17 @@ struct Harness {
               reordered.comparisonSnapshot().map(\.time) == Array(times.dropFirst()),
               reordered.changedFramesPerSecond == 0.75 else { throw PixelMotionAudit.Failure.invalidFrames }
         print("DESKTOP AUDIT UNIT CHECK PASS: reordered completion \(order) preserves capture order")
+
+        // Passing the same IOSurface twice while its preceding sample is still held must not
+        // produce a comparison that could be mistaken for an independently delivered frame.
+        let strict = try DesktopContentAudit()
+        let duplicate = try sample(2)
+        strict.inspect(duplicate, at: 0.1)
+        strict.inspect(duplicate, at: 0.2)
+        _ = await strict.report(from: 0, seconds: 2)
+        let health = strict.diagnosticHealth()
+        guard health.submitted == 2, health.failed == 1, health.reused == 1, health.dropped == 0,
+              health.waiting == 0, strict.comparisonSnapshot().isEmpty else { throw PixelMotionAudit.Failure.invalidFrames }
+        print("DESKTOP AUDIT UNIT CHECK PASS: a still-held IOSurface is rejected, not counted")
     }
 }

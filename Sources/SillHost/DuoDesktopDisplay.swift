@@ -821,23 +821,35 @@ final class DuoDesktopDisplay {
 
     #if DUO_DISPLAY_RESTORE_TESTING
     /// Uses the current main mode as a read-only stand-in for a virtual desktop. No display is
-    /// created, configured, captured or mirrored. Any attempted configuration is intercepted.
+    /// created, configured or mirrored. The caller may capture only its own separate window.
+    static func readOnlySamplingFixtureForTesting() throws -> DuoDesktopDisplay {
+        let desktop = DuoDesktopDisplay()
+        let original = try desktop.snapshot()
+        let id = CGMainDisplayID()
+        guard let main = original.first(where: { $0.id == id }),
+              let ceiling = samplingCeiling(refreshHz: main.mode.refreshRate), ceiling >= 120, ceiling < 240 else {
+            throw Failure.displayUnavailable
+        }
+        let native = DuoDesktopResolution(width: main.mode.pixelWidth, height: main.mode.pixelHeight)
+        guard native.isValid, native.accepts(width: main.mode.pixelWidth, height: main.mode.pixelHeight) else {
+            throw Failure.invalidResolution
+        }
+        desktop.originals = original
+        desktop.originalMainID = id; desktop.originalSystemMainID = id; desktop.capturedID = id
+        desktop.resolution = native; desktop.requestedFPS = 120
+        desktop.virtualDesktopClockFPS = ceiling
+        desktop.testVirtualSampling = true
+        desktop.testPreventDisplayMutation = true; desktop.testInterceptConfiguration = true
+        desktop.testSnapshotReads = 0
+        return desktop
+    }
+
+    /// Exercises the production sampling transition with configuration writes intercepted.
     static func inspectSamplingSwitchForTesting() async -> [Bool]? {
         do {
-            let desktop = DuoDesktopDisplay()
-            let original = try desktop.snapshot()
-            let id = CGMainDisplayID()
-            guard let main = original.first(where: { $0.id == id }),
-                  let ceiling = samplingCeiling(refreshHz: main.mode.refreshRate), ceiling >= 120, ceiling < 240 else { return nil }
-            let native = DuoDesktopResolution(width: main.mode.pixelWidth, height: main.mode.pixelHeight)
-            guard native.isValid, native.accepts(width: main.mode.pixelWidth, height: main.mode.pixelHeight) else { return nil }
-            desktop.originals = original
-            desktop.originalMainID = id; desktop.originalSystemMainID = id; desktop.capturedID = id
-            desktop.resolution = native; desktop.requestedFPS = 120
-            desktop.virtualDesktopClockFPS = ceiling
-            desktop.testVirtualSampling = true
-            desktop.testPreventDisplayMutation = true; desktop.testInterceptConfiguration = true
-            desktop.testSnapshotReads = 0
+            let desktop = try readOnlySamplingFixtureForTesting()
+            guard let native = desktop.resolution, let ceiling = desktop.currentSamplingCeiling else { return nil }
+            let id = desktop.capturedID
             let virtualReady = desktop.activeModeMatches && desktop.currentSamplingCeiling == ceiling
             let down = try await desktop.prepareGraphics(native, fps: 60)
             let downOnlySampled = down == id && desktop.requestedFPS == 60 && desktop.virtualDesktopClockFPS == ceiling
