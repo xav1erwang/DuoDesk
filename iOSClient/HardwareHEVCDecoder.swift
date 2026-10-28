@@ -10,12 +10,12 @@ import StreamProtocol
 /// dimensions to match exactly before VideoToolbox creates a session; neither accepts downscaling.
 enum HardwareVideoRequirement: Equatable {
     case desktop(DuoDesktopResolution)
-    case touchBar(width: Int, height: Int)
+    case touchBar(id: UUID, width: Int, height: Int)
 
     func accepts(width: Int, height: Int) -> Bool {
         switch self {
         case .desktop(let size): return size.accepts(width: width, height: height)
-        case .touchBar(let w, let h):
+        case .touchBar(_, let w, let h):
             return (1...8192).contains(w) && (1...2048).contains(h)
                 && w.isMultiple(of: 2) && h.isMultiple(of: 2) && w >= h
                 && w * h <= 4_194_304 && width == w && height == h

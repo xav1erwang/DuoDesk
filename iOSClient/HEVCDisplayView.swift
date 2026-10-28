@@ -69,6 +69,16 @@ final class HEVCDisplayView: UIView {
         videoPresenter.reset(token)
     }
 
+    /// A dedicated view for a Touch Bar uses the same hardware-only decoder and presentation
+    /// fences as the desktop, with the separately validated narrow surface dimensions.
+    func requireTouchBarSurface(_ surface: TouchBarSurface?) {
+        let requirement: HardwareVideoRequirement? = surface.flatMap {
+            $0.isValid ? .touchBar(id: $0.id, width: $0.encodedWidth, height: $0.encodedHeight) : nil
+        }
+        let token = hardwareDecoder.requireVideo(requirement)
+        videoPresenter.reset(token)
+    }
+
     private func reportNativeDisplaySize() {
         guard let window, let screen = window.windowScene?.screen else { return }
         let windowPixels = [window.bounds.width * screen.nativeScale, window.bounds.height * screen.nativeScale].sorted()

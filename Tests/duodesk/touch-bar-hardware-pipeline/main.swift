@@ -37,10 +37,11 @@ final class Results: @unchecked Sendable {
 
 func run() throws {
     let width = 2008, height = 60
-    let required = HardwareVideoRequirement.touchBar(width: width, height: height)
+    let sourceID = UUID()
+    let required = HardwareVideoRequirement.touchBar(id: sourceID, width: width, height: height)
     guard required.accepts(width: width, height: height), !required.accepts(width: width, height: 62),
-          !HardwareVideoRequirement.touchBar(width: 8192, height: 2048).accepts(width: 8192, height: 2048),
-          !HardwareVideoRequirement.touchBar(width: width, height: 59).accepts(width: width, height: 59),
+          !HardwareVideoRequirement.touchBar(id: sourceID, width: 8192, height: 2048).accepts(width: 8192, height: 2048),
+          !HardwareVideoRequirement.touchBar(id: sourceID, width: width, height: 59).accepts(width: width, height: 59),
           HardwareVideoRequirement.desktop(DuoDesktopResolution(width: 2007, height: 1427))
             .accepts(width: 2008, height: 1428),
           !HardwareVideoRequirement.desktop(DuoDesktopResolution(width: 2007, height: 1427))
@@ -77,12 +78,18 @@ func run() throws {
     // A real production decoder must reject the same HEVC parameters before creating a
     // session when they don't match the surface that was advertised.
     let mismatch = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in }, onFailure: { _, _ in })
-    _ = mismatch.requireVideo(.touchBar(width: width, height: 62))
+    _ = mismatch.requireVideo(.touchBar(id: sourceID, width: width, height: 62))
     mismatch.apply(packet.1)
     mismatch.queue.sync { }
     guard mismatch.session == nil else { throw Failure("mismatched dimensions opened a decoder") }
     _ = mismatch.clear()
-    print("TOUCH BAR HARDWARE PIPELINE PASS: synthetic \(width)×\(height), production hardware encoder/router/decoder, exact-size rejection, luma=\(image.2)")
+    let generations = HardwareHEVCDecoder(onFormat: { _, _ in }, onSample: { _, _, _ in }, onFailure: { _, _ in })
+    let old = generations.requireVideo(required)
+    guard generations.requireVideo(required) == old else { throw Failure("unchanged surface restarted") }
+    let next = generations.requireVideo(.touchBar(id: UUID(), width: width, height: height))
+    guard next != old, !generations.canOutput(old) else { throw Failure("same-sized source retained old output") }
+    _ = generations.clear()
+    print("TOUCH BAR HARDWARE PIPELINE PASS: synthetic \(width)×\(height), production hardware encoder/router/decoder, size rejection and source fencing, luma=\(image.2)")
     print("SCOPE: one synthetic frame, no screen capture, no input, no network, no real Touch Bar or FPS acceptance")
 }
 

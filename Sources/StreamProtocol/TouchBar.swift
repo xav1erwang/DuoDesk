@@ -23,7 +23,7 @@ public struct TouchBarSubscription: Codable, Equatable, Sendable {
 }
 
 /// One independently generated real surface. `id` changes whenever the source or encoder restarts.
-/// Coordinates always describe the content area, never any padding added by the encoder.
+/// Coordinates describe the top-left anchored content area, never padding on its right or bottom.
 public struct TouchBarSurface: Codable, Equatable, Sendable {
     public var id: UUID
     public var pixelWidth: Int
