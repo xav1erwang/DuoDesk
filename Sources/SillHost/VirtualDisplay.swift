@@ -246,17 +246,37 @@ final class VirtualDisplay {
         return hasRequestedMode
     }
 
+    /// Look up the requested mode without selecting it. The native-desktop candidate can include
+    /// that mode in the same mirror transaction as the original display modes, rather than make
+    /// a separate mode change before the mirror is configured. Merely observing a mode does not
+    /// prove that creating this display left physical displays unchanged.
+    @MainActor
+    func waitForRequestedMode(timeout: TimeInterval = 3) async -> CGDisplayMode? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            guard isAlive, displayID != 0 else { return nil }
+            if CGDisplayIsOnline(displayID) > 0, let mode = requestedMode() { return mode }
+            do { try await Task.sleep(nanoseconds: 50_000_000) } catch { return nil }
+        }
+        return nil
+    }
+
+    private func requestedMode() -> CGDisplayMode? {
+        guard displayID != 0 else { return nil }
+        let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
+        guard let modes = CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode] else { return nil }
+        return modes.first {
+            $0.width == widthPt && $0.height == heightPt
+                && $0.pixelWidth == widthPt * scale && $0.pixelHeight == heightPt * scale
+                && abs($0.refreshRate - refreshHz) < 0.5
+        }
+    }
+
     /// Picks the mode whose point size and pixel size match the request. Public API.
     @discardableResult
     func selectRequestedMode() -> Bool {
         guard displayID != 0 else { return false }
-        let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
-        guard let modes = CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode] else { return false }
-        guard let want = modes.first(where: {
-            $0.width == widthPt && $0.height == heightPt
-                && $0.pixelWidth == widthPt * scale && $0.pixelHeight == heightPt * scale
-                && abs($0.refreshRate - refreshHz) < 0.5
-        }) else { return false }
+        guard let want = requestedMode() else { return false }
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success else { return false }
         CGConfigureDisplayWithDisplayMode(config, displayID, want, nil)

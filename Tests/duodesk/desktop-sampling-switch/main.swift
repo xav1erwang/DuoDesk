@@ -59,6 +59,15 @@ import Foundation
             guard passed else { fatalError(label) }
             print("PASS: \(label)")
         }
+        guard let mirror = DuoDesktopDisplay.inspectPinnedMirrorForTesting(), mirror.count == 4 else {
+            fatalError("read-only pinned-mirror fixture could not inspect the current mode")
+        }
+        let mirrorLabels = ["candidate rejects changed or mismatched topology", "candidate stages all modes in one transaction",
+                            "candidate stops staging at the first failure", "invalid mirror identifiers cause no operations"]
+        for (passed, label) in zip(mirror, mirrorLabels) {
+            guard passed else { fatalError(label) }
+            print("PASS: \(label)")
+        }
         print("DESKTOP SAMPLING SWITCH PASS; source clock and virtual topology were simulated; no display configuration or capture")
     }
 }

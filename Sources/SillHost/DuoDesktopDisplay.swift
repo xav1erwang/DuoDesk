@@ -62,6 +62,7 @@ final class DuoDesktopDisplay {
     /// An ID observed offline or with different identity must be reidentified before any write.
     private var observedOffline: Set<CGDirectDisplayID> = []
     private var temporary: VirtualDisplay?
+    private var preparedVirtualMode: CGDisplayMode?
     private var pendingMirror = false
     private var capturedID: CGDirectDisplayID = 0
     private var originalMainID: CGDirectDisplayID = 0
@@ -332,10 +333,13 @@ final class DuoDesktopDisplay {
                                                  serialNum: Self.virtualDesktopSerial(source: main))
                 temporary = display
                 virtualDesktopClockFPS = fps
-                guard await display.waitUntilOnline(),
-                      wanted.accepts(width: display.pixelSize.width, height: display.pixelSize.height) else {
+                // Do not select a virtual mode in a separate display transaction. If macOS
+                // remembers a mirror relationship, that selection can also alter other screens.
+                guard let mode = await display.waitForRequestedMode(),
+                      wanted.accepts(width: mode.pixelWidth, height: mode.pixelHeight) else {
                     throw Failure.modeRejected
                 }
+                preparedVirtualMode = mode
                 capturedID = display.displayID
                 if deferMirror {
                     // Keep the current desktop stable while the system picker is on screen.
@@ -385,18 +389,83 @@ final class DuoDesktopDisplay {
 
     private func attachMirror(_ display: VirtualDisplay, home: Original) throws {
         guard Self.virtualMirrorTimingSafetyVerified else { throw Failure.refreshInvariantUnavailable }
-        // The virtual desktop supplies the negotiated clock. Do not select a new panel mode.
+        guard let mode = preparedVirtualMode else { throw Failure.displayUnavailable }
+        // This candidate pins every pre-existing mode and the virtual mode in the same Quartz
+        // transaction. It is still disabled: neither atomic submission nor a post-check proves
+        // that WindowServer preserves physical refresh throughout creation and reconfiguration.
         try configure { config in
-            let origin = CGConfigureDisplayOrigin(config, display.displayID, Int32(home.origin.x), Int32(home.origin.y))
-            guard origin == .success else { return origin }
-            return CGConfigureDisplayMirrorOfDisplay(config, home.id, display.displayID)
+            guard display.isAlive, let latest = try? snapshot(), mainDisplay() == originalMainID,
+                  Self.mirrorSnapshotUnchanged(originals: originals, current: latest,
+                                               originalSystemMain: originalSystemMainID,
+                                               currentSystemMain: CGMainDisplayID(), virtualID: display.displayID,
+                                               virtualIdentity: DisplayRestoreIdentity(vendor: display.vendorID,
+                                                   model: display.productID, serial: display.serialNum, builtIn: false)) else {
+                return .failure
+            }
+            return Self.configurePinnedMirror(virtualID: display.displayID, virtualMode: mode,
+                                              home: home, originals: originals,
+                setOrigin: { id, x, y in CGConfigureDisplayOrigin(config, id, x, y) },
+                setMirror: { id, master in CGConfigureDisplayMirrorOfDisplay(config, id, master) },
+                setMode: { id, mode in CGConfigureDisplayWithDisplayMode(config, id, mode, nil) })
         }
-        guard CGDisplayMirrorsDisplay(home.id) == display.displayID else { throw Failure.modeRejected }
+        guard CGDisplayMirrorsDisplay(home.id) == display.displayID, display.hasRequestedMode else { throw Failure.modeRejected }
         guard physicalRefreshMatchesOriginal else {
             print("Duo mirror rejected: WindowServer changed a physical display's reported refresh rate.")
             throw Failure.modeRejected
         }
         print("Duo mirror timing: desktop \(display.refreshHz) Hz; source \(CGDisplayCopyDisplayMode(home.id)?.refreshRate ?? 0) Hz")
+    }
+
+    /// This rejects topology drift after the virtual display appears. It cannot undo an effect
+    /// that creation itself already had; therefore it does not authorize enabling the candidate.
+    private static func mirrorSnapshotUnchanged(originals: [Original], current: [Original],
+                                                originalSystemMain: CGDirectDisplayID,
+                                                currentSystemMain: CGDirectDisplayID,
+                                                virtualID: CGDirectDisplayID,
+                                                virtualIdentity: DisplayRestoreIdentity) -> Bool {
+        let ids = Set(originals.map(\.id))
+        guard !ids.isEmpty, ids.count == originals.count, !ids.contains(virtualID),
+              virtualID != kCGNullDirectDisplay, originalSystemMain == currentSystemMain,
+              ids.contains(originalSystemMain), current.count == originals.count + 1,
+              Set(current.map(\.id)) == ids.union([virtualID]),
+              let virtual = current.first(where: { $0.id == virtualID }),
+              virtual.mirror == kCGNullDirectDisplay, virtual.identity == virtualIdentity else { return false }
+        return originals.allSatisfy { original in
+            guard original.mode.refreshRate.isFinite, original.mode.refreshRate > 0,
+                  let now = current.first(where: { $0.id == original.id }) else { return false }
+            return sameRestoredMode(now.mode, original.mode) && now.origin == original.origin
+                && now.mirror == original.mirror && now.identity == original.identity
+        }
+    }
+
+    /// Stage each mode explicitly in the same transaction as the mirror relationship. The
+    /// injectable operations let the order and failure handling be checked without display writes.
+    private static func configurePinnedMirror(virtualID: CGDirectDisplayID, virtualMode: CGDisplayMode,
+                                               home: Original, originals: [Original],
+                                               setOrigin: (CGDirectDisplayID, Int32, Int32) -> CGError,
+                                               setMirror: (CGDirectDisplayID, CGDirectDisplayID) -> CGError,
+                                               setMode: (CGDirectDisplayID, CGDisplayMode) -> CGError) -> CGError {
+        let ids = Set(originals.map(\.id))
+        guard !ids.isEmpty, ids.count == originals.count, !ids.contains(kCGNullDirectDisplay),
+              let savedHome = originals.first(where: { $0.id == home.id }),
+              sameRestoredMode(home.mode, savedHome.mode), home.origin == savedHome.origin,
+              home.mirror == savedHome.mirror, home.identity == savedHome.identity,
+              originals.allSatisfy({ $0.mode.refreshRate.isFinite && $0.mode.refreshRate > 0
+                  && ($0.mirror == kCGNullDirectDisplay || ($0.mirror != $0.id && ids.contains($0.mirror))) }),
+              virtualMode.refreshRate.isFinite, virtualMode.refreshRate > 0,
+              !ids.contains(virtualID), virtualID != kCGNullDirectDisplay, let x = Int32(exactly: home.origin.x),
+              let y = Int32(exactly: home.origin.y) else { return .illegalArgument }
+        var result = setOrigin(virtualID, x, y)
+        guard result == .success else { return result }
+        result = setMirror(home.id, virtualID)
+        guard result == .success else { return result }
+        result = setMode(virtualID, virtualMode)
+        guard result == .success else { return result }
+        for original in originals {
+            result = setMode(original.id, original.mode)
+            guard result == .success else { return result }
+        }
+        return .success
     }
 
     /// Synchronous for the app's Quit/signal path. Never writes persistent display preferences.
@@ -408,7 +477,7 @@ final class DuoDesktopDisplay {
         if !didAttemptDisplayChange {
             originals = []; originalIdentityCounts.removeAll(); observedOffline.removeAll()
             capturedID = 0; originalMainID = 0; originalSystemMainID = 0; primaryOrigins = [:]
-            resolution = nil; requestedFPS = nil; virtualDesktopClockFPS = nil
+            resolution = nil; requestedFPS = nil; virtualDesktopClockFPS = nil; preparedVirtualMode = nil
             return finishRecovery()
         }
         var success = true
@@ -446,6 +515,7 @@ final class DuoDesktopDisplay {
         }
         temporary?.destroy()
         temporary = nil
+        preparedVirtualMode = nil
         pendingMirror = false
         if !live.isEmpty {
             do {
@@ -925,6 +995,68 @@ final class DuoDesktopDisplay {
         return [rejectedWithoutMutation, !physicalModeSharesMirrorSet(main: main, originals: unmirrored),
                 physicalModeSharesMirrorSet(main: main, originals: master),
                 physicalModeSharesMirrorSet(main: main, originals: slave)]
+    }
+
+    /// Tests the candidate's transaction description and topology checks with live mode objects
+    /// but entirely synthetic display IDs and injected operations. It never calls a display setter.
+    static func inspectPinnedMirrorForTesting() -> [Bool]? {
+        let main = CGMainDisplayID()
+        guard isDisplayOnline(main), let mode = CGDisplayCopyDisplayMode(main), mode.refreshRate > 0 else { return nil }
+        let extraIDs = (1...16).map(CGDirectDisplayID.init).filter { $0 != main }
+        guard extraIDs.count >= 2 else { return nil }
+        let peer = extraIDs[0], virtualID = extraIDs[1]
+        let homeIdentity = DisplayRestoreIdentity(vendor: 11, model: 22, serial: 33, builtIn: false)
+        let peerIdentity = DisplayRestoreIdentity(vendor: 44, model: 55, serial: 66, builtIn: false)
+        let virtualIdentity = DisplayRestoreIdentity(vendor: 77, model: 88, serial: 99, builtIn: false)
+        let home = Original(id: main, mode: mode, origin: .zero, mirror: 0, identity: homeIdentity)
+        let other = Original(id: peer, mode: mode, origin: CGPoint(x: 300, y: 0), mirror: 0, identity: peerIdentity)
+        let virtual = Original(id: virtualID, mode: mode, origin: CGPoint(x: 600, y: 0), mirror: 0, identity: virtualIdentity)
+        let originals = [home, other], current = [home, other, virtual]
+        func unchanged(_ now: [Original], mainID: CGDirectDisplayID = main) -> Bool {
+            mirrorSnapshotUnchanged(originals: originals, current: now, originalSystemMain: main,
+                                    currentSystemMain: mainID, virtualID: virtualID, virtualIdentity: virtualIdentity)
+        }
+        let moved = Original(id: peer, mode: mode, origin: CGPoint(x: 301, y: 0), mirror: 0, identity: peerIdentity)
+        let replaced = Original(id: peer, mode: mode, origin: other.origin, mirror: 0, identity: homeIdentity)
+        let alreadyMirrored = Original(id: virtualID, mode: mode, origin: virtual.origin, mirror: main, identity: virtualIdentity)
+        let wrongVirtual = Original(id: virtualID, mode: mode, origin: virtual.origin, mirror: 0, identity: peerIdentity)
+        let topologyChecks = unchanged(current) && !unchanged([home, moved, virtual])
+            && !unchanged([home, replaced, virtual]) && !unchanged([home, other, alreadyMirrored])
+            && !unchanged([home, other, wrongVirtual]) && !unchanged([home, other])
+            && !unchanged(current, mainID: peer)
+        let expected = ["origin:\(virtualID):0:0", "mirror:\(main):\(virtualID)",
+                        "mode:\(virtualID)", "mode:\(main)", "mode:\(peer)"]
+        func attempt(failAt: Int?) -> (CGError, [String]) {
+            var events: [String] = []
+            func step(_ value: String) -> CGError {
+                events.append(value)
+                return events.count - 1 == failAt ? .failure : .success
+            }
+            let result = configurePinnedMirror(virtualID: virtualID, virtualMode: mode, home: home,
+                                               originals: originals,
+                setOrigin: { id, x, y in step("origin:\(id):\(x):\(y)") },
+                setMirror: { id, master in step("mirror:\(id):\(master)") },
+                setMode: { id, _ in step("mode:\(id)") })
+            return (result, events)
+        }
+        let success = attempt(failAt: nil)
+        let ordered = success.0 == .success && success.1 == expected
+        let shortCircuits = expected.indices.allSatisfy { index in
+            let failed = attempt(failAt: index)
+            return failed.0 == .failure && failed.1 == Array(expected.prefix(index + 1))
+        }
+        var invoked = false
+        let invalid = configurePinnedMirror(virtualID: main, virtualMode: mode, home: home, originals: originals,
+            setOrigin: { _, _, _ in invoked = true; return .success },
+            setMirror: { _, _ in invoked = true; return .success },
+            setMode: { _, _ in invoked = true; return .success })
+        let alteredHome = Original(id: main, mode: mode, origin: CGPoint(x: 5, y: 0), mirror: 0, identity: homeIdentity)
+        let invalidHome = configurePinnedMirror(virtualID: virtualID, virtualMode: mode, home: alteredHome, originals: originals,
+            setOrigin: { _, _, _ in invoked = true; return .success },
+            setMirror: { _, _ in invoked = true; return .success },
+            setMode: { _, _ in invoked = true; return .success })
+        return [topologyChecks, ordered, shortCircuits,
+                invalid == .illegalArgument && invalidHome == .illegalArgument && !invoked]
     }
 
     /// Exercise the production replay sequence with synthetic records and intercepted writes.
