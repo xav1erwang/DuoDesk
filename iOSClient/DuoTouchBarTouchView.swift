@@ -16,9 +16,7 @@ final class DuoTouchBarTouchView: UIView {
         isMultipleTouchEnabled = false
         isAccessibilityElement = true
         accessibilityLabel = "Mac Touch Bar"
-        accessibilityHint = "直接触摸 Mac 的 Touch Bar 控件"
         accessibilityIdentifier = "duo.touchbar.surface"
-        accessibilityTraits = [.allowsDirectInteraction]
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -46,6 +44,9 @@ final class DuoTouchBarTouchView: UIView {
                    send: @escaping (TouchBarTouch) -> Void) {
         if self.surface != surface || !surface.acceptsInput || !canBegin() { cancelContact() }
         self.surface = surface; self.canBegin = canBegin; self.send = send
+        accessibilityValue = surface.acceptsInput ? nil : "只读"
+        accessibilityHint = surface.acceptsInput ? "直接触摸 Mac 的 Touch Bar 控件" : "仅显示画面，暂不支持触摸控制"
+        accessibilityTraits = surface.acceptsInput ? [.allowsDirectInteraction] : [.image]
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {

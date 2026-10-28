@@ -27,6 +27,7 @@ struct DuoTouchBarRemoteView: UIViewRepresentable {
     private func configure(_ container: DuoTouchBarContainer) {
         container.onAttach = onAttach
         container.setVideo(video)
+        container.setInputAvailable(surface.acceptsInput)
         container.touch.configure(surface: surface, canBegin: { video.hasCurrentImage && canBegin() }, send: send)
     }
 }
@@ -35,6 +36,17 @@ final class DuoTouchBarContainer: UIView {
     private(set) var video: HEVCDisplayView
     let touch = DuoTouchBarTouchView()
     var onAttach: (() -> Void)?
+    private let readOnlyLabel: UILabel = {
+        let label = UILabel()
+        label.text = String(localized: "只读", comment: "Touch Bar video is available but does not accept touches")
+        label.font = .preferredFont(forTextStyle: .caption2)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = .white.withAlphaComponent(0.85)
+        label.textAlignment = .center
+        label.isAccessibilityElement = false // The touch surface announces the same state.
+        label.isHidden = true
+        return label
+    }()
 
     init(video: HEVCDisplayView) {
         self.video = video
@@ -42,6 +54,7 @@ final class DuoTouchBarContainer: UIView {
         clipsToBounds = true
         addSubview(video)
         addSubview(touch)
+        addSubview(readOnlyLabel)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -52,13 +65,26 @@ final class DuoTouchBarContainer: UIView {
         video.removeFromSuperview()
         video = replacement
         insertSubview(replacement, belowSubview: touch)
-        replacement.frame = bounds
+        setNeedsLayout()
+    }
+
+    func setInputAvailable(_ available: Bool) {
+        guard readOnlyLabel.isHidden != available else { return }
+        readOnlyLabel.isHidden = available
+        setNeedsLayout()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        video.frame = bounds
-        touch.frame = bounds
+        // Keep the indicator beside the picture so no real Touch Bar controls are covered.
+        let labelWidth = readOnlyLabel.isHidden ? 0 : min(bounds.width / 4, ceil(readOnlyLabel.intrinsicContentSize.width) + 16)
+        let rightToLeft = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        readOnlyLabel.frame = CGRect(x: rightToLeft ? bounds.maxX - labelWidth : bounds.minX,
+                                     y: bounds.minY, width: labelWidth, height: bounds.height)
+        let content = CGRect(x: bounds.minX + (rightToLeft ? 0 : labelWidth), y: bounds.minY,
+                             width: max(0, bounds.width - labelWidth), height: bounds.height)
+        video.frame = content
+        touch.frame = content
     }
 
     override func didMoveToWindow() {

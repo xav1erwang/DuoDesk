@@ -45,4 +45,33 @@ final class InitialUITests: XCTestCase {
         XCTAssertTrue(resumed.hasSuffix("began:50:1,ended:50:1"), resumed)
     }
 
+    @MainActor func testReadOnlyStateRejectsTouchesAndCancelsActiveContact() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch(); defer { app.terminate() }
+        let surface = app.descendants(matching: .any)["duo.touchbar.surface"]
+        let events = app.staticTexts["fixture.events"]
+        XCTAssertTrue(surface.waitForExistence(timeout: 12), app.debugDescription)
+        let interactiveWidth = surface.frame.width
+        app.buttons["设为只读"].tap()
+        XCTAssertEqual(surface.value as? String, "只读")
+        XCTAssertLessThan(surface.frame.width, interactiveWidth, "The read-only label needs its own space beside the picture")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertEqual(events.label, "none")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Read-only synthetic Touch Bar (not live)"; screenshot.lifetime = .keepAlways; add(screenshot)
+
+        app.buttons["恢复触摸"].tap()
+        XCTAssertNotEqual(surface.value as? String, "只读")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(events.label.hasSuffix("began:50:1,ended:50:1"), events.label)
+
+        app.buttons["触摸时设为只读"].tap()
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8)
+        let changed = events.label
+        XCTAssertTrue(changed.contains("began:50:1"), changed)
+        XCTAssertTrue(changed.contains("cancelled:50:1"), changed)
+        XCTAssertFalse(changed.contains("ended:"), changed)
+        XCTAssertEqual(surface.value as? String, "只读")
+    }
+
 }
