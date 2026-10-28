@@ -69,6 +69,7 @@ final class StreamServer {
         /// One independently decodable Touch Bar packet may be in the connection at a time.
         var touchBarSurface: UUID?
         var touchBarInputPermit: TouchBarInputPermit?
+        let touchBarConnectionPermit: TouchBarConnectionPermit
         var touchBarClosing = false
         var touchBarFrameInFlight = false
         var touchBarRefreshWanted = false
@@ -143,7 +144,10 @@ final class StreamServer {
         /// The last kind 26 sent to it; nil also while it drives the pointer, so the next one goes out
         /// whatever it says.
         var lastPointer: MacPointer?
-        init(_ c: NWConnection) { connection = c }
+        init(_ c: NWConnection) {
+            connection = c
+            touchBarConnectionPermit = TouchBarConnectionPermit(connectionID: ObjectIdentifier(c))
+        }
     }
 
     /// The network queue: both doors, their connections, the verify blocks and the timers.
@@ -168,6 +172,8 @@ final class StreamServer {
     var onClientRouteChanged: ((NWConnection, ClientLink.Route?) -> Void)?
     /// A message from a client (selectSource, launchApp). Called on the network queue.
     var onMessage: ((StreamMessage, NWConnection) -> Void)?
+    /// Control requests retain the connection permit current when the network queue read them.
+    var onTouchBarControl: ((StreamMessage, NWConnection, ClientRoute, TouchBarConnectionPermit) -> Void)?
     /// A Touch Bar touch retains the permit that was current when the network queue read it.
     var onTouchBarInput: ((StreamMessage, NWConnection, ClientRoute, TouchBarInputPermit) -> Void)?
     /// A client fell behind and lost a delta frame; the encoder should produce a keyframe now
@@ -176,6 +182,10 @@ final class StreamServer {
     /// A newly subscribed or caught-up client needs a fresh independent Touch Bar frame.
     /// The owner must coalesce/rate-limit requests and recheck the current source and permissions.
     var onTouchBarKeyframeNeeded: ((UUID) -> Void)?
+    /// Session installation can happen after the listener starts; assign on the queue that reads it.
+    func setTouchBarKeyframeNeeded(_ handler: @escaping (UUID) -> Void) {
+        queue.async { [self] in onTouchBarKeyframeNeeded = handler }
+    }
     // All admitted peers share this ceiling: a faulty client cannot force continuous IDRs.
     private var lastDecoderRecoveryRequest = -Double.infinity // network queue
     private var pendingDecoderRecovery: Set<ObjectIdentifier> = [] // network queue
@@ -1102,6 +1112,7 @@ final class StreamServer {
             // goodbye's bounded grace period and the connection's eventual unregister.
             client.touchBarSurface = nil; client.touchBarRefreshWanted = false
             client.touchBarClosing = true
+            client.touchBarConnectionPermit.revoke()
             client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
             if client.transport?.validatePath(connection.currentPath) == false { connection.cancel(); return }
         }
@@ -1128,6 +1139,7 @@ final class StreamServer {
             for client in clients.values {
                 client.touchBarSurface = nil; client.touchBarRefreshWanted = false
                 client.touchBarClosing = true
+                client.touchBarConnectionPermit.revoke()
                 client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
             }
             for client in clients.values where client.connection.state == .ready {
@@ -1364,6 +1376,7 @@ final class StreamServer {
     /// connection that was never registered (refused, or failed before it was ready) leaves no line.
     private func unregister(_ id: ObjectIdentifier) {
         guard let client = clients.removeValue(forKey: id) else { return }
+        client.touchBarConnectionPermit.revoke()
         client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
         pendingDecoderRecovery.remove(id)
         if pendingDecoderRecovery.isEmpty { cancelDecoderRecovery() }
@@ -1599,6 +1612,16 @@ final class StreamServer {
                     }
                 } else if header.kind == .requestKeyframe {
                     if payload.isEmpty { self.requestDecoderRecovery(from: client) }
+                } else if header.kind == .touchBarSubscription || header.kind == .touchBarRefresh {
+                    // The main actor may receive a queued control after goodbye, so carry an
+                    // independently revocable connection permit with the request.
+                    let permit = client.touchBarConnectionPermit
+                    if payload.count <= 4096, !client.touchBarClosing, client.route.encrypted,
+                       client.route.pairedName != nil, permit.isValid {
+                        let message = StreamMessage(kind: header.kind, timestamp: header.timestamp,
+                                                    isKeyframe: header.isKeyframe, payload: payload)
+                        self.onTouchBarControl?(message, c, client.route, permit)
+                    }
                 } else if header.kind == .touchBarTouch {
                     // Do not queue an unpaired, unsubscribed or oversized touch to the main actor.
                     // The permit is checked again there after any intervening revoke or restart.

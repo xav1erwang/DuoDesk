@@ -23,6 +23,10 @@ check(!TouchBarStatus(availability: .live).isValid, "live without a surface")
 check(!TouchBarStatus(availability: .unavailable, surface: surface).isValid, "unavailable with a stale surface")
 let status = TouchBarStatus(availability: .live, surface: surface)
 check(Wire.decode(TouchBarStatus.self, from: Wire.encode(status)) == status, "status wire round trip")
+let refresh = TouchBarRefresh(surfaceID: first)
+check(TouchBarRefresh(encoded: refresh.encoded) == refresh, "refresh wire round trip")
+check(TouchBarRefresh(encoded: refresh.encoded.dropLast()) == nil, "truncated refresh rejected")
+check(TouchBarRefresh(encoded: refresh.encoded + Data([0])) == nil, "oversized refresh rejected")
 
 let bytes = Data([0, 1, 2, 253, 254, 255])
 let media = TouchBarMedia(surfaceID: first, bytes: bytes)!

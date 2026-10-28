@@ -241,6 +241,9 @@ package final class StreamCoordinator {
     package let remote: RemoteAccess?
     /// Each admitted connection's route (home and its origin, or the remote door's), from the server.
     private var routes: [ObjectIdentifier: ClientRoute] = [:]
+    /// The side lane is created only if a paired client asks. Its factory currently provides no
+    /// source; neither a simulator nor an unverified private system interface is enabled here.
+    private var touchBarSession: TouchBarHostSession?
     /// Away from home (docs/remote-bundle-plan.md §5; AwayPolicy): every connected device is away,
     /// so the away quality is the target. Kept while no device is connected; the next to register
     /// decides (`routesChanged`). What the Mac's card, menu and every device are told.
@@ -405,6 +408,7 @@ package final class StreamCoordinator {
         server.onClientDisconnected = { [weak self] connection in
             Task { @MainActor in
                 guard let self else { return }
+                self.touchBarSession?.clientLeft(connection)
                 self.clientFPS[ObjectIdentifier(connection)] = nil
                 self.clientDesktopResolutions[ObjectIdentifier(connection)] = nil
                 self.settingsArrivals[ObjectIdentifier(connection)] = nil
@@ -466,6 +470,34 @@ package final class StreamCoordinator {
         server.onMessage = { [weak self] message, connection in
             let queuedAt = traceInputTiming && message.kind == .input ? Date().timeIntervalSince1970 : nil
             Task { @MainActor in await self?.handle(message, from: connection, inputQueuedAt: queuedAt) }
+        }
+        // Both callbacks originate on the same serial network queue and enqueue onto the main
+        // queue, preserving control/touch order. Permits fence requests held across goodbye.
+        server.onTouchBarControl = { [weak self] message, connection, route, permit in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.shuttingDown, self.routes[ObjectIdentifier(connection)] == route,
+                      permit.connectionID == ObjectIdentifier(connection) else { return }
+                permit.admit {
+                    switch message.kind {
+                    case .touchBarSubscription:
+                        guard let request = Wire.decode(TouchBarSubscription.self, from: message.payload),
+                              request.isSupported else { return }
+                        if !request.watching, self.touchBarSession == nil { return }
+                        self.touchBarSessionForRequest().subscribe(request, from: connection, route: route)
+                    case .touchBarRefresh:
+                        guard let request = TouchBarRefresh(encoded: message.payload) else { return }
+                        self.touchBarSession?.requestRefresh(request, from: connection, route: route)
+                    default: break
+                    }
+                }
+            }
+        }
+        server.onTouchBarInput = { [weak self] message, connection, route, permit in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.shuttingDown, self.routes[ObjectIdentifier(connection)] == route,
+                      let touch = Wire.decode(TouchBarTouch.self, from: message.payload), touch.isValid else { return }
+                self.touchBarSession?.receive(touch, from: connection, route: route, permit: permit)
+            }
         }
         catalog.onWindowsChanged = { [weak self] infos in
             Task { @MainActor in await self?.windowsChanged(infos) }
@@ -548,6 +580,30 @@ package final class StreamCoordinator {
         EncoderProbe.onStalledProbeBack = { [weak self] seconds in
             Task { @MainActor in self?.stalledProbeCameBack(after: seconds) }
         }
+    }
+
+    /// Recheck the latest trust snapshot on the main actor. Removing a paired key or switching
+    /// off remote/internet access takes effect here even before the queued goodbye is processed.
+    private func touchBarAuthorized(_ route: ClientRoute) -> Bool {
+        guard !synthetic, !shuttingDown, route.encrypted, route.pairedName != nil,
+              let remote else { return false }
+        return Self.touchBarRouteAuthorized(route, trust: remote.trust.snapshot)
+    }
+
+    private static func touchBarRouteAuthorized(_ route: ClientRoute, trust: TrustSnapshot) -> Bool {
+        guard route.encrypted, route.pairedName != nil, let fingerprint = route.fingerprint else { return false }
+        guard trust.paired[fingerprint] != nil, !route.isRemote || trust.remoteAccess else { return false }
+        return DoorPolicy.admitsBeforeStart(route.isRemote ? .remote : .home,
+                                            origin: route.origin, internetAccess: trust.internetAccess)
+    }
+
+    private func touchBarSessionForRequest() -> TouchBarHostSession {
+        if let touchBarSession { return touchBarSession }
+        let session = TouchBarHostSession(server: server, authorized: { [weak self] route in
+            self?.touchBarAuthorized(route) ?? false
+        })
+        touchBarSession = session
+        return session
     }
 
     /// How the Devices pane says a paired device last connected at home: "over the USB cable",
@@ -2044,6 +2100,7 @@ package final class StreamCoordinator {
     /// by liveness.
     package func shutdownForExit() {
         shuttingDown = true
+        touchBarSession?.stop()
         injector.releaseAll()
         server.goodbyeAll(Goodbye(reason: Goodbye.quit), within: 0.1)
         ShutdownRestoreOrder.run(display: { _ = duoDesktop.restore() },
@@ -2057,6 +2114,7 @@ package final class StreamCoordinator {
     /// happens (no goodbye), as before.
     package func releaseKeysForExit() {
         shuttingDown = true
+        touchBarSession?.stop()
         injector.releaseAll()
         ShutdownRestoreOrder.run(display: { _ = duoDesktop.restore() },
                                  windows: { restoreFits(keeping: nil) }, stage: {})

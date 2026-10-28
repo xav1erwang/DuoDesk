@@ -2,6 +2,17 @@
 import Foundation
 import StreamProtocol
 
+/// Fences control requests read before a connection starts closing. The short action may enqueue
+/// network work, but must never wait for the network queue (or call an unbounded source API).
+final class TouchBarConnectionPermit: @unchecked Sendable {
+    let connectionID: ObjectIdentifier
+    private let gate = VideoOutputPermit()
+    init(connectionID: ObjectIdentifier) { self.connectionID = connectionID }
+    var isValid: Bool { gate.isValid }
+    func revoke() { gate.invalidate() }
+    @discardableResult func admit(_ action: () -> Void) -> Bool { gate.admit(action) }
+}
+
 /// A network-side subscription can be revoked while its touch waits for the main actor. The
 /// short admission and revocation share a lock: a queued touch cannot start after revocation.
 /// The admitted action must be nonblocking and must never call back into the network queue.

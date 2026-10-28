@@ -72,6 +72,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
     private let makeSource: () -> (any TouchBarCaptureSource)?
     private let recordingAllowed: () -> Bool
     private let inputAllowed: () -> Bool
+    private let authorized: (ClientRoute) -> Bool
     private var subscribers: [ObjectIdentifier: NWConnection] = [:]
     private var source: (any TouchBarCaptureSource)?
     private var token: UUID?
@@ -90,10 +91,12 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
 
     init(server: StreamServer, makeSource: @escaping () -> (any TouchBarCaptureSource)? = { nil },
          recordingAllowed: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
-         inputAllowed: @escaping () -> Bool = { AXIsProcessTrusted() }) {
+         inputAllowed: @escaping () -> Bool = { AXIsProcessTrusted() },
+         authorized: @escaping (ClientRoute) -> Bool = { _ in false }) {
         self.server = server; self.makeSource = makeSource
         self.recordingAllowed = recordingAllowed; self.inputAllowed = inputAllowed
-        server.onTouchBarKeyframeNeeded = { [weak self] token in
+        self.authorized = authorized
+        server.setTouchBarKeyframeNeeded { [weak self] token in
             Task { @MainActor [weak self] in self?.refresh(token) }
         }
     }
@@ -104,6 +107,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         guard request.isSupported, route.encrypted, route.pairedName != nil else { return }
         let id = ObjectIdentifier(connection)
         if !request.watching { unsubscribe(id); return }
+        guard authorized(route) else { unsubscribe(id); return }
         guard recordingAllowed() else {
             if source != nil { stop() }
             send(.init(availability: .unavailable), to: connection)
@@ -147,7 +151,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
 
     func receive(_ event: TouchBarTouch, from connection: NWConnection, route: ClientRoute, permit: TouchBarInputPermit) {
         let id = ObjectIdentifier(connection)
-        guard route.encrypted, route.pairedName != nil, subscribers[id] != nil,
+        guard route.encrypted, route.pairedName != nil, authorized(route), subscribers[id] != nil,
               let surface, let source, permit.surfaceID == surface.id, permit.connectionID == id,
               permit.isValid else { return }
         guard recordingAllowed() else { stop(); return }
@@ -164,6 +168,14 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
             failed = !source.post(accepted)
         }
         if failed { stop() }
+    }
+
+    /// Client refresh requests have the same paired and current-source checks as input. The
+    /// actual encoder request is shared and rate-limited with network catch-up requests.
+    func requestRefresh(_ request: TouchBarRefresh, from connection: NWConnection, route: ClientRoute) {
+        guard route.encrypted, route.pairedName != nil, authorized(route),
+              subscribers[ObjectIdentifier(connection)] != nil, request.surfaceID == token else { return }
+        refresh(request.surfaceID)
     }
 
     private func updateInputCapability(_ allowed: Bool) {

@@ -87,6 +87,22 @@ public struct TouchBarTouch: Codable, Equatable, Sendable {
     }
 }
 
+/// A fresh independently decodable frame for exactly one surface, without any pixel data.
+public struct TouchBarRefresh: Equatable, Sendable {
+    public let surfaceID: UUID
+    public init(surfaceID: UUID) { self.surfaceID = surfaceID }
+    public init?(encoded: Data) {
+        guard encoded.count == 16 else { return nil }
+        let b = Array(encoded)
+        surfaceID = UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                                b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
+    public var encoded: Data {
+        var bytes = surfaceID.uuid
+        return withUnsafeBytes(of: &bytes) { Data($0) }
+    }
+}
+
 /// A parameter-set or HEVC access-unit payload, fenced by the surface ID. The actual HEVC encode
 /// and decode paths must verify hardware acceleration; this envelope never decodes or alters pixels.
 public struct TouchBarMedia: Equatable, Sendable {
