@@ -94,16 +94,21 @@ struct ClipboardChip: View {
 /// by the system while the clipboard has no text. Its label is the system's ("Paste").
 struct ClipboardPasteButton: View {
     @ObservedObject var client: StreamClient
+    var iconOnly = false
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if iconOnly { pasteControl.labelStyle(.iconOnly) }
+        else { pasteControl.labelStyle(.titleAndIcon) }
+    }
+
+    private var pasteControl: some View {
         PasteButton(payloadType: String.self) { strings in
             // On the main thread whatever queue the system hands it on.
             DispatchQueue.main.async { client.sendClipboard(strings) }
         }
         .buttonBorderShape(.capsule)
-        .labelStyle(.titleAndIcon)
         .tint(Palette.accent)
-        .accessibilityHint(ClipboardPolicy.Copy.pasteHint(mac: client.macName.isEmpty ? "the Mac" : client.macName,
-                                                          device: StreamClient.deviceWord))
+        .accessibilityLabel("粘贴到 \(client.macName.isEmpty ? "Mac" : client.macName)")
+        .accessibilityHint("将本机复制的文字发送到 \(client.macName.isEmpty ? "Mac" : client.macName) 的剪贴板")
     }
 }

@@ -57,7 +57,7 @@ struct HostSettingsPanel: View {
     /// its rows do the gestures instead.
     @State private var voiceOver = HostSettingsPanel.voiceOverRunning
 
-    private var mac: String { client.macName.isEmpty ? "the Mac" : client.macName }
+    private var mac: String { client.macName.isEmpty ? "Mac" : client.macName }
     private static let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
     /// DEBUG `-SillSettingsEnd 1`: the rows start scrolled to their end, so a photo of a short
     /// screen shows the last groups (Direct Wireless, Away from home, This iPad, Take the Tour).
@@ -124,7 +124,7 @@ struct HostSettingsPanel: View {
         // is in the footer or the note. The haptic is a no-op on an iPad.
         .sensoryFeedback(.warning, trigger: client.settingsRefusals)
         .onChange(of: client.settingsRefusals) { _, _ in
-            AccessibilityNotification.Announcement("\(mac) kept its setting").post()
+            AccessibilityNotification.Announcement("\(mac) 保留了原设置").post()
         }
         .onChange(of: client.settingsProblem) { _, problem in
             if let problem { AccessibilityNotification.Announcement(problem).post() }
@@ -166,7 +166,7 @@ struct HostSettingsPanel: View {
                         // Its own line: beside the numbers it never fit the panel's width, and it
                         // is what confirms the Virtual Display switch took effect.
                         if state.stream?.onVirtualDisplay == true {
-                            Text("On the virtual display")
+                            Text("使用虚拟显示器")
                         }
                         // From afar, how, with the round trip (it needs no clock agreement between
                         // the two devices, unlike frame age); the readout above then ends in the
@@ -175,7 +175,7 @@ struct HostSettingsPanel: View {
                         // spaces are no-break ones, as on the Mac's card (at xxLarge on the outer
                         // display it read "Connected through" / "Tailscale · 48 ms").
                         if let r = remoteRoute {
-                            Text("Connected \(r.phrase.replacingOccurrences(of: " ", with: "\u{00A0}"))\u{00A0}· \(Self.rttText(client.linkStats))")
+                            Text("\(Self.remoteRouteText(r).replacingOccurrences(of: " ", with: "\u{00A0}"))\u{00A0}· \(Self.rttText(client.linkStats))")
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         // Away from home (docs/remote-bundle-plan.md §5.8): which quality this
@@ -199,7 +199,7 @@ struct HostSettingsPanel: View {
             // padding and the shape sit inside the label, which is what the button hit-tests, and
             // the layout takes them back outside.
             Button(action: close) {
-                Text("Done")
+                Text("完成")
                     .padding(.vertical, 11)
                     .padding(.horizontal, 4)
                     .contentShape(Rectangle())
@@ -220,8 +220,8 @@ struct HostSettingsPanel: View {
             // The header already names the Mac: when a long name leaves no room, "Disconnect"
             // alone says enough (a truncated "Disconnect from…ah's MacBook Pro" read badly).
             ViewThatFits(in: .horizontal) {
-                Label("Disconnect from \(mac)", systemImage: "xmark.circle").lineLimit(1)
-                Label("Disconnect", systemImage: "xmark.circle").lineLimit(1)
+                Label("断开 \(mac)", systemImage: "xmark.circle").lineLimit(1)
+                Label("断开连接", systemImage: "xmark.circle").lineLimit(1)
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .padding(.horizontal, 14)
@@ -230,7 +230,7 @@ struct HostSettingsPanel: View {
         .buttonStyle(.plain)
         .foregroundStyle(Palette.accent)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.control))
-        .accessibilityLabel("Disconnect from \(mac)")
+        .accessibilityLabel("断开与 \(mac) 的连接")
         .padding(.top, 10)
     }
 
@@ -243,8 +243,8 @@ struct HostSettingsPanel: View {
                     // Neither a restart nor a return is promised: hosts before 2026-09-25 keep the
                     // software encoder until they relaunch, newer ones go back by themselves.
                     Callout(text: client.nativeDesktopResolution != nil
-                            ? "硬件编码器暂不可用，当前保留 Duo 原生分辨率，帧率可能下降。"
-                            : "\(mac)’s hardware encoder is busy or not responding, so for now streams run at up to 60 fps at Standard.")
+                            ? "Mac 正在使用软件编码，无法满足原生桌面的硬件编码要求。"
+                            : "\(mac) 的硬件编码器忙或无响应，当前使用软件编码，最高为 60 FPS。")
                 }
                 if let problem = client.settingsProblem {
                     Callout(text: problem)
@@ -257,7 +257,7 @@ struct HostSettingsPanel: View {
                         Callout.Action(title: b.title, spoken: b.spoken) { client.changeSettings(b.change) }
                     })
                 } else if AwayCopy.showsRttCallout(away: state.away, remote: remoteRoute != nil, slowLink: client.slowLink) {
-                    Callout(text: "The picture is arriving slowly from \(mac). Choose Low quality or Standard resolution.")
+                    Callout(text: "\(mac) 的画面传输较慢，可选择较低画质或标准分辨率。")
                 }
                 streamRows(shown)
                 Footnote(text: streamFooter)
@@ -269,15 +269,15 @@ struct HostSettingsPanel: View {
                 // what it trades away.
                 Rows {
                     Toggle(isOn: binding(shown.prioritizeSpeed) { HostSettingsChange(prioritizeSpeed: $0) }) {
-                        RowTitle(title: "Prioritize Encoding Speed", since: client.settings.pendingSince(.prioritizeSpeed))
+                        RowTitle(title: "优先编码速度", since: client.settings.pendingSince(.prioritizeSpeed))
                     }
                     .rowFrame()
                 }
-                Footnote(text: "Lower latency when \(mac) is busy, at a softer picture.")
+                Footnote(text: "\(mac) 繁忙时降低延迟，画面可能略微变柔和。")
                 Rows {
                     let unavailable = !state.virtualDisplayAvailable && !shown.virtualDisplay
                     Toggle(isOn: binding(shown.virtualDisplay) { HostSettingsChange(virtualDisplay: $0) }) {
-                        RowTitle(title: "Virtual Display", since: client.settings.pendingSince(.virtualDisplay))
+                        RowTitle(title: "虚拟显示器", since: client.settings.pendingSince(.virtualDisplay))
                     }
                     // Off and impossible on this host: disabled, the reason under it. On, it can
                     // always be turned off, as from the Mac's own menu.
@@ -288,9 +288,9 @@ struct HostSettingsPanel: View {
                 if let note = state.virtualDisplayNote {
                     Footnote(text: note, warning: true)
                 } else {
-                    Footnote(text: "The window you pick moves onto an invisible display on \(mac) while it streams, so it keeps updating when covered.")
+                    Footnote(text: "串流时，所选窗口会移到 \(mac) 的虚拟显示器，即使被遮挡也能继续更新。")
                 }
-                Footnote(text: "Applies to every device streaming from \(mac). The stream restarts for a moment.")
+                Footnote(text: "对所有连接 \(mac) 的设备生效，画面会短暂停顿。")
                 // Direct Wireless Connection: how devices reach the Mac, not how it streams; after the
                 // closing footer, whose "the stream restarts" is not true of it, and last, the least
                 // changed row with the longest footer (the compact halves' 259 pt shows the rest
@@ -300,23 +300,23 @@ struct HostSettingsPanel: View {
                 if let direct = shown.directWireless {
                     Rows {
                         Toggle(isOn: binding(direct) { HostSettingsChange(directWireless: $0) }) {
-                            RowTitle(title: "Direct Wireless Connection", since: client.settings.pendingSince(.directWireless))
+                            RowTitle(title: "无线直连", since: client.settings.pendingSince(.directWireless))
                         }
                         // A warning about turning it off, so only while the switch shows on.
-                        .accessibilityHint(client.connectedDirectly && direct ? "Turning this off disconnects this \(device)." : "")
+                        .accessibilityHint(client.connectedDirectly && direct ? "关闭后会断开本机的直连。" : "")
                         // From afar the Mac refuses it anyway: how devices near the Mac reach it is
                         // theirs and the Mac's to change.
                         .disabled(remoteRoute != nil)
                         .rowFrame()
                     }
-                    Footnote(text: remoteRoute != nil ? "Change this on \(mac), or from a device near it." : directFooter(on: direct))
+                    Footnote(text: remoteRoute != nil ? "请在 \(mac) 上，或从靠近它的设备修改。" : directFooter(on: direct))
                 }
                 if !state.persistent {
-                    Footnote(text: "SillHost keeps these until it quits.")
+                    Footnote(text: "这些设置在主机程序退出前保持有效。")
                 }
                 awayFromHome
             } else if olderMac {
-                Label("Update Sill on \(mac) to change these from here.", systemImage: "arrow.down.circle")
+                Label("请更新 \(mac) 上的 DUO你电脑，然后再从这里修改设置。", systemImage: "arrow.down.circle")
                     .font(.body)
                     .foregroundStyle(Palette.text)
                     .fixedSize(horizontal: false, vertical: true)
@@ -325,7 +325,7 @@ struct HostSettingsPanel: View {
             } else {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).tint(Palette.muted)
-                    Text("Loading settings…")
+                    Text("正在加载设置…")
                 }
                 .font(.footnote)
                 .foregroundStyle(Palette.muted)
@@ -361,8 +361,8 @@ struct HostSettingsPanel: View {
     /// before anything scrolls.
     private func streamRows(_ shown: StreamSettings) -> some View {
         Rows {
-            AdaptiveRow(title: "Quality", since: client.settings.pendingSince(.bitrate)) {
-                Picker("Quality", selection: binding(shown.bitrate) { HostSettingsChange(bitrate: $0) }) {
+            AdaptiveRow(title: "画质", since: client.settings.pendingSince(.bitrate)) {
+                Picker("画质", selection: binding(shown.bitrate) { HostSettingsChange(bitrate: $0) }) {
                     ForEach(QualityPreset.allCases) { Text($0.title).tag($0.rawValue) }
                     if QualityPreset(rawValue: shown.bitrate) == nil {
                         // Set by hand on the Mac: shown, never offered (the Mac's menu does the same).
@@ -373,14 +373,14 @@ struct HostSettingsPanel: View {
                 .fixedSize()     // one line; the row stacks instead when it does not fit beside the title
             }
             RowDivider()
-            AdaptiveRow(title: "Resolution", since: client.settings.pendingSince(.captureScale)) {
+            AdaptiveRow(title: "分辨率", since: client.settings.pendingSince(.captureScale)) {
                 if let native = client.nativeDesktopResolution {
                     Text("Duo 原生 · \(native.encodedWidth)×\(native.encodedHeight)")
                         .font(.callout.monospacedDigit())
                 } else {
-                    Picker("Resolution", selection: binding(shown.captureScale) { HostSettingsChange(captureScale: $0) }) {
+                    Picker("分辨率", selection: binding(shown.captureScale) { HostSettingsChange(captureScale: $0) }) {
                         Text("Retina").tag(2.0)
-                        Text("Standard").tag(1.0)
+                        Text("标准").tag(1.0)
                     }
                     .pickerStyle(.segmented)
                     .fixedSize()
@@ -389,7 +389,7 @@ struct HostSettingsPanel: View {
             RowDivider()
             AdaptiveRow(title: "Mac 帧率上限", since: client.settings.pendingSince(.maxFPS)) {
                 // A Mac-held value such as 90 selects no segment, as on the Mac.
-                Picker("Frame Rate", selection: binding(shown.maxFPS) { HostSettingsChange(maxFPS: $0) }) {
+                Picker("Mac 帧率上限", selection: binding(shown.maxFPS) { HostSettingsChange(maxFPS: $0) }) {
                     Text("60 fps").tag(60)
                     Text("120 fps").tag(120)
                 }
@@ -419,7 +419,7 @@ struct HostSettingsPanel: View {
     /// connection).
     @ViewBuilder private var awayFromHome: some View {
         if let info = client.macInfo {
-            Text("Away from home")
+            Text("远程连接")
                 .font(.footnote.weight(.medium))
                 .foregroundStyle(Palette.muted)
                 .padding(.horizontal, 14)
@@ -430,22 +430,22 @@ struct HostSettingsPanel: View {
                                                 remoteAccess: info.remoteAccess, tlsAtHome: client.sessionAtHomeOverTLS) {
             case .paired(let reach):
                 Rows {
-                    Label("Paired", systemImage: "checkmark.circle.fill")
+                    Label("已配对", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(Palette.text)
                         .rowFrame()
                 }
                 switch reach {
                 case .connected:
-                    if let r = remoteRoute { Footnote(text: "Connected \(r.phrase).") }
+                    if let r = remoteRoute { Footnote(text: Self.remoteRouteText(r) + "。") }
                 case .reaches:
-                    Footnote(text: "Away from home, Sill reaches \(mac) \(Self.reach(info)).")
+                    Footnote(text: "在外时可\(Self.reach(info))连接到 \(mac)。")
                 case .turnOnRemoteAccess:
                     Footnote(text: Self.turnOnRemoteAccess(mac))
                 }
             case .pairThisDevice(let atHome):
                 Rows {
                     Button(action: pairThisDevice) {
-                        Text("Pair This \(device)…")
+                        Text("配对本机…")
                             .foregroundStyle(Palette.accent)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
@@ -453,8 +453,9 @@ struct HostSettingsPanel: View {
                     .buttonStyle(.plain)
                     .rowFrame()
                 }
-                Footnote(text: atHome ? DiscoveryPolicy.HomeCopy.pairThisDeviceAtHome(mac: mac, device: device)
-                                      : "Pair once to reach \(mac) through your VPN or the internet. \(mac) shows a code; scan it with this \(device).")
+                Footnote(text: atHome
+                         ? "\(mac) 当前允许不配对连接。配对后，即使此设置改变也能继续连接；打开 Remote Access 后还能在外连接。请扫描 \(mac) 显示的配对码。"
+                         : "配对一次后，可通过 VPN 或公网连接 \(mac)。请扫描 \(mac) 显示的配对码。")
             case .turnOnRemoteAccess:
                 Footnote(text: Self.turnOnRemoteAccess(mac))
             }
@@ -463,7 +464,7 @@ struct HostSettingsPanel: View {
 
     /// With Remote Access off on the Mac: how to reach it away from home.
     static func turnOnRemoteAccess(_ mac: String) -> String {
-        "To reach \(mac) away from home, turn on Remote Access in Sill’s Settings on the Mac."
+        "要在外连接 \(mac)，请在其 DUO你电脑 设置中打开“Remote Access”。"
     }
 
     // MARK: This device
@@ -477,7 +478,7 @@ struct HostSettingsPanel: View {
     /// or Switch Control, does its gesture on the Mac as three fingers would (`sendGesture`: the switch,
     /// the Mac's `gestures`, the Desktop first while a window streams).
     @ViewBuilder private var thisDevice: some View {
-        Text("This \(device)")
+        Text("本机")
             .font(.footnote.weight(.medium))
             .foregroundStyle(Palette.muted)
             .padding(.horizontal, 14)
@@ -503,7 +504,7 @@ struct HostSettingsPanel: View {
         if offersLargerPicture {
             Rows {
                 Toggle(isOn: $largerPicture) {
-                    Text("Larger Picture").foregroundStyle(Palette.text)
+                    Text("放大画面").foregroundStyle(Palette.text)
                 }
                 .rowFrame()
             }
@@ -513,13 +514,13 @@ struct HostSettingsPanel: View {
         if ClipboardPolicy.hostTakes(client.hostClipboard) {
             Rows {
                 Toggle(isOn: $clipboardOn) {
-                    Text(ClipboardPolicy.Copy.switchTitle).foregroundStyle(Palette.text)
+                    Text("共享剪贴板").foregroundStyle(Palette.text)
                 }
                 .rowFrame()
                 .onChange(of: clipboardOn) { _, _ in client.clipboardSwitchChanged() }
                 if clipboardOn {
                     RowDivider()
-                    ClipboardPasteRow(client: client, title: ClipboardPolicy.Copy.rowTitle(mac: mac))
+                    ClipboardPasteRow(client: client, title: "粘贴到 \(mac)")
                 }
             }
             if clipboardOn, let note = client.clipboardNote {
@@ -527,11 +528,13 @@ struct HostSettingsPanel: View {
                     .padding(.bottom, -6)
                     .accessibilityHidden(true)      // announced as it came
             }
-            Footnote(text: ClipboardPolicy.Copy.footnote(on: clipboardOn, mac: mac, device: device))
+            Footnote(text: clipboardOn
+                     ? "在 \(mac) 上复制的文字可在本机粘贴。要发到 \(mac)，请先在本机复制文字，点按粘贴，再在 \(mac) 上按 ⌘V。"
+                     : "关闭时，本机与 \(mac) 不会互相传送复制的内容。")
         }
         Rows {
             Toggle(isOn: $gesturesOn) {
-                Text("Three-Finger Gestures").foregroundStyle(Palette.text)
+                Text("三指手势").foregroundStyle(Palette.text)
             }
             .rowFrame()
             if gesturesOn, macTakesGestures {
@@ -554,29 +557,29 @@ struct HostSettingsPanel: View {
     /// it gives up, where windows come from instead, that the Mac fits a window to the taller picture
     /// once Aa sets its text size (or on the virtual display), and that a change applies as the panel
     /// closes (StreamScreen's `largerPictureHeld`).
-    static let largerPictureFooter = "Held upright, a window’s picture takes the place of the window thumbnails and reaches down to where the keyboard comes up. The Desktop keeps the thumbnails. Switch windows with Apps: tap an open app again for its next window. To fill the taller picture with a window, set its text size with Aa. A change applies when you close Settings."
+    static let largerPictureFooter = "竖屏时，窗口画面会占用缩略图位置并延伸到键盘上方；桌面仍显示缩略图。可在“应用”中切换窗口，再次点按已打开的应用可切换到它的下一个窗口。要让窗口填满较高的画面，可用 Aa 调整文字大小。更改会在关闭设置后生效。"
 
     /// What each gesture does on the Mac, and what the row does as an accessibility action: its one
     /// gesture, or, for the Spaces, one action each way (natural direction: a swipe left brings the
     /// Space on the right). The pinch opens Launchpad on macOS 14 and 15, from the same key.
     private static let gestureRows: [(symbol: String, gesture: String, action: String, does: [GestureRow.Action])] = [
-        ("arrow.up", "Swipe Up", "Mission Control", [GestureRow.Action(name: "Mission Control", gesture: .swipeUp)]),
-        ("arrow.down", "Swipe Down", "App Exposé", [GestureRow.Action(name: "App Exposé", gesture: .swipeDown)]),
-        ("arrow.left.and.right", "Swipe Left or Right", "Spaces", [GestureRow.Action(name: "Space on the Right", gesture: .swipeLeft),
-                                                                   GestureRow.Action(name: "Space on the Left", gesture: .swipeRight)]),
-        ("arrow.down.right.and.arrow.up.left", "Pinch", "Apps", [GestureRow.Action(name: "Apps", gesture: .pinch)]),
-        ("arrow.up.left.and.arrow.down.right", "Spread", "Show Desktop", [GestureRow.Action(name: "Show Desktop", gesture: .spread)]),
+        ("arrow.up", "上滑", "调度中心", [GestureRow.Action(name: "调度中心", gesture: .swipeUp)]),
+        ("arrow.down", "下滑", "应用窗口", [GestureRow.Action(name: "应用窗口", gesture: .swipeDown)]),
+        ("arrow.left.and.right", "左右滑动", "切换空间", [GestureRow.Action(name: "右侧空间", gesture: .swipeLeft),
+                                                            GestureRow.Action(name: "左侧空间", gesture: .swipeRight)]),
+        ("arrow.down.right.and.arrow.up.left", "捏合", "应用程序", [GestureRow.Action(name: "应用程序", gesture: .pinch)]),
+        ("arrow.up.left.and.arrow.down.right", "张开", "显示桌面", [GestureRow.Action(name: "显示桌面", gesture: .spread)]),
     ]
 
     /// Under the switch: where the gestures go and what they do, or why nothing happens.
     private var gesturesFooter: String {
-        guard gesturesOn else { return "Three-finger strokes do nothing while this is off." }
-        guard macTakesGestures else { return "Update Sill on \(mac) to use these." }
+        guard gesturesOn else { return "关闭后，三指手势不会生效。" }
+        guard macTakesGestures else { return "请更新 \(mac) 上的 DUO你电脑以使用这些手势。" }
         // VoiceOver keeps three-finger swipes and taps for itself, and no touch of them reaches Sill.
-        var text = voiceOver ? "VoiceOver keeps three-finger gestures for itself, so the rows above do them on \(mac) instead."
-            : "Three fingers on the trackpad or over the stream."
-        text += " While a window streams, a gesture shows the Desktop first, and the opposite gesture closes what one opened. \(mac) does these with its own keyboard shortcuts: one turned off in its Keyboard settings does nothing."
-        if device == "iPad" { text += " Four-finger swipes and a Magic Keyboard trackpad’s gestures stay with iPadOS." }
+        var text = voiceOver ? "VoiceOver 会占用三指手势，可通过上方各行在 \(mac) 上执行。"
+            : "在触控板或画面上使用三指手势。"
+        text += " 串流窗口时，手势会先显示桌面；反向手势可关闭已打开的视图。\(mac) 使用自身的键盘快捷键，如果对应快捷键已关闭，手势不会生效。"
+        if device == "iPad" { text += " 四指滑动和妙控键盘触控板的手势仍由 iPadOS 处理。" }
         return text
     }
 
@@ -584,11 +587,11 @@ struct HostSettingsPanel: View {
     /// gave; otherwise "through your VPN or the internet".
     static func reach(_ info: MacInfo) -> String {
         guard let a = info.addresses.first(where: { $0.kind == MacAddress.vpn || $0.kind == MacAddress.internet }) else {
-            return "through your VPN or the internet"
+            return "通过 VPN 或公网"
         }
-        if a.kind == MacAddress.internet { return "over the internet (\(a.host))" }
-        let name = a.via.isEmpty || a.via.hasPrefix("VPN (") ? "your VPN" : a.via
-        return "through \(name) (\(a.host))"
+        if a.kind == MacAddress.internet { return "通过公网（\(a.host)）" }
+        let name = a.via.isEmpty || a.via.hasPrefix("VPN (") ? "VPN" : a.via
+        return "通过 \(name)（\(a.host)）"
     }
 
     // MARK: Copy
@@ -600,8 +603,8 @@ struct HostSettingsPanel: View {
     /// own (see `header`). A no-break space before each "·" keeps it with the value before it, so a
     /// wrap at larger text never starts a line with one.
     static func readout(_ stream: RunningStream?, route: DiscoveryPolicy.Method? = nil) -> String {
-        let values = stream.map { ["\($0.width)×\($0.height)", "目标 \($0.fps)\u{00A0}fps", "\($0.mbps)\u{00A0}Mbps"] } ?? ["Not streaming"]
-        return (values + [route?.word].compactMap { $0 }).joined(separator: "\u{00A0}· ")
+        let values = stream.map { ["\($0.width)×\($0.height)", "目标 \($0.fps)\u{00A0}fps", "\($0.mbps)\u{00A0}Mbps"] } ?? ["未开始串流"]
+        return (values + [route.map(Self.routeWord)].compactMap { $0 }).joined(separator: "\u{00A0}· ")
     }
 
     /// "48 ms", the last second's median round trip; "–" for a second without a pong.
@@ -614,21 +617,38 @@ struct HostSettingsPanel: View {
     /// word; see `header`).
     static func spokenReadout(_ stream: RunningStream?, route: DiscoveryPolicy.Method? = nil, remote: RemoteRoute? = nil,
                               rttMs: Int? = nil) -> String {
-        var link = route.map { ", " + spoken($0) } ?? ""
+        var link = route.map { "，" + spoken($0) } ?? ""
         if let remote {
-            link = ", connected \(remote.phrase)" + (rttMs.map { ", \($0) millisecond round trip" } ?? "")
+            link = "，" + remoteRouteText(remote) + (rttMs.map { "，往返延迟 \($0) 毫秒" } ?? "")
         }
-        guard let s = stream else { return "Not streaming" + link }
-        return "Streaming \(s.width) by \(s.height), target \(s.fps) frames per second, \(s.mbps) megabits per second"
-            + (s.onVirtualDisplay ? ", on the virtual display" : "") + link
+        guard let s = stream else { return "未开始串流" + link }
+        return "画面 \(s.width) 乘以 \(s.height) 像素，目标每秒 \(s.fps) 帧，码率 \(s.mbps) 兆比特每秒"
+            + (s.onVirtualDisplay ? "，使用虚拟显示器" : "") + link
+    }
+
+    private static func routeWord(_ route: DiscoveryPolicy.Method) -> String {
+        switch route {
+        case .wired: return "有线"
+        case .wifi: return "Wi‑Fi"
+        case .direct: return "直连"
+        }
+    }
+
+    private static func remoteRouteText(_ route: RemoteRoute) -> String {
+        switch route {
+        case .vpn(let name?): return "已通过 \(name) 连接"
+        case .vpn(nil): return "已通过 VPN 连接"
+        case .internet: return "已通过公网连接"
+        case .address: return "已通过地址连接"
+        }
     }
 
     /// The route as VoiceOver says it: a sentence's end rather than the bare word.
     private static func spoken(_ route: DiscoveryPolicy.Method) -> String {
         switch route {
-        case .wired: return "connected by cable"
-        case .wifi: return "connected over Wi-Fi"
-        case .direct: return "connected directly"
+        case .wired: return "已通过数据线连接"
+        case .wifi: return "已通过 Wi-Fi 连接"
+        case .direct: return "已无线直连"
         }
     }
 
@@ -642,8 +662,8 @@ struct HostSettingsPanel: View {
     /// to it by itself), so it cannot come back until it does. Once the switch shows off (turned
     /// off here or on the Mac, with this connection still up for that moment) the warning is moot.
     private func directFooter(on: Bool) -> String {
-        var text = "Lets devices reach \(mac) without a shared Wi\u{2011}Fi network, the way AirDrop does. While it’s on, streaming over Wi\u{2011}Fi can stutter."
-        if on, client.connectedDirectly { text += " This \(device) is connected directly: turning this off disconnects it." }
+        var text = "设备无需与 \(mac) 接入同一 Wi-Fi 网络即可直连，方式类似隔空投送。开启后，Wi-Fi 串流可能出现卡顿。"
+        if on, client.connectedDirectly { text += " 本机当前使用直连，关闭后会断开连接。" }
         return text
     }
 
@@ -778,11 +798,11 @@ private struct ClipboardPasteRow: View {
             HStack(spacing: 8) {
                 Text(title).foregroundStyle(Palette.text)
                 Spacer(minLength: 8)
-                ClipboardPasteButton(client: client)
+                ClipboardPasteButton(client: client, iconOnly: true)
             }
             VStack(alignment: .leading, spacing: 8) {
                 Text(title).foregroundStyle(Palette.text).fixedSize(horizontal: false, vertical: true)
-                ClipboardPasteButton(client: client)
+                ClipboardPasteButton(client: client, iconOnly: true)
             }
             .padding(.vertical, 8)
         }
