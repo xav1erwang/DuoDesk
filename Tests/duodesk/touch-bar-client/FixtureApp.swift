@@ -83,6 +83,68 @@ import StreamProtocol
         } catch { result = "FAIL: \(error)" }
     }
     enum Failure: Error { case failed(String) }
+
+    /// Only the interrupted-session recovery path. Both connections and all statuses are fake.
+    func runRetry() async {
+        do {
+            let inbox = DuoTouchBarInbox()
+            let client = DuoTouchBarClient(inbox: inbox) { [weak self] kind, data in self?.sent.append((kind, data)) }
+            let old = NWConnection(host: "127.0.0.1", port: 1, using: .tcp)
+            let new = NWConnection(host: "127.0.0.1", port: 2, using: .tcp)
+            func subscriptions() -> Int {
+                sent.filter { $0.0 == .touchBarSubscription &&
+                    Wire.decode(TouchBarSubscription.self, from: $0.1)?.watching == true }.count
+            }
+            func expect(_ passed: Bool, _ name: String) throws {
+                if !passed { throw Failure.failed(name) }
+            }
+            func status(_ value: TouchBarStatus, connection: NWConnection) async throws {
+                inbox.receiveStatus(Wire.encode(value), from: connection)
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let starting = TouchBarStatus(availability: .starting)
+            let unavailable = TouchBarStatus(availability: .unavailable)
+            let surface = TouchBarSurface(id: UUID(), pixelWidth: 2008, pixelHeight: 60,
+                                          encodedWidth: 2008, encodedHeight: 60, acceptsInput: true)
+            let live = TouchBarStatus(availability: .live, surface: surface)
+
+            client.setConnection(old); client.setVisible(true)
+            try await status(unavailable, connection: old)
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == 1, "unsupported source must not retry")
+            try await status(starting, connection: old)
+            try await status(unavailable, connection: old)
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == 2, "interrupted startup should retry once")
+            try await status(starting, connection: old)
+            try await status(unavailable, connection: old)
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == 2, "repeated failure must not loop")
+
+            try await status(live, connection: old)
+            try await status(unavailable, connection: old)
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == 3, "live source should regain its retry allowance")
+            try await status(live, connection: old)
+            try await status(unavailable, connection: old)
+            try await status(live, connection: old)
+            let afterRecovery = subscriptions()
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == afterRecovery, "recovered source kept a pending retry")
+            try await status(unavailable, connection: old)
+            client.setConnection(new)
+            let afterChange = subscriptions()
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == afterChange, "old connection retry survived connection change")
+            try await status(starting, connection: new)
+            try await status(unavailable, connection: new)
+            client.setVisible(false)
+            let afterHide = subscriptions()
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == afterHide, "retry survived hiding keyboard")
+            result = "PASS"
+        } catch { result = "FAIL: \(error)" }
+    }
 }
 
 @main struct FixtureApp: App {
@@ -91,6 +153,9 @@ import StreamProtocol
         VStack {
             Text("合成 Touch Bar 客户端夹具：未连接 Mac")
             Text(fixture.result).accessibilityIdentifier("fixture.result")
-        }.task { await fixture.run() }
+        }.task {
+            if CommandLine.arguments.contains("-TouchBarRetryOnly") { await fixture.runRetry() }
+            else { await fixture.run() }
+        }
     }}
 }

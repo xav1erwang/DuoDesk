@@ -17,6 +17,8 @@ import UIKit
     private var parameters: Data?
     private var pendingMove: TouchBarTouch?
     private var moveTimer: DispatchWorkItem?
+    private var retryTask: Task<Void, Never>?
+    private var retriedSinceLive = false
 
     init(inbox: DuoTouchBarInbox, transmit: @escaping (StreamMessageKind, Data) -> Void) {
         self.inbox = inbox; self.transmit = transmit
@@ -49,6 +51,7 @@ import UIKit
 
     private func receive(_ next: TouchBarStatus, from source: NWConnection) {
         guard visible, connection === source, next.isValid else { return }
+        let wasActive = status.availability == .starting || status.availability == .live
         let old = status.surface, new = next.surface
         let changed = old?.id != new?.id || old?.encodedWidth != new?.encodedWidth
             || old?.encodedHeight != new?.encodedHeight || old?.pixelWidth != new?.pixelWidth
@@ -59,11 +62,40 @@ import UIKit
             video.requireTouchBarSurface(new)
         }
         status = next
+        if next.availability == .live {
+            cancelRetry()
+            retriedSinceLive = false
+        } else if next.availability == .starting {
+            cancelRetry()
+        } else if wasActive {
+            retryInterruptedSource(from: source)
+        }
         // The bounded inbox drops a pending frame whenever a newer status wins. That can happen
         // even when only input capability changed and the source UUID stayed the same. Request
         // the actual latest frame after every live status so a now-static bar cannot stay stale.
         // The host coalesces and rate-limits these requests across subscribers.
         if new != nil { requestRefresh() }
+    }
+
+    /// A host that cannot offer a source immediately sends unavailable without starting. Do not
+    /// poll it forever. A source that began (or was live) and then stopped gets one delayed retry;
+    /// a successful live status resets the allowance for a future interruption.
+    private func retryInterruptedSource(from expected: NWConnection) {
+        guard !retriedSinceLive, retryTask == nil else { return }
+        retriedSinceLive = true
+        retryTask = Task { @MainActor [weak self, weak expected] in
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            guard !Task.isCancelled, let self else { return }
+            self.retryTask = nil
+            guard let expected, self.visible, self.connection === expected,
+                  self.status.availability == .unavailable else { return }
+            self.subscribe(true)
+        }
+    }
+
+    private func cancelRetry() {
+        retryTask?.cancel()
+        retryTask = nil
     }
 
     private func receive(_ frame: TouchBarKeyframe, from source: NWConnection) {
@@ -117,6 +149,7 @@ import UIKit
 
     private func clear() {
         inbox.invalidate()
+        cancelRetry(); retriedSinceLive = false
         pendingMove = nil; moveTimer?.cancel(); moveTimer = nil
         parameters = nil
         if status.surface != nil { video.requireTouchBarSurface(nil) }
