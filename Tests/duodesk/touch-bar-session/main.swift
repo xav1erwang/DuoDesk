@@ -36,6 +36,19 @@ final class Results: @unchecked Sendable {
     }
     var state: ([TouchBarStatus], [Int], [String]) { lock.withLock { (statuses, luma, failures) } }
 }
+final class HeldTouches: @unchecked Sendable {
+    struct Item {
+        let message: StreamMessage
+        let connection: NWConnection
+        let route: ClientRoute
+        let permit: TouchBarInputPermit
+    }
+    private let lock = NSLock()
+    private var items: [Item] = []
+    func put(_ item: Item) { lock.withLock { items.append(item) } }
+    func take() -> Item? { lock.withLock { items.isEmpty ? nil : items.removeFirst() } }
+    var count: Int { lock.withLock { items.count } }
+}
 @MainActor final class PermissionFixture {
     var recording = false
     var input = true
@@ -116,12 +129,68 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         }
         guard results.state.2.isEmpty, let surface = results.state.0.last(where: { $0.availability == .live })?.surface,
               surface.acceptsInput, results.state.1.last.map({ abs($0 - 96) <= 20 }) == true else { throw Failure.invalid("live output") }
+        try await waitFor("first input permit") { loop.server.queue.sync { client.touchBarInputPermit != nil } }
+        guard var firstPermit = loop.server.queue.sync(execute: { client.touchBarInputPermit }) else { throw Failure.invalid("first permit") }
         let begin = TouchBarTouch(surfaceID: surface.id, phase: .began, x: 0.2, y: 0.5)
-        session.receive(begin, from: connection, route: .home(.loopback, peer: nil))
-        session.receive(TouchBarTouch(surfaceID: UUID(), phase: .began, x: 0.2, y: 0.5), from: connection, route: route)
+        let held = HeldTouches()
+        loop.server.queue.sync {
+            loop.server.onTouchBarInput = { message, connection, route, permit in
+                held.put(.init(message: message, connection: connection, route: route, permit: permit))
+            }
+        }
+        // The network has read this touch, but its main-actor delivery is deliberately held until
+        // after the subscriber is removed. It must not reach even the fake source.
+        loop.sendControl(.touchBarTouch, payload: Wire.encode(begin))
+        try await waitFor("queued touch") { held.count == 1 }
+        guard let delayed = held.take(), let delayedTouch = Wire.decode(TouchBarTouch.self, from: delayed.message.payload) else {
+            throw Failure.invalid("queued touch decode")
+        }
+        loop.server.setTouchBarSubscription(nil, for: connection)
+        loop.server.queue.sync { }
+        guard !delayed.permit.isValid else { throw Failure.invalid("unsubscribe did not revoke queued input") }
+        session.receive(delayedTouch, from: delayed.connection, route: delayed.route, permit: delayed.permit)
+        guard fake.posted.isEmpty else { throw Failure.invalid("revoked queued touch posted") }
+        loop.server.setTouchBarSubscription(surface.id, for: connection)
+        loop.server.queue.sync { }
+        guard let replacementPermit = loop.server.queue.sync(execute: { client.touchBarInputPermit }),
+              replacementPermit !== firstPermit else { throw Failure.invalid("new subscription did not replace permit") }
+        firstPermit = replacementPermit
+        // A current touch really crosses the paired network path and reaches the synthetic source.
+        loop.sendControl(.touchBarTouch, payload: Wire.encode(begin))
+        try await waitFor("current network touch") { held.count == 1 }
+        guard let current = held.take(), let currentTouch = Wire.decode(TouchBarTouch.self, from: current.message.payload) else {
+            throw Failure.invalid("current touch decode")
+        }
+        session.receive(currentTouch, from: current.connection, route: current.route, permit: current.permit)
+        let end = TouchBarTouch(surfaceID: surface.id, phase: .ended, x: 0.2, y: 0.5)
+        session.receive(end, from: connection, route: route, permit: firstPermit)
+        guard fake.posted.map(\.phase) == [.began, .ended] else { throw Failure.invalid("current network input") }
+        fake.posted.removeAll()
+        let wrongConnection = TouchBarInputPermit(surfaceID: surface.id, connectionID: ObjectIdentifier(fake))
+        session.receive(begin, from: connection, route: route, permit: wrongConnection)
+        guard fake.posted.isEmpty else { throw Failure.invalid("permit bound to another connection") }
+        // A source change must fence a touch that was already read from the old source.
+        loop.sendControl(.touchBarTouch, payload: Wire.encode(begin))
+        try await waitFor("queued touch before source change") { held.count == 1 }
+        guard let oldSource = held.take(), let oldTouch = Wire.decode(TouchBarTouch.self, from: oldSource.message.payload) else {
+            throw Failure.invalid("old source touch decode")
+        }
+        loop.server.beginTouchBarStream(UUID())
+        loop.server.queue.sync { }
+        session.receive(oldTouch, from: oldSource.connection, route: oldSource.route, permit: oldSource.permit)
+        guard !oldSource.permit.isValid, fake.posted.isEmpty else { throw Failure.invalid("source change retained queued input") }
+        loop.server.beginTouchBarStream(surface.id)
+        loop.server.setTouchBarSubscription(surface.id, for: connection)
+        loop.server.queue.sync { }
+        guard let restored = loop.server.queue.sync(execute: { client.touchBarInputPermit }) else { throw Failure.invalid("source restore permit") }
+        firstPermit = restored
+        session.receive(begin, from: connection, route: .home(.loopback, peer: nil), permit: firstPermit)
+        session.receive(TouchBarTouch(surfaceID: UUID(), phase: .began, x: 0.2, y: 0.5), from: connection, route: route, permit: firstPermit)
         guard fake.posted.isEmpty else { throw Failure.invalid("unpaired or stale input") }
-        session.receive(begin, from: connection, route: route)
+        session.receive(begin, from: connection, route: route, permit: firstPermit)
         session.clientLeft(connection)
+        loop.server.queue.sync { }
+        guard !firstPermit.isValid else { throw Failure.invalid("disconnect did not revoke permit") }
         guard fake.posted.map(\.phase) == [.began, .cancelled], fake.stops == 1, session.token == nil else {
             throw Failure.invalid("disconnect release")
         }
@@ -139,18 +208,20 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         guard let readOnly = results.state.0.last(where: { $0.availability == .live })?.surface, !readOnly.acceptsInput else {
             throw Failure.invalid("input preflight")
         }
+        try await waitFor("read-only input permit") { loop.server.queue.sync { client.touchBarInputPermit?.surfaceID == readOnly.id } }
+        guard let readOnlyPermit = loop.server.queue.sync(execute: { client.touchBarInputPermit }) else { throw Failure.invalid("read-only permit") }
         let before = fake.posted.count
-        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route)
+        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
         guard fake.posted.count == before else { throw Failure.invalid("posted without input permission") }
         permission.input = true
-        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route)
+        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
         try await waitFor("updated input capability") {
             results.state.0.last(where: { $0.availability == .live })?.surface?.acceptsInput == true
         }
-        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route)
+        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
         guard fake.posted.count == before + 1 else { throw Failure.invalid("input after capability update") }
         permission.input = false
-        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .moved, x: 0.6, y: 0.5), from: connection, route: route)
+        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .moved, x: 0.6, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
         guard fake.stops == 2, fake.posted.count == before + 1, session.token == nil else {
             throw Failure.invalid("input revocation did not stop source")
         }
@@ -170,16 +241,43 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         fake.emit(try frame(192))
         try await waitFor("capture revocation setup") { session.surface != nil }
         guard let finalSurface = session.surface else { throw Failure.invalid("missing final source") }
+        try await waitFor("final input permit") { loop.server.queue.sync { client.touchBarInputPermit?.surfaceID == finalSurface.id } }
+        guard let finalPermit = loop.server.queue.sync(execute: { client.touchBarInputPermit }) else { throw Failure.invalid("final permit") }
         let beforeRevocation = fake.posted.count
-        session.receive(TouchBarTouch(surfaceID: finalSurface.id, phase: .began, x: 0.4, y: 0.5), from: connection, route: route)
+        session.receive(TouchBarTouch(surfaceID: finalSurface.id, phase: .began, x: 0.4, y: 0.5), from: connection, route: route, permit: finalPermit)
         permission.recording = false
-        session.receive(TouchBarTouch(surfaceID: finalSurface.id, phase: .moved, x: 0.5, y: 0.5), from: connection, route: route)
+        session.receive(TouchBarTouch(surfaceID: finalSurface.id, phase: .moved, x: 0.5, y: 0.5), from: connection, route: route, permit: finalPermit)
         guard fake.stops == 4, session.token == nil,
               fake.posted.count == beforeRevocation + 2, fake.posted.last?.phase == .cancelled else {
             throw Failure.invalid("recording revocation did not stop and release")
         }
         try loop.check()
-        print("TOUCH BAR SESSION PASS: synthetic source, paired mTLS/QUIC, hardware frame, permission gates, disconnect/revocation release, late-frame fence and bounded preparation")
+
+        // Model the remove-device close after its queue turn has processed a goodbye. The client
+        // has actually sent a touch, but delivery to the main actor remains paused until then.
+        permission.recording = true
+        session.subscribe(TouchBarSubscription(watching: true), from: connection, route: route)
+        fake.emit(try frame(96))
+        try await waitFor("goodbye setup") { session.surface != nil }
+        guard let closingSurface = session.surface else { throw Failure.invalid("goodbye surface") }
+        try await waitFor("goodbye permit") { loop.server.queue.sync { client.touchBarInputPermit?.surfaceID == closingSurface.id } }
+        let closingTouch = TouchBarTouch(surfaceID: closingSurface.id, phase: .began, x: 0.5, y: 0.5)
+        loop.sendControl(.touchBarTouch, payload: Wire.encode(closingTouch))
+        try await waitFor("queued touch before goodbye") { held.count == 1 }
+        guard let closing = held.take(), let decoded = Wire.decode(TouchBarTouch.self, from: closing.message.payload) else {
+            throw Failure.invalid("goodbye touch decode")
+        }
+        let beforeGoodbye = fake.posted.count
+        loop.server.closeSessions(Goodbye.removed, matching: { _ in true })
+        loop.server.queue.sync { }
+        session.receive(decoded, from: closing.connection, route: closing.route, permit: closing.permit)
+        guard !closing.permit.isValid, fake.posted.count == beforeGoodbye else { throw Failure.invalid("goodbye retained queued input") }
+        loop.server.setTouchBarSubscription(closingSurface.id, for: connection)
+        loop.server.queue.sync { }
+        guard loop.server.queue.sync(execute: { client.touchBarInputPermit == nil && client.touchBarClosing }) else {
+            throw Failure.invalid("closing session resubscribed")
+        }
+        print("TOUCH BAR SESSION PASS: synthetic source, paired mTLS/QUIC, hardware frame, permission gates, connection-bound queued-touch fencing, unsubscribe/source change/goodbye, late-frame fence and bounded preparation")
         print("SCOPE: injected fake permissions and source; no actual capture or system input, no physical Touch Bar, Duo, WAN or FPS acceptance")
     }
     static func main() async {

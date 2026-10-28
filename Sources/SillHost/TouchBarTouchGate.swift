@@ -2,6 +2,21 @@
 import Foundation
 import StreamProtocol
 
+/// A network-side subscription can be revoked while its touch waits for the main actor. The
+/// short admission and revocation share a lock: a queued touch cannot start after revocation.
+/// The admitted action must be nonblocking and must never call back into the network queue.
+final class TouchBarInputPermit: @unchecked Sendable {
+    let surfaceID: UUID
+    let connectionID: ObjectIdentifier
+    private let gate = VideoOutputPermit()
+    init(surfaceID: UUID, connectionID: ObjectIdentifier) {
+        self.surfaceID = surfaceID; self.connectionID = connectionID
+    }
+    var isValid: Bool { gate.isValid }
+    func revoke() { gate.invalidate() }
+    @discardableResult func admit(_ action: () -> Void) -> Bool { gate.admit(action) }
+}
+
 /// Serially owned by the host's coordinator. One paired device can hold a Touch Bar contact at
 /// a time. Disconnecting, hiding the bar or replacing its surface returns the release the caller
 /// must deliver (or invalidate the backend if input authorization has disappeared).

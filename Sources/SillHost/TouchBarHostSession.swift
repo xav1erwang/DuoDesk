@@ -19,6 +19,8 @@ struct TouchBarCapturedFrame: @unchecked Sendable {
 
 @MainActor protocol TouchBarCaptureSource: AnyObject {
     /// These operations must return promptly; capture callbacks may arrive on a separate queue.
+    /// In particular, post must never block or call back into StreamServer's network queue:
+    /// its admission lock also serializes network-side subscription revocation.
     func start(onFrame: @escaping @Sendable (TouchBarCapturedFrame) -> Void,
                onStopped: @escaping @Sendable () -> Void) throws
     func post(_ touch: TouchBarTouch) -> Bool
@@ -64,8 +66,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
 
 /// Coordinates a source, a hardware-only independent encoder, paired subscribers and one touch.
 /// The factory defaults to no source; the current product does not advertise an unverified DFR API.
-/// Before connecting this to live network input, bind each queued touch to a revocable connection
-/// permit so a goodbye or pairing removal can invalidate it even if it is already on the main actor.
+/// A queued touch must carry the network subscription's revocable input permit to the main actor.
 @MainActor final class TouchBarHostSession {
     private let server: StreamServer
     private let makeSource: () -> (any TouchBarCaptureSource)?
@@ -144,10 +145,11 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         if subscribers.isEmpty { stop() }
     }
 
-    func receive(_ event: TouchBarTouch, from connection: NWConnection, route: ClientRoute) {
+    func receive(_ event: TouchBarTouch, from connection: NWConnection, route: ClientRoute, permit: TouchBarInputPermit) {
         let id = ObjectIdentifier(connection)
         guard route.encrypted, route.pairedName != nil, subscribers[id] != nil,
-              let surface, let source else { return }
+              let surface, let source, permit.surfaceID == surface.id, permit.connectionID == id,
+              permit.isValid else { return }
         guard recordingAllowed() else { stop(); return }
         guard inputAllowed() else {
             if touch.release() != nil { stop() }
@@ -155,9 +157,13 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         }
         // A newly granted input capability is published before any touch can use it.
         guard surface.acceptsInput else { updateInputCapability(true); return }
-        guard let accepted = touch.accept(event, from: id, surface: surface, subscribed: true,
-                                          paired: true, inputAllowed: true) else { return }
-        if !source.post(accepted) { stop() }
+        var failed = false
+        permit.admit {
+            guard let accepted = touch.accept(event, from: id, surface: surface, subscribed: true,
+                                              paired: true, inputAllowed: true) else { return }
+            failed = !source.post(accepted)
+        }
+        if failed { stop() }
     }
 
     private func updateInputCapability(_ allowed: Bool) {

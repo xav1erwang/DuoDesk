@@ -68,6 +68,8 @@ final class StreamServer {
         var inflightFrames = 0    // video frames only
         /// One independently decodable Touch Bar packet may be in the connection at a time.
         var touchBarSurface: UUID?
+        var touchBarInputPermit: TouchBarInputPermit?
+        var touchBarClosing = false
         var touchBarFrameInFlight = false
         var touchBarRefreshWanted = false
         var oldestUnackedFrameAt: TimeInterval?   // last time a frame was drained, or queued from 0 (dead-peer detection)
@@ -166,6 +168,8 @@ final class StreamServer {
     var onClientRouteChanged: ((NWConnection, ClientLink.Route?) -> Void)?
     /// A message from a client (selectSource, launchApp). Called on the network queue.
     var onMessage: ((StreamMessage, NWConnection) -> Void)?
+    /// A Touch Bar touch retains the permit that was current when the network queue read it.
+    var onTouchBarInput: ((StreamMessage, NWConnection, ClientRoute, TouchBarInputPermit) -> Void)?
     /// A client fell behind and lost a delta frame; the encoder should produce a keyframe now
     /// rather than in up to 4 s. Called on the network queue.
     var onKeyframeNeeded: (() -> Void)?
@@ -1097,6 +1101,8 @@ final class StreamServer {
             // Closing or revoking a session stops new side-stream data immediately, before the
             // goodbye's bounded grace period and the connection's eventual unregister.
             client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+            client.touchBarClosing = true
+            client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
             if client.transport?.validatePath(connection.currentPath) == false { connection.cancel(); return }
         }
         Self.sayGoodbye(payload: Wire.encode(goodbye), on: connection, queue: queue, within: within)
@@ -1119,6 +1125,11 @@ final class StreamServer {
         queue.async { [self] in
             let data = StreamMessage(kind: .goodbye, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                                      payload: Wire.encode(goodbye)).serialized()
+            for client in clients.values {
+                client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+                client.touchBarClosing = true
+                client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
+            }
             for client in clients.values where client.connection.state == .ready {
                 guard client.transport?.validatePath(client.connection.currentPath) != false else { client.connection.cancel(); continue }
                 group.enter()
@@ -1353,6 +1364,7 @@ final class StreamServer {
     /// connection that was never registered (refused, or failed before it was ready) leaves no line.
     private func unregister(_ id: ObjectIdentifier) {
         guard let client = clients.removeValue(forKey: id) else { return }
+        client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
         pendingDecoderRecovery.remove(id)
         if pendingDecoderRecovery.isEmpty { cancelDecoderRecovery() }
         // The path callback retains this client, which retains its connection. Break that cycle
@@ -1457,6 +1469,7 @@ final class StreamServer {
             for client in clients.values {
                 client.touchBarSurface = nil
                 client.touchBarRefreshWanted = false
+                client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
             }
         }
         touchBarIngressLock.unlock()
@@ -1469,17 +1482,21 @@ final class StreamServer {
             guard let client = clients[ObjectIdentifier(connection)] else { return }
             guard let token else {
                 client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+                client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
                 return
             }
             // A delayed request for an older source cannot unsubscribe the current source.
             guard touchBarToken == token else { return }
-            guard client.route.encrypted, client.route.pairedName != nil,
+            guard !client.touchBarClosing, client.route.encrypted, client.route.pairedName != nil,
                   client.connection.state == .ready, transportAllows(client) else {
                 client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+                client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
                 return
             }
             guard client.touchBarSurface != token else { return }
             client.touchBarSurface = token
+            client.touchBarInputPermit?.revoke()
+            client.touchBarInputPermit = TouchBarInputPermit(surfaceID: token, connectionID: ObjectIdentifier(connection))
             client.touchBarRefreshWanted = false
             onTouchBarKeyframeNeeded?(token)
         }
@@ -1582,6 +1599,17 @@ final class StreamServer {
                     }
                 } else if header.kind == .requestKeyframe {
                     if payload.isEmpty { self.requestDecoderRecovery(from: client) }
+                } else if header.kind == .touchBarTouch {
+                    // Do not queue an unpaired, unsubscribed or oversized touch to the main actor.
+                    // The permit is checked again there after any intervening revoke or restart.
+                    if payload.count <= 4096, let token = self.touchBarToken, let permit = client.touchBarInputPermit,
+                       !client.touchBarClosing, client.route.encrypted, client.route.pairedName != nil,
+                       client.touchBarSurface == token, permit.surfaceID == token,
+                       permit.connectionID == ObjectIdentifier(c), permit.isValid {
+                        let message = StreamMessage(kind: header.kind, timestamp: header.timestamp,
+                                                    isKeyframe: header.isKeyframe, payload: payload)
+                        self.onTouchBarInput?(message, c, client.route, permit)
+                    }
                 } else if header.kind == .pairingWanted && client.route.isRemote {
                     // "Show your pairing code" comes only from a device near the Mac: ignored here.
                 } else {
