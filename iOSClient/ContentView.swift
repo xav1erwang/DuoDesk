@@ -939,9 +939,9 @@ struct ConnectScreen: View {
     /// "Pair with Mac mini" over the home card; "Add a Mac" over Add a Mac and an outside link's
     /// confirmation.
     private var title: String {
-        if client.pendingLink != nil || adding { return "Add a Mac" }
-        if let mac = homeCard { return DiscoveryPolicy.HomeCopy.cardTitle(mac: mac) }
-        return "Connect to a Mac"
+        if client.pendingLink != nil || adding { return "添加 Mac" }
+        if let mac = homeCard { return "与 \(mac) 配对" }
+        return "连接 Mac"
     }
 
     private var device: String { StreamClient.deviceWord }
@@ -1055,13 +1055,31 @@ struct ConnectScreen: View {
             // column. Vertically it is still centred (ColumnOverFooter): what adds height moves it up
             // by half as much. It wraps, never truncates, under the home card ("Pair with" and a
             // long Mac name).
-            Text(title)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Palette.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 10)
-                .accessibilityAddTraits(carded ? .isHeader : [])
-                .accessibilityFocused($titleFocused)
+            HStack(spacing: 12) {
+                if !carded && client.pendingLink == nil {
+                    Image(systemName: "laptopcomputer")
+                        .font(.system(size: 21, weight: .medium))
+                        .foregroundStyle(Palette.text)
+                        .frame(width: 48, height: 48)
+                        .background(Palette.control, in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityHidden(true)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    if !carded && client.pendingLink == nil {
+                        Text("DUO你电脑")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Palette.muted)
+                    }
+                    Text(title)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Palette.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityFocused($titleFocused)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, carded ? 0 : 8)
 
             if let link = client.pendingLink {
                 LinkConfirmation(link: link, pair: {
@@ -1092,7 +1110,7 @@ struct ConnectScreen: View {
     }
 
     @ViewBuilder private var rows: some View {
-        Text(client.status)
+        Text(connectionStatus)
             .font(.system(size: 13))
             .foregroundStyle(Palette.muted)
             .fixedSize(horizontal: false, vertical: true)
@@ -1174,7 +1192,7 @@ struct ConnectScreen: View {
 
         // Always the last line, from the first frame, so nothing moves when it is needed.
         Button(action: unfold) {
-            Text("Add a Mac…")
+            Label("添加 Mac", systemImage: "plus")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Palette.accent)
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -1182,7 +1200,15 @@ struct ConnectScreen: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Pairs this \(device) with a Mac so you can reach it away from home.")
+        .accessibilityHint("使用 Mac 上的配对码建立连接")
+    }
+
+    private var connectionStatus: String {
+        switch client.status {
+        case StreamClient.lookingOnNetwork: return "正在搜索局域网中的 Mac…"
+        case StreamClient.lookingNearby: return "正在搜索局域网和附近的 Mac…"
+        default: return client.status
+        }
     }
 
     /// A saved Mac's row: Connect (a Remote row) or Connect Remotely (its network row, to try the

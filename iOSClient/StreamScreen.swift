@@ -174,6 +174,7 @@ struct StreamScreen: View {
     /// This device's Larger Picture switch (the Settings panel's This iPhone; docs/larger-picture-plan.md).
     /// It acts only while a window streams (`largerPictureNow`).
     @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
+    @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
     /// Larger Picture as it was in effect when the Settings panel opened (`largerPictureNow`), which
     /// the arrangement keeps until the panel closes; nil while it is closed. The panel hangs under row
     /// 1, which the arrangement moves by the picture's growth (157 pt on an 18 Pro Max), so a change
@@ -394,9 +395,9 @@ struct StreamScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: UIScreen.modeDidChangeNotification).receive(on: RunLoop.main)) { _ in
             sendViewport(after: 0.25)
         }
-        // Away from home the stream rate follows the route (60 fps through a VPN or the internet): a
-        // session that stops being away (the move home) asks for its full rate whatever path it took
-        // (docs/remote-bundle-plan.md §7.3).
+        // The lower-deck rate menu changes this device's request, not the physical Mac display.
+        .onChange(of: preferredFPS) { _, _ in sendViewport(after: 0.25) }
+        // Refresh the request after a route change; the user's rate preference applies on both paths.
         .onChange(of: client.remoteRoute) { _, _ in sendViewport() }
         // The link's line over the stream (§6.7): a report arriving or clearing, or the panel, the
         // drawer or the pairing overlay opening or closing over it.

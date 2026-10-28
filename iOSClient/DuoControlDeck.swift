@@ -10,15 +10,18 @@ struct DuoControlDeck: View {
     let showSettings: () -> Void
     let showSystemKeyboard: () -> Void
     @AppStorage("duodesk.controlMode") private var mode: DuoControlMode = .combined
+    @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
     @State private var capsLock = false
 
     var body: some View {
         GeometryReader { geometry in
-            let room = max(0, geometry.size.height - (mode == .combined ? 126 : 116))
+            let room = max(0, geometry.size.height - (mode == .combined ? 168 : 158))
             let keyHeight = mode == .combined ? min(220, max(200, room * 0.61)) : max(200, room)
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 toolbar
                 if mode.hasKeyboard {
+                    DuoTouchBarStrip()
+                        .frame(height: 30)
                     DuoKeyboardView(latched: $latched, capsLock: $capsLock,
                                     inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
                         .frame(height: keyHeight)
@@ -60,15 +63,19 @@ struct DuoControlDeck: View {
             HStack(spacing: 3) {
                 ForEach(DuoControlMode.allCases) { item in
                     Button { mode = item } label: {
-                        Label(title(item), systemImage: symbol(item))
-                            .font(.system(size: 12, weight: .semibold))
-                            .labelStyle(.titleAndIcon)
-                            .frame(maxWidth: .infinity, minHeight: 38)
-                            .foregroundStyle(mode == item ? Color.white : Color(white: 0.24))
-                            .background(mode == item ? Color(white: 0.22) : Color.clear,
-                                        in: RoundedRectangle(cornerRadius: 7))
+                        ViewThatFits(in: .horizontal) {
+                            Label(title(item), systemImage: symbol(item))
+                                .labelStyle(.titleAndIcon)
+                            Image(systemName: symbol(item))
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .foregroundStyle(mode == item ? Color.white : Color(white: 0.22))
+                        .background(mode == item ? Color(white: 0.20) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(Text(title(item)))
                     .accessibilityAddTraits(mode == item ? [.isSelected] : [])
                     .accessibilityIdentifier("duo.mode.\(item.rawValue)")
                 }
@@ -78,10 +85,37 @@ struct DuoControlDeck: View {
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.5)))
             .frame(maxWidth: 430)
             Spacer(minLength: 0)
+            rateMenu
             deckButton("系统键盘", symbol: "keyboard.badge.ellipsis", action: showSystemKeyboard)
             deckButton("设置", symbol: "gearshape", action: showSettings)
         }
-        .frame(height: 44)
+        .frame(height: 50)
+    }
+
+    private var rateMenu: some View {
+        Menu {
+            Picker("目标帧率", selection: Binding(
+                get: { DuoStreamPolicy.normalizedFPS(preferredFPS) },
+                set: { preferredFPS = DuoStreamPolicy.normalizedFPS($0) }
+            )) {
+                Text("60 FPS").tag(60)
+                Text("120 FPS").tag(120)
+            }
+        } label: {
+            VStack(spacing: 1) {
+                Text("\(DuoStreamPolicy.normalizedFPS(preferredFPS))")
+                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                Text("FPS")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(Color(white: 0.22))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel("目标帧率")
+        .accessibilityValue("\(DuoStreamPolicy.normalizedFPS(preferredFPS)) FPS")
+        .accessibilityHint("选择本机请求的帧率，实际帧率会受连接和 Mac 上限影响")
+        .accessibilityIdentifier("duo.rate")
     }
 
     private func deckButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
@@ -89,7 +123,7 @@ struct DuoControlDeck: View {
             Image(systemName: symbol)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Color(white: 0.25))
-                .frame(width: 38, height: 44)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -127,9 +161,34 @@ struct DuoControlDeck: View {
     private func symbol(_ mode: DuoControlMode) -> String {
         switch mode {
         case .keyboard: return "keyboard"
-        case .trackpad: return "rectangle"
+        case .trackpad: return "hand.draw"
         case .combined: return "laptopcomputer"
         }
+    }
+}
+
+/// Reserved for the Mac's real Touch Bar. No placeholder image or simulated button acts as live data.
+private struct DuoTouchBarStrip: View {
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "rectangle")
+                .font(.system(size: 11, weight: .medium))
+            Text("Touch Bar")
+                .font(.system(size: 11, weight: .semibold))
+            Spacer(minLength: 8)
+            Text("暂不可用")
+                .font(.system(size: 11))
+        }
+        .foregroundStyle(Color.white.opacity(0.72))
+        .padding(.horizontal, 12)
+        .background {
+            RoundedRectangle(cornerRadius: 9)
+                .fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.08)],
+                                     startPoint: .top, endPoint: .bottom))
+        }
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("duo.touchbar.unavailable")
     }
 }
 
@@ -153,10 +212,17 @@ private struct DuoKeyboardView: View {
                         HStack(spacing: gap) {
                             ForEach(Array(zip(row, widths)), id: \.0.id) { key, width in
                                 Button { press(key) } label: {
-                                    Text(legend(key))
-                                        .font(.system(size: key.legend.count > 2 ? 11 : 15, weight: .medium))
-                                        .frame(width: width, height: rowHeight)
-                                        .contentShape(Rectangle())
+                                    Group {
+                                        if case .inputSource = key.action {
+                                            Image(systemName: "globe")
+                                                .font(.system(size: 15, weight: .medium))
+                                        } else {
+                                            Text(legend(key))
+                                                .font(.system(size: key.legend.count > 2 ? 11 : 15, weight: .medium))
+                                        }
+                                    }
+                                    .frame(width: width, height: rowHeight)
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(DuoKeycapStyle(selected: selected(key)))
                                 .buttonRepeatBehavior(isRepeatable(key) ? .enabled : .disabled)
@@ -242,9 +308,9 @@ private struct DuoConnectionReadout: View {
             Text("接收 \(client.linkStats.map { String($0.fps) } ?? "—") · 显示 \(displayedFPS.map(String.init) ?? "—") FPS")
                 .monospacedDigit()
         }
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(Color(white: 0.3))
-        .frame(height: 12)
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(Color(white: 0.25))
+        .frame(height: 16)
         .task {
             while !Task.isCancelled {
                 if let metrics = await client.displayView.presentationMetrics() {

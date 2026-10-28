@@ -385,7 +385,7 @@ struct HostSettingsPanel: View {
                 }
             }
             RowDivider()
-            AdaptiveRow(title: "Frame Rate", since: client.settings.pendingSince(.maxFPS)) {
+            AdaptiveRow(title: "Mac 帧率上限", since: client.settings.pendingSince(.maxFPS)) {
                 // A Mac-held value such as 90 selects no segment, as on the Mac.
                 Picker("Frame Rate", selection: binding(shown.maxFPS) { HostSettingsChange(maxFPS: $0) }) {
                     Text("60 fps").tag(60)
@@ -630,25 +630,13 @@ struct HostSettingsPanel: View {
         return text
     }
 
-    /// Under the stream rows: what Quality counts and what its top presets need (the Mac's
-    /// Settings › Streaming says the same). A frame rate limit above what this screen shows changes
-    /// nothing for it, which is worth saying on a 60 Hz device; away from home this device asks
-    /// for 60 fps.
+    /// This panel changes the Mac's limit. The lower deck separately sets this device's request.
     private var streamFooter: String {
         _ = powerState
-        var text = "Quality is per 60 fps; a 120 fps stream gets twice as much. " + QualityPreset.fastLinkNote
-        let away = client.awayCapsFrameRate
-        let wanted = StreamClient.wantedFPS(remote: away)
-        guard wanted < 120 else { return text }
-        if away, StreamClient.wantedFPS() > wanted {
-            text += " Away from home, this \(device) asks for \(wanted) fps, which halves the data your Mac sends."
-        } else if ProcessInfo.processInfo.isLowPowerModeEnabled, StreamClient.screenMaximumFPS() >= 120 {
-            text += " Low Power Mode holds this \(device) to \(wanted) fps."
-        } else {
-            text += " This \(device) shows up to \(wanted) fps."
-        }
-        return text
+        let wanted = StreamClient.wantedFPS(remote: client.awayCapsFrameRate)
+        return "本机当前请求 \(wanted) FPS。实际帧率还受 Mac 上限、设备状态和连接状况影响。120 FPS 需要更多带宽。"
     }
+
 }
 
 // MARK: - Rows

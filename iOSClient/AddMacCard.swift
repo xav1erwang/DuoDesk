@@ -113,16 +113,16 @@ struct AddMacCard: View {
                 .foregroundStyle(Palette.text)
                 .fixedSize(horizontal: false, vertical: true)
         } else if editing && (layout.compactPortrait || layout.short) {
-            Text("Type the address and code from your Mac.")
+            Text("输入 Mac 上显示的地址和配对码。")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
         } else {
-            Text("Pair once, and Sill reaches your Mac from anywhere, through your VPN or the internet.")
+            Text("配对后，可以通过局域网或公网地址直连 Mac。")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(typed ? "Type the address and code that Sill shows on your Mac."
-                       : "On your Mac, choose Pair iPhone or iPad… in the Sill menu, then point this \(device) at the code.")
+            Text(typed ? "输入 Mac 上显示的地址和配对码。"
+                       : "在 Mac 的 DUO你电脑菜单中选择配对，然后扫描配对码。")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -135,13 +135,13 @@ struct AddMacCard: View {
         VStack(alignment: .leading, spacing: 8) {
             // The home card dials the door its ask reached: the code alone.
             if home == nil {
-                PairingField(prompt: "100.101.102.103 or mac.example.net", label: "Address", text: $address,
+                PairingField(prompt: "100.101.102.103 or mac.example.net", label: "Mac 地址", text: $address,
                              keyboard: .URL, submit: .next)
                     .focused($focus, equals: .address)
                     .onSubmit { focus = .code }
                 if let problem, problem.field == .address { ProblemLine(text: problem.text) }
             }
-            PairingField(prompt: "0000 0000 0000", label: "Code", text: $code, keyboard: PairingField.codeKeyboard, submit: .go, monospaced: true)
+            PairingField(prompt: "0000 0000 0000", label: "配对码", text: $code, keyboard: PairingField.codeKeyboard, submit: .go, monospaced: true)
                 .focused($focus, equals: .code)
                 .onSubmit(pair)
                 .onChange(of: code) { _, typed in
@@ -150,7 +150,7 @@ struct AddMacCard: View {
                 }
             if let problem, problem.field == .code { ProblemLine(text: problem.text) }
             Button(action: pair) {
-                Text("Pair")
+                Text("配对")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.black)
                     .frame(minWidth: 88, minHeight: 44)
@@ -188,7 +188,7 @@ struct AddMacCard: View {
             .frame(minHeight: 24)
             .accessibilityElement(children: .combine)
         case .paired(let name):
-            Label("Paired with \(name).", systemImage: "checkmark.circle.fill")
+            Label("已与 \(name) 配对", systemImage: "checkmark.circle.fill")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.text)
         case .failed(let p) where p.field == .card || !typed:
@@ -212,7 +212,7 @@ struct AddMacCard: View {
 
     @ViewBuilder private var pathToggle: some View {
         if CodeScanner.isSupported || scannerMode != .live {
-            Button(typed ? "Scan Code Instead" : "Enter Code Instead") {
+            Button(typed ? "改为扫码" : "输入配对码") {
                 client.pairing = .idle
                 focus = nil
                 typed.toggle()
@@ -225,7 +225,7 @@ struct AddMacCard: View {
     }
 
     private var cancelButton: some View {
-        Button("Cancel", action: close)
+        Button("取消", action: close)
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(Palette.accent)
             .frame(minHeight: 44)

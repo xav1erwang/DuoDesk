@@ -55,15 +55,14 @@ extension StreamClient {
         lastViewport = nil
     }
 
-    /// The rate the host should stream at for this device: the panel's ceiling (120 on ProMotion
-    /// iPads and iPhones, 60 on the iPad mini and other 60 Hz panels), or 60 while Low Power Mode
-    /// is on, which caps the panel at 60 anyway. Public-IP and VPN sessions use the same ceiling.
-    /// `StreamScreen` re-sends the viewport when the panel or power state changes.
+    /// The user's requested rate, further limited by the active screen and Low Power Mode.
+    /// Both local and public-IP routes use the same preference. It defaults to 60 for the first
+    /// release; the number is a request rather than a measurement of changed desktop images.
     static func wantedFPS(remote: Bool = false) -> Int {
-        // A public-IP route can carry 120 fps too. Let the panel, low-power state and host limit
-        // decide; network congestion is handled by the existing bounded video queue and link report.
+        let preferred = UserDefaults.standard.integer(forKey: DuoStreamPolicy.preferredFPSKey)
         return DuoStreamPolicy.requestedFPS(panelMaximum: screenMaximumFPS(),
-                                            lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
+                                            lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                                            preferredFPS: preferred)
     }
 
     /// Kept for the shared settings UI; this fork does not cap a route merely for being remote.

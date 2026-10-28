@@ -12,8 +12,13 @@ enum DuoControlMode: String, CaseIterable, Identifiable {
 }
 
 enum DuoStreamPolicy {
-    static func requestedFPS(panelMaximum: Int, lowPower: Bool) -> Int {
-        let ceiling = min(120, max(30, panelMaximum))
+    // The first release starts at 60; 120 is an explicit opt-in and remains bounded by the
+    // screen and Low Power Mode. This is a request, not a claim about delivered distinct frames.
+    static let preferredFPSKey = "duodesk.preferredFPS"
+    static let defaultFPS = 60
+    static func normalizedFPS(_ value: Int) -> Int { value == 120 ? 120 : defaultFPS }
+    static func requestedFPS(panelMaximum: Int, lowPower: Bool, preferredFPS: Int = defaultFPS) -> Int {
+        let ceiling = min(normalizedFPS(preferredFPS), min(120, max(30, panelMaximum)))
         return lowPower ? min(60, ceiling) : ceiling
     }
 
@@ -104,7 +109,7 @@ enum DuoKeyboardLayout {
         [modifier("shift", 0xE1, 17, 2.25, name: "Shift")]
             + letters("zxcvbnm") + [key(",", 0x36, shifted: "<"), key(".", 0x37, shifted: ">"),
                                        key("/", 0x38, shifted: "?"), modifier("shift", 0xE5, 17, 2.25, name: "右 Shift")],
-        [DuoKey(id: "input-source", legend: "🌐", action: .inputSource, accessibilityName: "切换 Mac 输入法"),
+        [DuoKey(id: "input-source", legend: "globe", action: .inputSource, accessibilityName: "切换 Mac 输入法"),
          modifier("⌃", 0xE0, 18, name: "Control"), modifier("⌥", 0xE2, 19, name: "Option"),
          modifier("⌘", 0xE3, 20, 1.25, name: "Command"), key("", 0x2C, 4, name: "空格"),
          modifier("⌘", 0xE7, 20, 1.25, name: "右 Command"), modifier("⌥", 0xE6, 19, name: "右 Option"),
