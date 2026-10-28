@@ -12,16 +12,20 @@ import UIKit
     let video: HEVCDisplayView
     private let inbox: DuoTouchBarInbox
     private let transmit: (StreamMessageKind, Data) -> Void
+    private let clockNow: () -> ContinuousClock.Instant
     private var connection: NWConnection?
     private var visible = false
     private var parameters: Data?
     private var pendingMove: TouchBarTouch?
     private var moveTimer: DispatchWorkItem?
     private var retryTask: Task<Void, Never>?
-    private var retriedSinceLive = false
+    private var retrySentSinceStableLive = false
+    private var liveSince: ContinuousClock.Instant?
+    private static let stableLiveInterval: Duration = .seconds(10)
 
-    init(inbox: DuoTouchBarInbox, transmit: @escaping (StreamMessageKind, Data) -> Void) {
-        self.inbox = inbox; self.transmit = transmit
+    init(inbox: DuoTouchBarInbox, clockNow: @escaping () -> ContinuousClock.Instant = { ContinuousClock().now },
+         transmit: @escaping (StreamMessageKind, Data) -> Void) {
+        self.inbox = inbox; self.transmit = transmit; self.clockNow = clockNow
         video = HEVCDisplayView(frame: .zero)
         inbox.attach(status: { [weak self] status, source in self?.receive(status, from: source) },
                      frame: { [weak self] frame, source in self?.receive(frame, from: source) })
@@ -51,7 +55,8 @@ import UIKit
 
     private func receive(_ next: TouchBarStatus, from source: NWConnection) {
         guard visible, connection === source, next.isValid else { return }
-        let wasActive = status.availability == .starting || status.availability == .live
+        let wasLive = status.availability == .live
+        let wasActive = status.availability == .starting || wasLive
         let old = status.surface, new = next.surface
         let changed = old?.id != new?.id || old?.encodedWidth != new?.encodedWidth
             || old?.encodedHeight != new?.encodedHeight || old?.pixelWidth != new?.pixelWidth
@@ -61,14 +66,22 @@ import UIKit
             parameters = nil
             video.requireTouchBarSurface(new)
         }
+        // Repeated capability-only live statuses do not restart the stability clock. A short
+        // live announcement followed by failure must not replenish the retry budget forever.
+        if wasLive, next.availability != .live, let liveSince,
+           liveSince.duration(to: clockNow()) >= Self.stableLiveInterval {
+            retrySentSinceStableLive = false
+        }
         status = next
         if next.availability == .live {
             cancelRetry()
-            retriedSinceLive = false
+            if !wasLive || changed { liveSince = clockNow() }
         } else if next.availability == .starting {
             cancelRetry()
-        } else if wasActive {
-            retryInterruptedSource(from: source)
+            liveSince = nil
+        } else {
+            liveSince = nil
+            if wasActive { retryInterruptedSource(from: source) }
         }
         // The bounded inbox drops a pending frame whenever a newer status wins. That can happen
         // even when only input capability changed and the source UUID stayed the same. Request
@@ -79,16 +92,16 @@ import UIKit
 
     /// A host that cannot offer a source immediately sends unavailable without starting. Do not
     /// poll it forever. A source that began (or was live) and then stopped gets one delayed retry;
-    /// a successful live status resets the allowance for a future interruption.
+    /// it regains that allowance after ten seconds continuously live, not on a fleeting status.
     private func retryInterruptedSource(from expected: NWConnection) {
-        guard !retriedSinceLive, retryTask == nil else { return }
-        retriedSinceLive = true
+        guard !retrySentSinceStableLive, retryTask == nil else { return }
         retryTask = Task { @MainActor [weak self, weak expected] in
             do { try await Task.sleep(for: .seconds(1)) } catch { return }
             guard !Task.isCancelled, let self else { return }
             self.retryTask = nil
             guard let expected, self.visible, self.connection === expected,
                   self.status.availability == .unavailable else { return }
+            self.retrySentSinceStableLive = true
             self.subscribe(true)
         }
     }
@@ -149,7 +162,7 @@ import UIKit
 
     private func clear() {
         inbox.invalidate()
-        cancelRetry(); retriedSinceLive = false
+        cancelRetry(); retrySentSinceStableLive = false; liveSince = nil
         pendingMove = nil; moveTimer?.cancel(); moveTimer = nil
         parameters = nil
         if status.surface != nil { video.requireTouchBarSurface(nil) }

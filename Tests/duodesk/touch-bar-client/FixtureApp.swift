@@ -84,11 +84,41 @@ import StreamProtocol
     }
     enum Failure: Error { case failed(String) }
 
+    /// A source that announces live and immediately fails must not retry indefinitely.
+    func runFlappingRetry() async {
+        do {
+            let inbox = DuoTouchBarInbox()
+            let client = DuoTouchBarClient(inbox: inbox) { [weak self] kind, data in self?.sent.append((kind, data)) }
+            let connection = NWConnection(host: "127.0.0.1", port: 1, using: .tcp)
+            func subscriptions() -> Int {
+                sent.filter { $0.0 == .touchBarSubscription &&
+                    Wire.decode(TouchBarSubscription.self, from: $0.1)?.watching == true }.count
+            }
+            func status(_ value: TouchBarStatus) async throws {
+                inbox.receiveStatus(Wire.encode(value), from: connection)
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let surface = TouchBarSurface(id: UUID(), pixelWidth: 2008, pixelHeight: 60,
+                                          encodedWidth: 2008, encodedHeight: 60, acceptsInput: true)
+            client.setConnection(connection); client.setVisible(true)
+            try await status(TouchBarStatus(availability: .starting))
+            try await status(TouchBarStatus(availability: .unavailable))
+            try await Task.sleep(for: .milliseconds(1200))
+            guard subscriptions() == 2 else { throw Failure.failed("first retry missing") }
+            try await status(TouchBarStatus(availability: .live, surface: surface))
+            try await status(TouchBarStatus(availability: .unavailable))
+            try await Task.sleep(for: .milliseconds(1200))
+            guard subscriptions() == 2 else { throw Failure.failed("brief live status caused another retry") }
+            result = "PASS"
+        } catch { result = "FAIL: \(error)" }
+    }
+
     /// Only the interrupted-session recovery path. Both connections and all statuses are fake.
     func runRetry() async {
         do {
             let inbox = DuoTouchBarInbox()
-            let client = DuoTouchBarClient(inbox: inbox) { [weak self] kind, data in self?.sent.append((kind, data)) }
+            var now = ContinuousClock().now
+            let client = DuoTouchBarClient(inbox: inbox, clockNow: { now }) { [weak self] kind, data in self?.sent.append((kind, data)) }
             let old = NWConnection(host: "127.0.0.1", port: 1, using: .tcp)
             let new = NWConnection(host: "127.0.0.1", port: 2, using: .tcp)
             func subscriptions() -> Int {
@@ -122,15 +152,25 @@ import StreamProtocol
             try expect(subscriptions() == 2, "repeated failure must not loop")
 
             try await status(live, connection: old)
+            now = now.advanced(by: .seconds(5))
+            try await status(live, connection: old) // capability-only repeat must not reset the clock
+            now = now.advanced(by: .seconds(5))
             try await status(unavailable, connection: old)
             try await Task.sleep(for: .milliseconds(1200))
-            try expect(subscriptions() == 3, "live source should regain its retry allowance")
+            try expect(subscriptions() == 3, "stable live source should regain its retry allowance")
             try await status(live, connection: old)
+            now = now.advanced(by: .seconds(10))
             try await status(unavailable, connection: old)
             try await status(live, connection: old)
             let afterRecovery = subscriptions()
             try await Task.sleep(for: .milliseconds(1200))
             try expect(subscriptions() == afterRecovery, "recovered source kept a pending retry")
+            // Cancelling an unsent retry does not consume the new stability allowance.
+            try await status(unavailable, connection: old)
+            try await Task.sleep(for: .milliseconds(1200))
+            try expect(subscriptions() == afterRecovery + 1, "cancelled retry consumed allowance")
+            try await status(live, connection: old)
+            now = now.advanced(by: .seconds(10))
             try await status(unavailable, connection: old)
             client.setConnection(new)
             let afterChange = subscriptions()
@@ -154,7 +194,8 @@ import StreamProtocol
             Text("合成 Touch Bar 客户端夹具：未连接 Mac")
             Text(fixture.result).accessibilityIdentifier("fixture.result")
         }.task {
-            if CommandLine.arguments.contains("-TouchBarRetryOnly") { await fixture.runRetry() }
+            if CommandLine.arguments.contains("-TouchBarFlappingOnly") { await fixture.runFlappingRetry() }
+            else if CommandLine.arguments.contains("-TouchBarRetryOnly") { await fixture.runRetry() }
             else { await fixture.run() }
         }
     }}
