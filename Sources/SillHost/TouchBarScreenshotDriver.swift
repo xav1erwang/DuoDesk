@@ -20,8 +20,77 @@ private enum TouchBarScreenshotFailure: Error {
     case recordingUnavailable, output, process, invalidImage, busy
 }
 
-/// The child writes to an already unlinked 0600 file through /dev/stdout. No screenshot pathname
-/// survives a crash. The bytes are read only after child exit and are never logged or persisted.
+/// Image I/O requires a regular destination URL; `/dev/stdout` is not a suitable PNG destination.
+/// Each still uses an unpredictable 0700 directory and is removed after its child exits. The lock
+/// is also inherited as the child's stdin, so a later launch can remove abandoned directories only
+/// after both the host and its capture child have stopped. No image bytes or paths are logged.
+private final class TouchBarScreenshotDirectory: @unchecked Sendable {
+    private static let prefix = "duodesk-touchbar-"
+    private static let lockName = ".capture.lock"
+    private static let cleanupOnce: Void = cleanupAbandoned(in: NSTemporaryDirectory())
+    let path: String
+    let imagePath: String
+    let lockHandle: FileHandle
+    private var cleaned = false
+
+    init() throws {
+        _ = Self.cleanupOnce
+        var name = Array((NSTemporaryDirectory() + Self.prefix + "XXXXXX").utf8CString)
+        guard name.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress!) }) != nil else {
+            throw TouchBarScreenshotFailure.output
+        }
+        let path = name.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+        let lockPath = (path as NSString).appendingPathComponent(Self.lockName)
+        let fd = open(lockPath, O_CREAT | O_EXCL | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { _ = rmdir(path); throw TouchBarScreenshotFailure.output }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd); _ = unlink(lockPath); _ = rmdir(path); throw TouchBarScreenshotFailure.output
+        }
+        self.path = path
+        self.imagePath = (path as NSString).appendingPathComponent("TouchBar.png")
+        self.lockHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    func cleanup() {
+        guard !cleaned else { return }
+        cleaned = true
+        // removeItem removes a symlink itself rather than following it. This directory belongs to
+        // this capture, and the lock is held until removal completes.
+        try? FileManager.default.removeItem(atPath: path)
+        try? lockHandle.close()
+    }
+
+    deinit { cleanup() }
+
+    static func cleanupAbandoned(in root: String) {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root) else { return }
+        for entry in entries {
+            let suffix = entry.dropFirst(prefix.count)
+            guard entry.hasPrefix(prefix), suffix.count == 6,
+                  suffix.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else { continue }
+            let directory = (root as NSString).appendingPathComponent(entry)
+            let dirFD = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard dirFD >= 0 else { continue }
+            defer { close(dirFD) }
+            var dirInfo = stat()
+            guard fstat(dirFD, &dirInfo) == 0, dirInfo.st_uid == geteuid(),
+                  dirInfo.st_mode & 0o077 == 0 else { continue }
+            let lockFD = openat(dirFD, lockName, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
+            guard lockFD >= 0 else { continue }
+            defer { close(lockFD) }
+            var lockInfo = stat(), current = stat()
+            guard fstat(lockFD, &lockInfo) == 0, lockInfo.st_uid == geteuid(),
+                  lockInfo.st_mode & S_IFMT == S_IFREG, lockInfo.st_mode & 0o077 == 0,
+                  flock(lockFD, LOCK_EX | LOCK_NB) == 0,
+                  lstat(directory, &current) == 0, current.st_dev == dirInfo.st_dev,
+                  current.st_ino == dirInfo.st_ino else { continue }
+            try? FileManager.default.removeItem(atPath: directory)
+        }
+    }
+}
+
+/// Uses the system's normal filename output in a private, short-lived directory. The resulting
+/// regular file is read only after child exit, with a strict size limit and without following links.
 private final class TouchBarScreenshotCommand: TouchBarStillTask, @unchecked Sendable {
     private static let maximumBytes = 8 * 1024 * 1024
     private let process: Process
@@ -31,7 +100,7 @@ private final class TouchBarScreenshotCommand: TouchBarStillTask, @unchecked Sen
         // A test-injected driver gate cannot authorize a real system capture.
         guard CGPreflightScreenCaptureAccess() else { throw TouchBarScreenshotFailure.recordingUnavailable }
         return try launch(executable: URL(fileURLWithPath: "/usr/sbin/screencapture"),
-                          arguments: ["-b", "-x", "-T", "0", "-t", "png", "/dev/stdout"], completion: completion)
+                          arguments: ["-b", "-x", "-T", "0", "-t", "png"], completion: completion)
     }
 
     #if DUO_TOUCH_BAR_STILL_TESTING
@@ -44,39 +113,36 @@ private final class TouchBarScreenshotCommand: TouchBarStillTask, @unchecked Sen
 
     private static func launch(executable: URL, arguments: [String],
                                completion: @escaping @Sendable (Result<Data, Error>) -> Void) throws -> TouchBarScreenshotCommand {
-        var name = Array((NSTemporaryDirectory() + "duo-touchbar-XXXXXX").utf8CString)
-        let fd = name.withUnsafeMutableBufferPointer { mkstemp($0.baseAddress!) }
-        guard fd >= 0 else { throw TouchBarScreenshotFailure.output }
-        guard fchmod(fd, 0o600) == 0 else {
-            _ = name.withUnsafeBufferPointer { unlink($0.baseAddress!) }
-            close(fd); throw TouchBarScreenshotFailure.output
-        }
-        guard name.withUnsafeBufferPointer({ unlink($0.baseAddress!) }) == 0 else {
-            close(fd); throw TouchBarScreenshotFailure.output
-        }
-        let output = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        let directory = try TouchBarScreenshotDirectory()
         let process = Process()
-        process.executableURL = executable; process.arguments = arguments
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
+        process.executableURL = executable; process.arguments = arguments + [directory.imagePath]
+        process.standardInput = directory.lockHandle
+        process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         process.qualityOfService = .utility
         process.terminationHandler = { task in
-            defer { try? output.close() }
+            let result: Result<Data, Error>
             guard task.terminationReason == .exit, task.terminationStatus == 0 else {
+                directory.cleanup()
                 completion(.failure(TouchBarScreenshotFailure.process)); return
             }
-            do { completion(.success(try readOutput(fd))) }
-            catch { completion(.failure(error)) }
+            do { result = .success(try readOutput(directory.imagePath)) }
+            catch { result = .failure(error) }
+            directory.cleanup()
+            completion(result)
         }
         do { try process.run() }
-        catch { process.terminationHandler = nil; try? output.close(); throw error }
+        catch { process.terminationHandler = nil; directory.cleanup(); throw error }
         return TouchBarScreenshotCommand(process)
     }
 
-    private static func readOutput(_ fd: Int32) throws -> Data {
+    private static func readOutput(_ path: String) throws -> Data {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw TouchBarScreenshotFailure.output }
+        defer { close(fd) }
         var info = stat()
-        guard fstat(fd, &info) == 0, info.st_size > 0, info.st_size <= maximumBytes else {
+        guard fstat(fd, &info) == 0, info.st_uid == geteuid(), info.st_mode & S_IFMT == S_IFREG,
+              info.st_size > 0, info.st_size <= maximumBytes else {
             throw TouchBarScreenshotFailure.output
         }
         let count = Int(info.st_size)
@@ -266,6 +332,9 @@ final class TouchBarScreenshotDriver: TouchBarSurfaceDriver, @unchecked Sendable
     }
     static func systemCommand(completion: @escaping @Sendable (Result<Data, Error>) -> Void) throws -> any TouchBarStillTask {
         try TouchBarScreenshotCommand.system(completion: completion)
+    }
+    static func cleanAbandonedDirectoriesForTesting(in root: String) {
+        TouchBarScreenshotDirectory.cleanupAbandoned(in: root)
     }
     #endif
 }

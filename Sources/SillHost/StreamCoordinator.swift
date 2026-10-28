@@ -250,8 +250,8 @@ package final class StreamCoordinator {
     package let remote: RemoteAccess?
     /// Each admitted connection's route (home and its origin, or the remote door's), from the server.
     private var routes: [ObjectIdentifier: ClientRoute] = [:]
-    /// The side lane is created only if a paired client asks. Its factory currently provides no
-    /// source; neither a simulator nor an unverified private system interface is enabled here.
+    /// The side lane is created only if a paired client asks. Its source is a read-only system
+    /// still-image candidate; no simulator or private system input interface is enabled here.
     private var touchBarSession: TouchBarHostSession?
     /// Away from home (docs/remote-bundle-plan.md §5; AwayPolicy): every connected device is away,
     /// so the away quality is the target. Kept while no device is connected; the next to register

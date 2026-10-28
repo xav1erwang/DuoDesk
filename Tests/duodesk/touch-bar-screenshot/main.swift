@@ -3,6 +3,7 @@
 import ApplicationServices
 import CoreGraphics
 import CoreVideo
+import Darwin
 import Foundation
 import ImageIO
 import StreamProtocol
@@ -94,15 +95,25 @@ func pixel(_ buffer: CVPixelBuffer, x: Int, y: Int) throws -> [UInt8] {
 @main struct Check {
     @MainActor static func run() async throws {
         guard CommandLine.arguments.count == 2 else { throw Failure.check("synthetic child path") }
+        let childURL = URL(fileURLWithPath: CommandLine.arguments[1])
+        let temp = NSTemporaryDirectory()
+        let before = Set(try FileManager.default.contentsOfDirectory(atPath: temp).filter { $0.hasPrefix("duodesk-touchbar-") })
         let results = Results()
-        let child = try TouchBarScreenshotDriver.syntheticCommand(executable: URL(fileURLWithPath: CommandLine.arguments[1])) {
+        let child = try TouchBarScreenshotDriver.syntheticCommand(executable: childURL) {
             results.commandResult($0)
         }
-        try await waitFor("anonymous stdout") { results.child != nil }
-        guard case .success(let bytes)? = results.child, bytes == Data([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]) else {
-            throw Failure.check("anonymous /dev/stdout bytes")
+        try await waitFor("private ImageIO output") { results.child != nil }
+        guard case .success(let bytes)? = results.child,
+              let image = CGImageSourceCreateWithData(bytes as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(image, 0, nil) as? [CFString: Any],
+              (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue == 4,
+              (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue == 1 else {
+            throw Failure.check("private ImageIO PNG")
         }
+        let after = Set(try FileManager.default.contentsOfDirectory(atPath: temp).filter { $0.hasPrefix("duodesk-touchbar-") })
+        guard after.subtracting(before).isEmpty else { throw Failure.check("capture directory not removed") }
         withExtendedLifetime(child) { }
+        try checkAbandonedDirectories(childURL)
         if !CGPreflightScreenCaptureAccess() {
             var denied = false
             do { _ = try TouchBarScreenshotDriver.systemCommand { _ in }; }
@@ -196,9 +207,51 @@ func pixel(_ buffer: CVPixelBuffer, x: Int, y: Int) throws -> [UInt8] {
         permission.revoke()
         try await waitFor("revocation stops capture") { results.state.1 == 4 && revokedDriver.isQuiescent }
         guard revokedRunner.counts.starts == 1 else { throw Failure.check("capture started after permission revoked") }
-        print("TOUCH BAR STILL SOURCE PASS: anonymous stdout, permission gate, synthetic PNG orientation and padding, changed-frame filtering, cancellation, stalled-child slot and invalid data")
+        print("TOUCH BAR STILL SOURCE PASS: private ImageIO output and cleanup, inherited lock, permission gate, synthetic PNG orientation and padding, changed-frame filtering, cancellation, stalled-child slot and invalid data")
         print("SCOPE: fake runner and synthetic child only; no real system Touch Bar, screen capture, input, Duo or FPS acceptance")
     }
+    @MainActor static func checkAbandonedDirectories(_ executable: URL) throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("duodesk-cleanup-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        func fixture(_ suffix: String, marker: Bool = true) throws -> (String, Int32) {
+            let dir = (root as NSString).appendingPathComponent("duodesk-touchbar-" + suffix)
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            if !marker { return (dir, -1) }
+            let fd = open((dir as NSString).appendingPathComponent(".capture.lock"), O_CREAT | O_EXCL | O_RDWR, 0o600)
+            guard fd >= 0 else { throw Failure.check("fixture lock") }
+            return (dir, fd)
+        }
+        let (abandoned, abandonedFD) = try fixture("AAAAAA")
+        close(abandonedFD)
+        let (unrelated, _) = try fixture("BBBBBB", marker: false)
+        let (held, heldFD) = try fixture("CCCCCC")
+        guard flock(heldFD, LOCK_EX | LOCK_NB) == 0 else { close(heldFD); throw Failure.check("fixture flock") }
+        let outsider = (root as NSString).appendingPathComponent("outside")
+        try Data([1, 2, 3]).write(to: URL(fileURLWithPath: outsider))
+        try FileManager.default.createSymbolicLink(atPath: (abandoned as NSString).appendingPathComponent("TouchBar.png"),
+                                                   withDestinationPath: outsider)
+        let task = Process()
+        task.executableURL = executable
+        task.arguments = [(held as NSString).appendingPathComponent("TouchBar.png"), "--hold"]
+        let lock = FileHandle(fileDescriptor: heldFD, closeOnDealloc: true)
+        task.standardInput = lock; task.standardOutput = FileHandle.nullDevice; task.standardError = FileHandle.nullDevice
+        try task.run()
+        try lock.close() // Simulate the host disappearing while its child is still alive.
+        TouchBarScreenshotDriver.cleanAbandonedDirectoriesForTesting(in: root)
+        guard !FileManager.default.fileExists(atPath: abandoned), FileManager.default.fileExists(atPath: outsider),
+              FileManager.default.fileExists(atPath: unrelated), FileManager.default.fileExists(atPath: held) else {
+            task.terminate(); throw Failure.check("abandoned cleanup and inherited child lock")
+        }
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else { throw Failure.check("synthetic held child") }
+        TouchBarScreenshotDriver.cleanAbandonedDirectoriesForTesting(in: root)
+        guard !FileManager.default.fileExists(atPath: held), FileManager.default.fileExists(atPath: outsider),
+              FileManager.default.fileExists(atPath: unrelated) else { throw Failure.check("cleanup after child exit") }
+    }
+
     static func main() async {
         do { try await run() }
         catch { print("TOUCH BAR STILL SOURCE FAIL: \(error)"); exit(1) }
