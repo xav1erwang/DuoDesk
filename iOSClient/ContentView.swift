@@ -1151,9 +1151,8 @@ struct ConnectScreen: View {
                 }
                 .frame(width: 32, height: 32)
             }
-            .accessibilityLabel(mac.route == .remote ? "\(mac.name), Remote" : mac.homeWord.label(name: mac.name))
-            .accessibilityHint(mac.route == .remote ? "Connects through your VPN or the internet."
-                               : mac.homeWord.hint(name: mac.name, device: device, direct: mac.direct))
+            .accessibilityLabel(mac.rowAccessibilityLabel)
+            .accessibilityHint(mac.rowAccessibilityHint(device: device))
             .contextMenu { menu(for: mac) }
         }
 

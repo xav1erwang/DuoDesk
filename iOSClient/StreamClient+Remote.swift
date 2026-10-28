@@ -67,31 +67,30 @@ enum PairingProblem: Equatable {
 
     var text: String {
         switch self {
-        case .address: return "That doesn’t look like an address. Try 100.101.102.103 or mac.example.net."
-        case .zone: return "Remove the part after %: it only works on this network."
-        case .codeLength: return "A code has 12 digits."
-        case .codeTypo: return "That code has a typo. Check it against your Mac."
+        case .address: return "地址格式有误，请输入 IP 地址或域名。"
+        case .zone: return "请移除 % 后的部分；该地址只在当前网络有效。"
+        case .codeLength: return "配对码应为 12 位数字。"
+        case .codeTypo: return "配对码有误，请核对 Mac 上显示的数字。"
         case .wrongCode(let left):
-            // A no-break space keeps the count with its word when the line wraps ("4 / tries left").
-            return "That code didn’t work. Check the code on your Mac. \(left)\u{00A0}tr\(left == 1 ? "y" : "ies") left."
-        case .notPairing(let mac): return "\(mac) isn’t pairing right now. On your Mac, choose Pair iPhone or iPad… first."
+            return "配对码不正确，请核对 Mac 上的数字。还可尝试 \(left) 次。"
+        case .notPairing(let mac): return "\(mac) 当前未开启配对。请在 Mac 的 DUO你电脑菜单中选择“Pair iPhone or iPad…”。"
         case .stopped(let mac):
-            return "\(mac) stopped pairing after too many wrong codes. Choose Pair iPhone or iPad… on your Mac for a new code."
-        case .expired: return "This code expired. Choose Pair iPhone or iPad… on your Mac for a new one."
+            return "输入错误次数过多，\(mac) 已停止配对。请在 Mac 上重新打开配对获取新配对码。"
+        case .expired: return "配对码已过期，请在 Mac 上重新打开配对获取新配对码。"
         case .proofFailed(let host):
-            return "Pairing didn’t finish: the Mac at \(host) couldn’t show it knows the code. Pair from the same network as your Mac, or scan the code instead."
-        case .nothingAnswered(let host): return "Nothing answered at \(host). Check the address, and that Sill is open on your Mac."
-        case .notSill(let host): return "Something answered at \(host), but it isn’t Sill, or its Sill is too old to pair."
-        case .localNetwork(let host): return "To reach \(host), allow Local Network for Sill in Settings."
-        case .notALink: return "That’s not a Sill code."
-        case .noKey(let reason): return "This \(StreamClient.deviceWord) couldn’t make its key (\(reason))."
-        case .homeStopped(let mac): return DiscoveryPolicy.HomeCopy.stopped(mac: mac)
-        case .homeExpired(let mac): return DiscoveryPolicy.HomeCopy.expired(mac: mac)
-        case .homeClosed(let mac): return DiscoveryPolicy.HomeCopy.closed(mac: mac)
-        case .homeProofFailed(let mac): return DiscoveryPolicy.HomeCopy.proofFailed(mac: mac)
-        case .homeNoAnswer(let mac): return DiscoveryPolicy.HomeCopy.noAnswer(mac: mac)
-        case .proofFailedOverStream(let mac): return DiscoveryPolicy.HomeCopy.proofFailedOverStream(mac: mac)
-        case .noAnswerOverStream(let mac): return DiscoveryPolicy.HomeCopy.noAnswerOverStream(mac: mac)
+            return "配对未完成：无法验证 \(host) 上的 Mac 是否持有配对码。请在同一网络中配对，或扫描配对码。"
+        case .nothingAnswered(let host): return "\(host) 没有响应。请检查地址，并确认 Mac 已打开 DUO你电脑。"
+        case .notSill(let host): return "\(host) 有响应，但不是兼容的 DUO你电脑主机，或主机版本过旧。"
+        case .localNetwork(let host): return "无法访问 \(host)，请检查 DUO你电脑的本地网络权限。"
+        case .notALink: return "这不是有效的 DUO你电脑配对码。"
+        case .noKey(let reason): return "此 \(StreamClient.deviceWord) 无法创建配对密钥（\(reason)）。"
+        case .homeStopped(let mac): return "输入错误次数过多，\(mac) 已停止配对。请在 Mac 上重新打开配对后再试。"
+        case .homeExpired(let mac): return "配对码已过期，轻点 \(mac) 获取新配对码。"
+        case .homeClosed(let mac): return "配对码已失效，请在 \(mac) 上重新打开配对后再试。"
+        case .homeProofFailed(let mac): return "配对未完成：无法验证 \(mac) 是否持有配对码。请轻点 \(mac) 重试。"
+        case .homeNoAnswer(let mac): return "\(mac) 没有响应。请确认 Mac 已打开 DUO你电脑，然后重试。"
+        case .proofFailedOverStream(let mac): return "配对未完成：无法验证 \(mac) 是否持有配对码。"
+        case .noAnswerOverStream(let mac): return "\(mac) 没有响应，请重试。"
         case .macSaid(let words): return words
         }
     }
@@ -101,35 +100,35 @@ enum PairingProblem: Equatable {
 enum RemoteCopy {
     static func dialFailure(_ failure: RemoteDialPolicy.Failure, mac: String, candidate: RemoteDialPolicy.Candidate?,
                             vpnName: String?, device: String) -> String {
-        let at = candidate?.display ?? "its address"
+        let at = candidate?.display ?? "该地址"
         switch failure {
         case .wrongMac:
-            return "This isn’t the \(mac) this \(device) paired with. If Sill was set up again on it, forget it here and pair again."
+            return "这不是此 \(device) 配对过的 \(mac)。如果 Mac 重新设置过 DUO你电脑，请移除记录后重新配对。"
         case .revoked:
-            return "\(mac) no longer accepts this \(device). Pair it again from Sill’s Settings on the Mac."
+            return "\(mac) 不再接受此 \(device)，请在 Mac 的 DUO你电脑设置中重新配对。"
         case .remoteOff:
-            return "\(mac) turned off Remote Access."
+            return "\(mac) 已关闭远程访问。"
         case .busy:
-            return "\(mac) is already serving 8 devices."
+            return "\(mac) 已连接 8 台设备。"
         case .refused:
-            return "\(mac) refused the connection. Check that this \(device) is still paired and Remote Access is on in DUO你电脑 on the Mac. If you changed its port, connect at home once."
+            return "\(mac) 拒绝连接。请检查此 \(device) 是否仍已配对，以及 Mac 上是否开启远程访问；更改端口后可先在同一网络中连接一次。"
         case .vpnOff:
             let name = candidate.flatMap { vpnLabel($0) }
-            return name.map { "\($0) looks off on this \(device). Turn it on, then tap \(mac)." }
-                ?? "Your VPN looks off on this \(device). Turn it on, then tap \(mac)."
+            return name.map { "此 \(device) 上的 \($0) 可能未开启，请开启后轻点 \(mac)。" }
+                ?? "此 \(device) 上的 VPN 可能未开启，请开启后轻点 \(mac)。"
         case .nameNotFound:
-            let host = candidate?.host ?? "its name"
-            return RemoteDialPolicy.isTailscaleName(host) ? "This \(device) can’t look up \(host). Is Tailscale on?"
-                                                        : "This \(device) can’t look up \(host)."
+            let host = candidate?.host ?? "该域名"
+            return RemoteDialPolicy.isTailscaleName(host) ? "此 \(device) 无法解析 \(host)，请检查 Tailscale 是否开启。"
+                                                        : "此 \(device) 无法解析 \(host)。"
         case .localNetwork:
-            return "To reach \(at), allow Local Network for Sill in Settings."
+            return "无法访问 \(at)，请检查 DUO你电脑的本地网络权限。"
         case .notSill:
-            return "Something answered at \(at), but it isn’t Sill. Your home’s internet address may have changed."
+            return "\(at) 有响应，但不是 DUO你电脑主机。家中的公网地址可能已更改。"
         case .noAnswer:
             if let c = candidate, c.kind == MacAddress.internet, !c.isName {
-                return "\(mac) didn’t answer at \(at). If your home’s internet address changed, connect at home once to update it, or add an address name on the Mac."
+                return "\(mac) 在 \(at) 没有响应。如果家中公网地址已更改，可在同一网络中连接一次更新地址，或在 Mac 上添加域名。"
             }
-            return vpnName.map { "\(mac) didn’t answer. It may be asleep, or \($0) may be off on the Mac." } ?? "\(mac) didn’t answer. It may be asleep."
+            return vpnName.map { "\(mac) 没有响应，可能已睡眠，或 Mac 上的 \($0) 未开启。" } ?? "\(mac) 没有响应，可能已睡眠。"
         }
     }
 
@@ -185,7 +184,7 @@ extension StreamClient {
         savedSightings.since[macID] = nil
         savedSightings.leftAt[macID] = nil
         persistSavedMacs()
-        status = "Forgot \(name). It still lists this \(Self.deviceWord) until you remove it in Sill’s Settings on the Mac."
+        status = "已移除 \(name)。此 \(Self.deviceWord) 仍列在 Mac 的设备列表中，可在 DUO你电脑设置中移除。"
     }
 
     /// The card's Cancel while a pairing dial runs: it stops, nothing is saved. The home card's too:
@@ -299,7 +298,7 @@ extension StreamClient {
         }
         let name = displayName(macID)
         guard let identity = DeviceIdentity.existing() else {
-            status = "This \(Self.deviceWord) has no key for \(name). Pair it again."
+            status = "此 \(Self.deviceWord) 没有 \(name) 的配对密钥，请重新配对。"
             return
         }
         cancelRemoteDial()
@@ -308,7 +307,7 @@ extension StreamClient {
             old.cancel()
         }
         hostName = name
-        status = why == .automatic ? "Reconnecting to \(name) remotely…" : "Connecting to \(name) remotely…"
+        status = why == .automatic ? "正在重新远程连接 \(name)…" : "正在远程连接 \(name)…"
         let candidates = retryTCP.map { [$0.candidate] } ?? RemoteDialPolicy.order(mac.allAddresses, remotePort: mac.remotePort,
             lastWorked: mac.lastWorked, localIPv4: Self.localIPv4Networks())
         #if DEBUG
@@ -343,7 +342,7 @@ extension StreamClient {
                     if self.reconnect?.macID == macID { self.reconnect?.macID = newer.macID }
                     macID = newer.macID
                     self.hostName = self.displayName(macID)
-                    self.status = why == .automatic ? "Reconnecting to \(self.hostName) remotely…" : "Connecting to \(self.hostName) remotely…"
+                    self.status = why == .automatic ? "正在重新远程连接 \(self.hostName)…" : "正在远程连接 \(self.hostName)…"
                 } else if winner.fingerprint != pin {
                     winner.connection.cancel()           // cannot happen: the verify block took no other key
                     self.remoteDialFailed(macID: macID, why: why, failure: .wrongMac, candidate: winner.candidate)
@@ -421,7 +420,7 @@ extension StreamClient {
         remoteRoute = r
         askedNearby = false
         connectedAt = Date()
-        status = "Connected to \(hostName)"
+        status = "已连接 \(hostName)"
         if case .paired = pairing { pairing = .idle }
         resetLiveness()
         if let id = s.macID, let i = savedMacs.firstIndex(where: { $0.macID == id }) {
@@ -457,7 +456,7 @@ extension StreamClient {
             default:
                 r.remoteFailures += 1
                 r.nextRemoteAt = ProcessInfo.processInfo.systemUptime + DiscoveryPolicy.remoteRetryDelay(afterFailures: r.remoteFailures)
-                status = "Reconnecting to \(name) remotely…"
+                status = "正在重新远程连接 \(name)…"
             }
             reconnect = r
             reconnectIfListed()
@@ -465,7 +464,7 @@ extension StreamClient {
             afterPairingWatch?.cancel()
             afterPairingWatch = nil
             pairing = .idle
-            status = failure == .remoteOff ? words : "\(name) is saved. Tap it to connect."
+            status = failure == .remoteOff ? words : "已保存 \(name)，轻点连接。"
         case .tap, .connectRemotely, .launchArgument:
             status = words
         }
@@ -706,7 +705,7 @@ extension StreamClient {
             if now >= r.lostAt + DiscoveryPolicy.redialWindow {
                 r.remoteAllowed = false
                 reconnect = r
-                status = "Stopped trying to reach \(r.name). Tap it to try again."
+                status = "已停止尝试连接 \(r.name)，轻点可重试。"
             } else {
                 let due = DiscoveryPolicy.remoteDialDue(listed: network != nil || direct != nil, lostAt: r.lostAt,
                                                         networkLeftAt: savedSightings.leftAt[id], rememberedDirect: r.rememberedDirect,
@@ -911,7 +910,7 @@ extension StreamClient {
         }
         pairingDial?.cancel()
         let shown = macName ?? candidates.first?.display ?? "your Mac"
-        pairing = .working("Pairing with \(shown)…")
+        pairing = .working("正在与 \(shown) 配对…")
         #if DEBUG
         print("remote: pairing with \(shown) (\(method)) at \(candidates.map(\.key))")
         #endif
@@ -1088,7 +1087,7 @@ extension StreamClient {
             self.cancelRemoteDial()
             if let c = self.connection { self.connection = nil; c.cancel(); self.tearDown(status: self.status, restartSearch: false) }
             self.pairing = .idle
-            self.status = "\(self.displayName(macID)) is saved. Tap it to connect."
+            self.status = "已保存 \(self.displayName(macID))，轻点连接。"
             self.discoveryChanged()
         }
         afterPairingWatch?.cancel()

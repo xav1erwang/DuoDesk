@@ -619,10 +619,10 @@ enum MockCatalog {
         case .addcodeerror:
             client.pairing = .failed(.wrongCode(triesLeft: 4))
         case .pairing:
-            client.pairing = .working("Pairing with Mac mini…")
+            client.pairing = .working("正在与 Mac mini 配对…")
         case .remotedial:
             client.macs = remoteRows
-            client.status = "Connecting to Mac mini remotely…"
+            client.status = "正在远程连接 Mac mini…"
         case .remotefail:
             client.macs = remoteRows
             client.status = failureCopy(UserDefaults.standard.string(forKey: "SillRemoteFailure") ?? "timeout")
@@ -693,7 +693,7 @@ enum MockCatalog {
         case "wrongmac": return copy(.wrongMac, vpn)
         case "revoked": return copy(.revoked, vpn)
         case "notsill": return copy(.notSill, router)
-        case "gaveup": return "Stopped trying to reach Mac mini. Tap it to try again."
+        case "gaveup": return "已停止尝试连接 Mac mini，轻点可重试。"
         // A session's goodbyes, in the words GoodbyePolicy gives them.
         case "quit": return GoodbyePolicy.outcome(Goodbye(reason: Goodbye.quit), mac: "Mac mini", device: device, saved: true).text
         case "removed": return GoodbyePolicy.outcome(Goodbye(reason: Goodbye.removed), mac: "Mac mini", device: device, saved: true).text

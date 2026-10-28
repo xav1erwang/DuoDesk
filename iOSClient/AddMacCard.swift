@@ -135,7 +135,7 @@ struct AddMacCard: View {
         VStack(alignment: .leading, spacing: 8) {
             // The home card dials the door its ask reached: the code alone.
             if home == nil {
-                PairingField(prompt: "100.101.102.103 or mac.example.net", label: "Mac 地址", text: $address,
+                PairingField(prompt: "IP 地址或域名", label: "Mac 地址", text: $address,
                              keyboard: .URL, submit: .next)
                     .focused($focus, equals: .address)
                     .onSubmit { focus = .code }

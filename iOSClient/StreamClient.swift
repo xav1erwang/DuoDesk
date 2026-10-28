@@ -64,9 +64,33 @@ struct FoundMac: Identifiable, Hashable {
     /// A network "Mac mini" and a Remote "Mac mini" are two rows. Names are unique per route
     /// (DiscoveryPolicy.rows lists a name once), Mac IDs among Remote rows.
     var id: String { route == .remote ? "remote:\(macID ?? name)" : "\(route.rawValue):\(name)" }
-    /// The word at the end of its row: "Remote" for a saved Mac dialed away from home, else its home
-    /// word (`homeWord`): how its Mac is reachable (`method`), "Not paired" or "Update Sill", or nil.
-    var word: String? { route == .remote ? "Remote" : homeWord.word }
+    /// The connect screen's route and pairing state. Keep the policy's enum separate from the
+    /// user-facing words so changing presentation does not change connection decisions.
+    var word: String? {
+        if route == .remote { return "远程" }
+        switch homeWord {
+        case .method(.wired): return "有线"
+        case .method(.wifi): return "Wi\u{2011}Fi"
+        case .method(.direct): return "直连"
+        case .method(nil): return nil
+        case .notPaired, .openDoor: return "未配对"
+        case .pairsOverCable: return "有线"
+        case .updateSill: return "更新主机"
+        }
+    }
+
+    var rowAccessibilityLabel: String { word.map { "\(name)，\($0)" } ?? name }
+
+    func rowAccessibilityHint(device: String) -> String {
+        if route == .remote { return "通过 VPN 或公网连接。" }
+        switch homeWord {
+        case .method: return direct ? "无需共用 Wi-Fi 网络即可连接。" : ""
+        case .notPaired: return "\(name) 会显示配对码，配对后连接。"
+        case .openDoor: return "\(name) 允许设备无需配对直接连接。"
+        case .pairsOverCable: return "通过 USB 线配对并连接。"
+        case .updateSill: return "\(name) 上的 DUO你电脑版本过旧，无法连接此 \(device)。"
+        }
+    }
 }
 
 /// How the current connection runs (`Session.route`): set when it starts, again at `.ready` and by
