@@ -149,8 +149,8 @@ def run(config, force=False, status_only=False):
     expiration = profile_expiration(read_profile(app), config)
     if expiration <= now() + dt.timedelta(hours=config.get("renew_before_hours", 48)):
         raise RuntimeError("Xcode did not issue a sufficiently fresh profile; see Local/signing-build.log.")
-    if old_expiration is not None and expiration <= old_expiration:
-        raise RuntimeError("The profile was not extended. The existing device app was left installed.")
+    if old_expiration is not None and (expiration < old_expiration or (not force and expiration == old_expiration)):
+        raise RuntimeError("The profile was not extended or would shorten the existing installation. The existing device app was left installed.")
     info = plistlib.loads((app / "Info.plist").read_bytes())
     if info.get("CFBundleIdentifier") != config["bundle_id"]:
         raise ValueError("The built app identifier does not match the local config.")

@@ -150,6 +150,31 @@ class SigningTests(unittest.TestCase):
                     renew.run(self.config, force=True)
                 self.assertFalse(any(call.args[0][1:4] == ["devicectl", "device", "install"] for call in run.call_args_list))
 
+    def test_force_updates_code_with_the_same_still_valid_profile(self):
+        # Rebuilding source does not necessarily cause Xcode to issue a new profile. A manual
+        # force may install that updated build while preserving the installed expiration; the
+        # automatic renewal path still requires an extension.
+        with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
+            app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
+            app.mkdir(parents=True)
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            expiration = self.time + dt.timedelta(days=6)
+            state_path = Path(directory) / "signing-status.json"
+            old = self.install_record(expiration)
+            state_path.write_text(json.dumps(old))
+            profile = dict(self.profile, ExpirationDate=expiration)
+            with patch.object(renew, "read_profile", return_value=profile), patch.object(renew.subprocess, "run") as run:
+                run.side_effect = [None, None, subprocess.CalledProcessError(1, ["devicectl"])]
+                with self.assertRaises(subprocess.CalledProcessError):
+                    renew.run(self.config, force=True)
+                self.assertEqual(json.loads(state_path.read_text()), old)
+                run.reset_mock(); run.side_effect = None
+                result = renew.run(self.config, force=True)
+                self.assertEqual(result["expires_at"], expiration.isoformat())
+                self.assertEqual(result["status"], "installed")
+                self.assertEqual(run.call_args_list[0].args[0][0], "/usr/bin/xcodebuild")
+                self.assertEqual(run.call_args_list[-1].args[0][1:4], ["devicectl", "device", "install"])
+
     def test_status_does_not_depend_on_an_invalid_cached_build(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
