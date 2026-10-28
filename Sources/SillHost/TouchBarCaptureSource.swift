@@ -2,8 +2,8 @@
 import Foundation
 import StreamProtocol
 
-/// A private display stream's borrowed IOSurface cannot simply be retained beyond its callback
-/// without observing its use-count contract. No real backend is enabled until verified.
+/// A producer's borrowed IOSurface cannot simply be retained beyond its callback without
+/// observing its ownership contract. Backends must expose only capabilities they actually have.
 @MainActor protocol TouchBarCaptureSource: AnyObject {
     /// A capture-only backend stays read-only even when macOS Accessibility is authorized.
     var supportsInput: Bool { get }

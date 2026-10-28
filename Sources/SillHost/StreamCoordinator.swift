@@ -608,7 +608,9 @@ package final class StreamCoordinator {
 
     private func touchBarSessionForRequest() -> TouchBarHostSession {
         if let touchBarSession { return touchBarSession }
-        let session = TouchBarHostSession(server: server, authorized: { [weak self] route in
+        let session = TouchBarHostSession(server: server, makeSource: {
+            TouchBarReadOnlySource(driver: TouchBarScreenshotDriver())
+        }, authorized: { [weak self] route in
             self?.touchBarAuthorized(route) ?? false
         })
         touchBarSession = session

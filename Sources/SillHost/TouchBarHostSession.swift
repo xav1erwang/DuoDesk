@@ -44,7 +44,8 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
 }
 
 /// Coordinates a source, a hardware-only independent encoder, paired subscribers and one touch.
-/// The factory defaults to no source; the current product does not advertise an unverified DFR API.
+/// The default test factory supplies no source. The product coordinator may provide a read-only
+/// system screenshot source; it does not advertise an unverified DFR input API.
 /// A queued touch must carry the network subscription's revocable input permit to the main actor.
 @MainActor final class TouchBarHostSession {
     private let server: StreamServer

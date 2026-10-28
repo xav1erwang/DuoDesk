@@ -26,9 +26,9 @@ private final class TouchBarSourceGate: @unchecked Sendable {
     }
 }
 
-/// Capture-only adapter for a future verified driver. It copies borrowed pixels before the
-/// callback returns, fences late callbacks and never posts a touch. No driver is provided by
-/// the product factory yet; without existing recording permission it fails without a prompt.
+/// Capture-only adapter. It copies borrowed pixels before the callback returns, fences late
+/// callbacks and never posts a touch. Without existing recording permission it fails without a
+/// prompt. The system screenshot driver's physical Touch Bar compatibility remains unverified.
 @MainActor final class TouchBarReadOnlySource: TouchBarCaptureSource {
     enum Failure: Error { case alreadyRunning, recordingUnavailable }
     let supportsInput = false
