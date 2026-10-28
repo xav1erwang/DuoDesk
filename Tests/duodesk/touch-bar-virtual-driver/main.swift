@@ -81,7 +81,9 @@ func surface() throws -> IOSurfaceRef {
         let source = TouchBarReadOnlySource(driver: driver, recordingAllowed: { true })
         let frame: @Sendable (TouchBarCapturedFrame) -> Void = { audit.frame($0) }
         let stopped: @Sendable () -> Void = { audit.ended() }
+        guard driver.isQuiescent else { throw Failure.check("idle driver") }
         try source.start(onFrame: frame, onStopped: stopped)
+        guard !driver.isQuiescent else { throw Failure.check("active driver") }
         try await waitFor("fake runtime start") { fake.counts.0 == 1 }
         let duplicate = TouchBarReadOnlySource(driver: driver, recordingAllowed: { true })
         do { try duplicate.start(onFrame: frame, onStopped: stopped); throw Failure.check("duplicate source") }
@@ -92,6 +94,7 @@ func surface() throws -> IOSurfaceRef {
         try await waitFor("fake borrowed surface") { audit.values.0 == 1 }
         source.stop()
         try await waitFor("fake runtime stop") { fake.counts.1 == 1 }
+        try await waitFor("fake runtime quiescent") { driver.isQuiescent }
         fake.emit(image)
         try await Task.sleep(for: .milliseconds(100))
         guard audit.values.0 == 1, audit.values.1 == 0 else { throw Failure.check("late fake callback") }
@@ -135,8 +138,10 @@ func surface() throws -> IOSurfaceRef {
         do { try second.start(onSurface: { _, _ in }, onStopped: {}); throw Failure.check("unbounded workers") }
         catch TouchBarVirtualDriver.Failure.busy { }
         first.stop()
+        guard !first.isQuiescent else { throw Failure.check("wedged driver released early") }
         release.signal()
         try await waitFor("stalled runtime stops") { stalled.counts.1 == 1 }
+        try await waitFor("stalled driver quiescent") { first.isQuiescent }
         try await waitFor("stalled slot released") {
             do { try second.start(onSurface: { _, _ in }, onStopped: {}); return true }
             catch TouchBarVirtualDriver.Failure.busy { return false }

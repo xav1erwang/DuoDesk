@@ -38,6 +38,8 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
     /// If a private API wedges, the single occupied slot bounds this retained state.
     private var keepAlive: TouchBarVirtualDriver?
     private var running: (UUID, any TouchBarVirtualRuntime)? // only on queue
+    /// Used by an isolated diagnostic to wait for a stopped callback without touching the queue.
+    var isQuiescent: Bool { lock.withLock { keepAlive == nil } }
 
     init(recordingAllowed: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          makeRuntime: @escaping @Sendable () throws -> any TouchBarVirtualRuntime = { TouchBarDFRRuntime() }) {
