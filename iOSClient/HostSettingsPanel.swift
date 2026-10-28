@@ -45,6 +45,8 @@ struct HostSettingsPanel: View {
     /// This device's switch for Larger Picture (docs/larger-picture-plan.md): off unless turned on,
     /// read by the stream screen, never sent.
     @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
+    /// This device's target is independent of the Mac's global frame-rate limit.
+    @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
     /// Whether the switch is offered here, the stream screen's say (`largerPictureOffered`): only on an
     /// iPhone without a hinge whose picture it makes larger.
     @Environment(\.largerPictureOffered) private var offersLargerPicture
@@ -483,6 +485,21 @@ struct HostSettingsPanel: View {
             .padding(.bottom, 6)
             .accessibilityAddTraits(.isHeader)
             .id(Self.gesturesGroupID)
+        Rows {
+            AdaptiveRow(title: "本机目标帧率", since: nil) {
+                Picker("本机目标帧率", selection: Binding(
+                    get: { DuoStreamPolicy.normalizedFPS(preferredFPS) },
+                    set: { preferredFPS = DuoStreamPolicy.normalizedFPS($0) }
+                )) {
+                    Text("60 FPS").tag(60)
+                    Text("120 FPS").tag(120)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .accessibilityIdentifier("duo.settings.rate")
+            }
+        }
+        Footnote(text: "此设备的请求受屏幕、低电量模式和 Mac 帧率上限限制。")
         if offersLargerPicture {
             Rows {
                 Toggle(isOn: $largerPicture) {
