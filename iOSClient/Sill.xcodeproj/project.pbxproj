@@ -60,6 +60,8 @@
 		D0000001000000000000D702 /* DuoControlDeck.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F702 /* DuoControlDeck.swift */; };
 		D0000001000000000000D707 /* DuoTouchBarRemoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F707 /* DuoTouchBarRemoteView.swift */; };
 		D0000001000000000000D708 /* DuoTouchBarTouchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F708 /* DuoTouchBarTouchView.swift */; };
+		D0000001000000000000D709 /* DuoTouchBarInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F709 /* DuoTouchBarInbox.swift */; };
+		D0000001000000000000D70A /* DuoTouchBarClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F70A /* DuoTouchBarClient.swift */; };
 		D0000001000000000000D703 /* HardwareHEVCDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F703 /* HardwareHEVCDecoder.swift */; };
 		D0000001000000000000D799 /* HardwareDecoderRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F799 /* HardwareDecoderRouter.swift */; };
 		D0000001000000000000D704 /* HardwareVideoPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F704 /* HardwareVideoPresenter.swift */; };
@@ -121,6 +123,8 @@
 		D0000001000000000000F702 /* DuoControlDeck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoControlDeck.swift; sourceTree = "<group>"; };
 		D0000001000000000000F707 /* DuoTouchBarRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTouchBarRemoteView.swift; sourceTree = "<group>"; };
 		D0000001000000000000F708 /* DuoTouchBarTouchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTouchBarTouchView.swift; sourceTree = "<group>"; };
+		D0000001000000000000F709 /* DuoTouchBarInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTouchBarInbox.swift; sourceTree = "<group>"; };
+		D0000001000000000000F70A /* DuoTouchBarClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTouchBarClient.swift; sourceTree = "<group>"; };
 		D0000001000000000000F703 /* HardwareHEVCDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareHEVCDecoder.swift; sourceTree = "<group>"; };
 		D0000001000000000000F799 /* HardwareDecoderRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareDecoderRouter.swift; sourceTree = "<group>"; };
 		D0000001000000000000F704 /* HardwareVideoPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareVideoPresenter.swift; sourceTree = "<group>"; };
@@ -152,6 +156,8 @@
 				D0000001000000000000F702 /* DuoControlDeck.swift */,
 				D0000001000000000000F707 /* DuoTouchBarRemoteView.swift */,
 				D0000001000000000000F708 /* DuoTouchBarTouchView.swift */,
+				D0000001000000000000F709 /* DuoTouchBarInbox.swift */,
+				D0000001000000000000F70A /* DuoTouchBarClient.swift */,
 				D0000001000000000000F703 /* HardwareHEVCDecoder.swift */,
 				D0000001000000000000F799 /* HardwareDecoderRouter.swift */,
 				D0000001000000000000F704 /* HardwareVideoPresenter.swift */,
@@ -305,6 +311,8 @@
 				D0000001000000000000D702 /* DuoControlDeck.swift in Sources */,
 				D0000001000000000000D707 /* DuoTouchBarRemoteView.swift in Sources */,
 				D0000001000000000000D708 /* DuoTouchBarTouchView.swift in Sources */,
+				D0000001000000000000D709 /* DuoTouchBarInbox.swift in Sources */,
+				D0000001000000000000D70A /* DuoTouchBarClient.swift in Sources */,
 				D0000001000000000000D703 /* HardwareHEVCDecoder.swift in Sources */,
 				D0000001000000000000D799 /* HardwareDecoderRouter.swift in Sources */,
 				D0000001000000000000D704 /* HardwareVideoPresenter.swift in Sources */,

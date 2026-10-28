@@ -10,6 +10,7 @@ struct DuoTouchBarRemoteView: UIViewRepresentable {
     let surface: TouchBarSurface
     let canBegin: () -> Bool
     let send: (TouchBarTouch) -> Void
+    var onAttach: () -> Void = { }
 
     func makeUIView(context: Context) -> DuoTouchBarContainer {
         let container = DuoTouchBarContainer(video: video)
@@ -24,6 +25,7 @@ struct DuoTouchBarRemoteView: UIViewRepresentable {
     }
 
     private func configure(_ container: DuoTouchBarContainer) {
+        container.onAttach = onAttach
         container.setVideo(video)
         container.touch.configure(surface: surface, canBegin: { video.hasCurrentImage && canBegin() }, send: send)
     }
@@ -32,6 +34,7 @@ struct DuoTouchBarRemoteView: UIViewRepresentable {
 final class DuoTouchBarContainer: UIView {
     private(set) var video: HEVCDisplayView
     let touch = DuoTouchBarTouchView()
+    var onAttach: (() -> Void)?
 
     init(video: HEVCDisplayView) {
         self.video = video
@@ -56,5 +59,10 @@ final class DuoTouchBarContainer: UIView {
         super.layoutSubviews()
         video.frame = bounds
         touch.frame = bounds
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { onAttach?() }
     }
 }

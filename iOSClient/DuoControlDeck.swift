@@ -20,7 +20,7 @@ struct DuoControlDeck: View {
             VStack(spacing: 8) {
                 toolbar
                 if mode.hasKeyboard {
-                    DuoTouchBarStrip()
+                    DuoTouchBarStrip(touchBar: client.touchBar, canBegin: { !client.inputPaused })
                         .frame(height: 30)
                     DuoKeyboardView(latched: $latched, capsLock: $capsLock,
                                     inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
@@ -167,28 +167,42 @@ struct DuoControlDeck: View {
     }
 }
 
-/// Reserved for the Mac's real Touch Bar. No placeholder image or simulated button acts as live data.
+/// Displays only the real side-stream. Older Macs and hosts without a source show a clear status.
 private struct DuoTouchBarStrip: View {
+    @ObservedObject var touchBar: DuoTouchBarClient
+    let canBegin: () -> Bool
+
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "rectangle")
-                .font(.system(size: 11, weight: .medium))
-            Text("Touch Bar")
-                .font(.system(size: 11, weight: .semibold))
-            Spacer(minLength: 8)
-            Text("暂不可用")
-                .font(.system(size: 11))
+        Group {
+            if let surface = touchBar.status.surface {
+                DuoTouchBarRemoteView(video: touchBar.video, surface: surface,
+                                      canBegin: canBegin, send: touchBar.send,
+                                      onAttach: touchBar.requestRefresh)
+            } else {
+                HStack(spacing: 7) {
+                    Image(systemName: "rectangle")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Touch Bar")
+                        .font(.system(size: 11, weight: .semibold))
+                    Spacer(minLength: 8)
+                    Text(touchBar.status.availability == .starting ? "正在连接" : "暂不可用")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(Color.white.opacity(0.72))
+                .padding(.horizontal, 12)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("duo.touchbar.unavailable")
+            }
         }
-        .foregroundStyle(Color.white.opacity(0.72))
-        .padding(.horizontal, 12)
         .background {
             RoundedRectangle(cornerRadius: 9)
                 .fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.08)],
                                      startPoint: .top, endPoint: .bottom))
         }
+        .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("duo.touchbar.unavailable")
+        .onAppear { touchBar.setVisible(true) }
+        .onDisappear { touchBar.setVisible(false) }
     }
 }
 

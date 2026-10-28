@@ -484,6 +484,37 @@ final class StreamClient: ObservableObject {
         return view
     }()
 
+    private let touchBarInbox = DuoTouchBarInbox()
+    private var touchBarController: DuoTouchBarClient?
+
+    /// Created only when the keyboard is shown; it owns a separate hardware decoder and never
+    /// changes the desktop decoder's native-resolution requirement.
+    @MainActor var touchBar: DuoTouchBarClient {
+        if let touchBarController { return touchBarController }
+        let controller = DuoTouchBarClient(inbox: touchBarInbox) { [weak self] kind, data in
+            self?.send(kind, payload: data)
+        }
+        touchBarController = controller
+        syncTouchBarConnection()
+        return controller
+    }
+
+    /// Only a pinned saved Mac is eligible; the older plain and unauthenticated open-door sessions
+    /// never receive Touch Bar subscriptions or touches.
+    @MainActor private func syncTouchBarConnection() {
+        guard let controller = touchBarController else { return }
+        guard connected, let connection, let session else { controller.setConnection(nil); return }
+        let pinned: Bool
+        if session.route.isRemote {
+            pinned = session.macID != nil
+        } else if case .saved? = session.home {
+            pinned = true
+        } else {
+            pinned = false
+        }
+        controller.setConnection(pinned ? connection : nil)
+    }
+
     var onParameterSets: ((ParameterSets) -> Void)? {
         didSet {
             // The display view is only created once the UI switches to the stream screen, which
@@ -2436,6 +2467,7 @@ final class StreamClient: ObservableObject {
         lastRttMaxMs = nil
         connectedAt = Date()
         lastAutoDesktop = .distantPast
+        MainActor.assumeIsolated { syncTouchBarConnection() }
         #if DEBUG
         switch kind {
         case .fromRemote: print(reconnected ? "remote: the session carried on over the move home (its remote connection went)" : "remote: the session moved home")
@@ -3192,6 +3224,7 @@ final class StreamClient: ObservableObject {
     /// never delivered its window list: the connect screen never left, and its Remote rows must not
     /// vanish for another 3 s. Main thread.
     func tearDown(status: String, restartSearch: Bool = true) {
+        MainActor.assumeIsolated { touchBarController?.setConnection(nil) }
         abandonMove()
         resetPath()
         lastMoveAttempt = nil
@@ -3707,7 +3740,11 @@ final class StreamClient: ObservableObject {
     /// Mac has read everything sent there; the network connection brings all the rest.
     private func deliver(_ header: StreamHeader, _ data: Data, from c: NWConnection) {
         if c === connection {
-            handle(header, data)
+            switch header.kind {
+            case .touchBarStatus: touchBarInbox.receiveStatus(data, from: c)
+            case .touchBarFrame: touchBarInbox.receiveFrame(data, keyframe: header.isKeyframe, from: c)
+            default: handle(header, data)
+            }
         } else if header.kind == .pong, let released = link.fenceReturned(data, on: c) {
             fenceEnded(c, released, why: "the Mac has read all the direct connection carried")
         }
@@ -3749,6 +3786,7 @@ final class StreamClient: ObservableObject {
                 // not at `.ready`: the Mac has admitted this device's key.
                 self.remoteSessionReady()
                 self.homeSessionReady()
+                self.syncTouchBarConnection()
                 // The host this session runs on, which a move to the network must reach again
                 // (`moveProbed`); its first list is what lets a move start.
                 self.sessionHost = list.launchID
