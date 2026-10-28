@@ -66,6 +66,10 @@ final class StreamServer {
         var transport: TransportLease?
         var inflight = 0          // every message still unacknowledged (backpressure for delta drops)
         var inflightFrames = 0    // video frames only
+        /// One independently decodable Touch Bar packet may be in the connection at a time.
+        var touchBarSurface: UUID?
+        var touchBarFrameInFlight = false
+        var touchBarRefreshWanted = false
         var oldestUnackedFrameAt: TimeInterval?   // last time a frame was drained, or queued from 0 (dead-peer detection)
         /// When it was admitted (registered), which is when the dead-peer grace starts.
         var connectedAt = Date().timeIntervalSince1970
@@ -144,6 +148,9 @@ final class StreamServer {
     let queue: DispatchQueue
     private let videoIngressLock = NSLock()
     private var videoIngress = EncodedVideoMailbox()
+    private let touchBarIngressLock = NSLock()
+    private var touchBarIngress = EncodedVideoMailbox()
+    private var touchBarToken: UUID? // network queue
     private var clients: [ObjectIdentifier: Client] = [:]
     private var lastParameterSets: Data?
     private var videoEpoch = VideoStreamEpoch()
@@ -162,6 +169,9 @@ final class StreamServer {
     /// A client fell behind and lost a delta frame; the encoder should produce a keyframe now
     /// rather than in up to 4 s. Called on the network queue.
     var onKeyframeNeeded: (() -> Void)?
+    /// A newly subscribed or caught-up client needs a fresh independent Touch Bar frame.
+    /// The owner must coalesce/rate-limit requests and recheck the current source and permissions.
+    var onTouchBarKeyframeNeeded: ((UUID) -> Void)?
     // All admitted peers share this ceiling: a faulty client cannot force continuous IDRs.
     private var lastDecoderRecoveryRequest = -Double.infinity // network queue
     private var pendingDecoderRecovery: Set<ObjectIdentifier> = [] // network queue
@@ -1083,8 +1093,12 @@ final class StreamServer {
     /// whose connection the stream and the catalog share. A connection that was never registered
     /// closes with `closeWithGoodbye`. On `queue`.
     func goodbye(_ goodbye: Goodbye, to connection: NWConnection, within: TimeInterval = 0.25) {
-        if let client = clients[ObjectIdentifier(connection)],
-           client.transport?.validatePath(connection.currentPath) == false { connection.cancel(); return }
+        if let client = clients[ObjectIdentifier(connection)] {
+            // Closing or revoking a session stops new side-stream data immediately, before the
+            // goodbye's bounded grace period and the connection's eventual unregister.
+            client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+            if client.transport?.validatePath(connection.currentPath) == false { connection.cancel(); return }
+        }
         Self.sayGoodbye(payload: Wire.encode(goodbye), on: connection, queue: queue, within: within)
     }
 
@@ -1433,6 +1447,70 @@ final class StreamServer {
         }
     }
 
+    /// Reset the optional Touch Bar lane without affecting the main desktop stream. An old drain
+    /// cannot consume a new source's packet, even when both sources have the same dimensions.
+    func beginTouchBarStream(_ token: UUID?) {
+        touchBarIngressLock.lock()
+        touchBarIngress.reset(to: token)
+        queue.async { [self] in
+            touchBarToken = token
+            for client in clients.values {
+                client.touchBarSurface = nil
+                client.touchBarRefreshWanted = false
+            }
+        }
+        touchBarIngressLock.unlock()
+    }
+
+    /// Subscribe a registered, paired and encrypted connection to the current source, or remove
+    /// its subscription. The coordinator also gates the source on existing recording permission.
+    func setTouchBarSubscription(_ token: UUID?, for connection: NWConnection) {
+        queue.async { [self] in
+            guard let client = clients[ObjectIdentifier(connection)] else { return }
+            guard let token else {
+                client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+                return
+            }
+            // A delayed request for an older source cannot unsubscribe the current source.
+            guard touchBarToken == token else { return }
+            guard client.route.encrypted, client.route.pairedName != nil,
+                  client.connection.state == .ready, transportAllows(client) else {
+                client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+                return
+            }
+            guard client.touchBarSurface != token else { return }
+            client.touchBarSurface = token
+            client.touchBarRefreshWanted = false
+            onTouchBarKeyframeNeeded?(token)
+        }
+    }
+
+    /// At most one latest serialized keyframe waits for the network queue. Each client gets at
+    /// most one in-flight Touch Bar frame, and never receives it on an unpaired or plain route.
+    func broadcastTouchBarFrame(_ bytes: Data, keyframe: Bool, parameters: ParameterSets?, timestamp: Double, token: UUID) {
+        guard keyframe, let parameters, let frame = TouchBarKeyframe(surfaceID: token, parameters: parameters, accessUnit: bytes) else { return }
+        let data = StreamMessage(kind: .touchBarFrame, timestamp: timestamp, isKeyframe: true, payload: frame.encoded).serialized()
+        touchBarIngressLock.lock()
+        let offer = touchBarIngress.offer(.init(data: data, parameters: nil, isKeyframe: true), token: token)
+        if offer.schedule { queue.async { [self] in drainTouchBarFrame(token) } }
+        touchBarIngressLock.unlock()
+    }
+
+    private static let touchBarBacklogLimit = 128 * 1024
+
+    private func drainTouchBarFrame(_ token: UUID) {
+        let packet = touchBarIngressLock.withLock { touchBarIngress.take(token: token) }
+        guard let packet, touchBarToken == token else { return }
+        for client in clients.values where client.connection.state == .ready {
+            guard client.touchBarSurface == token, client.route.encrypted, client.route.pairedName != nil else { continue }
+            guard !client.touchBarFrameInFlight, client.pendingBytes <= Self.touchBarBacklogLimit, client.inflight <= 1 else {
+                client.touchBarRefreshWanted = true
+                continue
+            }
+            send(packet.data, to: client, isTouchBarFrame: true)
+        }
+    }
+
     /// Client → host messages share the same framing. Small and rare, so read them one at a time.
     private func receiveLoop(_ client: Client) {
         let c = client.connection
@@ -1771,7 +1849,8 @@ final class StreamServer {
     /// No eviction while the connect burst (catalog + first keyframe) is still draining.
     private static let graceAfterConnect: TimeInterval = 8.0
 
-    private func send(_ data: Data, to client: Client, isFrame: Bool = false, isKeyframe: Bool = false) {
+    private func send(_ data: Data, to client: Client, isFrame: Bool = false, isKeyframe: Bool = false,
+                      isTouchBarFrame: Bool = false) {
         guard transportAllows(client) else { return }
         let now = Date().timeIntervalSince1970
         let remote = client.route.isRemote
@@ -1798,8 +1877,9 @@ final class StreamServer {
             client.inflightFrames += 1
             if client.oldestUnackedFrameAt == nil { client.oldestUnackedFrameAt = now }
         }
-        client.connection.send(content: data, completion: .contentProcessed { [weak client] _ in
-            guard let client else { return }
+        if isTouchBarFrame { client.touchBarFrameInFlight = true }
+        client.connection.send(content: data, completion: .contentProcessed { [weak self, weak client] _ in
+            guard let self, let client else { return }
             client.inflight -= 1
             client.pendingBytes -= data.count
             client.takenThisSecond += data.count
@@ -1818,6 +1898,16 @@ final class StreamServer {
                     // Progress: a slow but live peer on a saturated link never drains to zero.
                     client.oldestUnackedFrameAt = Date().timeIntervalSince1970
                 }
+            }
+            if isTouchBarFrame { client.touchBarFrameInFlight = false }
+            if client.touchBarRefreshWanted, !client.touchBarFrameInFlight,
+               client.pendingBytes <= Self.touchBarBacklogLimit, client.inflight <= 1,
+               let token = client.touchBarSurface, self.touchBarToken == token,
+               client.route.encrypted, client.route.pairedName != nil,
+               self.clients[ObjectIdentifier(client.connection)] === client,
+               let request = self.onTouchBarKeyframeNeeded {
+                client.touchBarRefreshWanted = false
+                request(token)
             }
         })
     }
