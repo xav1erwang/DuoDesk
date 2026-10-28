@@ -53,13 +53,20 @@ def aware(value):
 
 def profile_expiration(profile, config):
     """Reject an unrelated team, app, or device before any installation."""
+    if not isinstance(profile, dict) or not isinstance(profile.get("Entitlements"), dict):
+        raise ValueError("The development profile is malformed.")
     entitlements = profile.get("Entitlements", {})
     expected = config["team_id"] + "." + config["bundle_id"]
     if entitlements.get("application-identifier") != expected:
         raise ValueError("The built profile belongs to a different app or signing team.")
-    if config["team_id"] not in profile.get("TeamIdentifier", []):
+    teams, devices = profile.get("TeamIdentifier"), profile.get("ProvisionedDevices")
+    if not isinstance(teams, list) or not all(isinstance(value, str) for value in teams):
+        raise ValueError("The development profile has no valid team list.")
+    if not isinstance(devices, list) or not all(isinstance(value, str) for value in devices):
+        raise ValueError("The development profile has no valid device list.")
+    if config["team_id"] not in teams:
         raise ValueError("The profile does not authorize the configured team.")
-    if config["device_id"] not in profile.get("ProvisionedDevices", []):
+    if config["device_id"] not in devices:
         raise ValueError("The profile does not authorize the configured Duo.")
     expiration = profile.get("ExpirationDate")
     if not isinstance(expiration, dt.datetime):
@@ -86,7 +93,8 @@ def read_profile(app):
     path = app / "embedded.mobileprovision"
     if not path.is_file():
         raise ValueError("No signed device build is available yet.")
-    decoded = subprocess.check_output(["/usr/bin/security", "cms", "-D", "-i", str(path)], stderr=subprocess.PIPE)
+    decoded = subprocess.check_output(["/usr/bin/security", "cms", "-D", "-i", str(path)],
+                                      stderr=subprocess.PIPE, timeout=30)
     return plistlib.loads(decoded)
 
 
@@ -108,12 +116,16 @@ def run(config, force=False, status_only=False):
     binding = hashlib.sha256(json.dumps({key: config[key] for key in ("team_id", "device_id", "bundle_id")}, sort_keys=True).encode()).hexdigest()
     state_path = LOCAL / "signing-status.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    if not isinstance(state, dict):
+        raise ValueError("The successful-install record is malformed.")
     # A fresh build is not evidence that the phone received it. Only the successful install record
     # can defer renewal; an interrupted/failed install must be retried on the next run.
     old_expiration = None
     if state.get("status") == "installed" and state.get("binding") == binding:
-        old_expiration = aware(dt.datetime.fromisoformat(state["expires_at"]))
-    built_expiration = profile_expiration(read_profile(app), config) if app.exists() else None
+        try:
+            old_expiration = aware(dt.datetime.fromisoformat(state.get("expires_at")))
+        except (TypeError, ValueError) as error:
+            raise ValueError("The successful-install expiration is malformed.") from error
     due = renewal_due(old_expiration, now(), config.get("renew_before_hours", 48))
     if status_only or (not force and not due):
         result = {"status": "renewal_due" if due else "valid",
@@ -121,6 +133,14 @@ def run(config, force=False, status_only=False):
         print(json.dumps(result))
         return result
 
+    # A missing or invalid cache does not prevent the next renewal from making a clean build.
+    # Do not read it merely to report the last successful install or when a build is forced.
+    built_expiration = None
+    if not force and app.exists():
+        try:
+            built_expiration = profile_expiration(read_profile(app), config)
+        except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+            pass
     # No shell interpolation: even paths containing spaces and a Chinese checkout name are safe.
     log = LOCAL / "signing-build.log"
     if force or renewal_due(built_expiration, now(), config.get("renew_before_hours", 48)):
@@ -128,8 +148,8 @@ def run(config, force=False, status_only=False):
             subprocess.run(build_command(config), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=1800)
     expiration = profile_expiration(read_profile(app), config)
     if expiration <= now() + dt.timedelta(hours=config.get("renew_before_hours", 48)):
-        raise RuntimeError("Xcode did not issue a sufficiently fresh profile. Open Xcode Accounts; see Local/signing-build.log.")
-    if old_expiration is not None and due and expiration <= old_expiration:
+        raise RuntimeError("Xcode did not issue a sufficiently fresh profile; see Local/signing-build.log.")
+    if old_expiration is not None and expiration <= old_expiration:
         raise RuntimeError("The profile was not extended. The existing device app was left installed.")
     info = plistlib.loads((app / "Info.plist").read_bytes())
     if info.get("CFBundleIdentifier") != config["bundle_id"]:
@@ -146,11 +166,16 @@ def run(config, force=False, status_only=False):
 
 
 def agent_plist(config_path):
-    return {"Label": LABEL,
-            "ProgramArguments": [sys.executable, str(Path(__file__).resolve()), "--config", str(config_path.resolve())],
-            "WorkingDirectory": str(ROOT), "StartInterval": 21600, "RunAtLoad": True,
-            "StandardOutPath": str(LOCAL / "renewal.log"), "StandardErrorPath": str(LOCAL / "renewal-error.log"),
-            "ProcessType": "Background"}
+    agent = {"Label": LABEL,
+             "ProgramArguments": [sys.executable, str(Path(__file__).resolve()), "--config", str(config_path.resolve())],
+             "WorkingDirectory": str(ROOT), "StartInterval": 21600, "RunAtLoad": True,
+             "StandardOutPath": str(LOCAL / "renewal.log"), "StandardErrorPath": str(LOCAL / "renewal-error.log"),
+             "ProcessType": "Background"}
+    # launchd doesn't inherit the shell's selected Xcode. Preserve only this nonsecret override,
+    # not the account or other environment; without it, use the system-selected developer dir.
+    if os.environ.get("DEVELOPER_DIR"):
+        agent["EnvironmentVariables"] = {"DEVELOPER_DIR": os.environ["DEVELOPER_DIR"]}
+    return agent
 
 
 def enable_agent(config_path):
@@ -204,7 +229,8 @@ if __name__ == "__main__":
     try:
         main()
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
-        # Build/account details stay in a local ignored log. No identifiers are sent to a service.
-        atomic_json(LOCAL / "signing-status.json", {"status": "failed", "checked_at": now().isoformat(), "reason": str(error)})
-        print("Signing could not finish. See Local/signing-status.json and Local/signing-build.log.", file=sys.stderr)
+        # A failure is not an installation: retain the last successful expiry so retries cannot
+        # silently replace it with an older profile. Details stay in a separate ignored file.
+        atomic_json(LOCAL / "signing-error.json", {"status": "failed", "checked_at": now().isoformat(), "reason": str(error)})
+        print("Signing could not finish. See Local/signing-error.json and Local/signing-build.log.", file=sys.stderr)
         sys.exit(1)
