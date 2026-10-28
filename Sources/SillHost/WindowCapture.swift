@@ -24,6 +24,11 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var pendingSample: CMSampleBuffer?
     private var pendingSampleToken: UUID?
     private let queue = DispatchQueue(label: "sill.capture", qos: .userInteractive)
+    #if DUO_CAPTURE_DIAGNOSTICS
+    // Set only before starting a test stream. Production builds never expose this switch.
+    var diagnosticUseStrictTimer = false
+    private var diagnosticStrictTimer: StrictCaptureTimer?
+    #endif
     var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
     #if DUO_CAPTURE_DIAGNOSTICS
     /// Test-only metadata from an admitted sample; never contains image pixels or window titles.
@@ -205,9 +210,26 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
                 // avoidable latency. Fall back if the clock is unavailable or inconsistent.
                 let now = stream.synchronizationClock.map { CMClockGetTime($0) }
                 let delay = CaptureFramePacer.deliveryDelay(wait: wait, sampleTime: pts, clockTime: now)
-                queue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.deliverPendingSample(token) }
+                let deadline = DispatchTime.now() + delay
+                #if DUO_CAPTURE_DIAGNOSTICS
+                if diagnosticUseStrictTimer {
+                    if diagnosticStrictTimer == nil {
+                        diagnosticStrictTimer = StrictCaptureTimer(queue: queue) { [weak self] token in
+                            self?.deliverPendingSample(token)
+                        }
+                    }
+                    diagnosticStrictTimer?.arm(deadline: deadline, token: token)
+                } else {
+                    queue.asyncAfter(deadline: deadline) { [weak self] in self?.deliverPendingSample(token) }
+                }
+                #else
+                queue.asyncAfter(deadline: deadline) { [weak self] in self?.deliverPendingSample(token) }
+                #endif
             }
         case .emit(let first, let replaced):
+            #if DUO_CAPTURE_DIAGNOSTICS
+            if diagnosticUseStrictTimer { diagnosticStrictTimer?.cancelPending() }
+            #endif
             if replaced { Stats.shared.bump("cap.cadenceDrop") }
             deliver(sampleBuffer, first: first)
         }

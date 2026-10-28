@@ -493,6 +493,12 @@ func run() async {
             throw PixelMotionAudit.Failure.unavailable
         }
         guard !sampleMarker || phaseRequested else { throw PixelMotionAudit.Failure.unavailable }
+        #if DUO_CAPTURE_DIAGNOSTICS
+        let strictTimer = CommandLine.arguments.contains("--strict-pacer-timer")
+        guard !strictTimer || phaseRequested else { throw PixelMotionAudit.Failure.unavailable }
+        capture.diagnosticUseStrictTimer = strictTimer
+        if strictTimer { print("STRICT PACER TIMER: diagnostic candidate only, best-effort deadline, native source unchanged") }
+        #endif
         var markerPoints: [(Int, Int)]?
         #if DUO_RENDER_TRACE
         if sampleMarker {

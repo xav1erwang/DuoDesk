@@ -8,6 +8,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import tempfile
 
 
 def replay(raw, fps=120, early=0.0):
@@ -61,7 +62,7 @@ def percentile(values, fraction):
     return values[max(0, math.ceil(len(values) * fraction) - 1)]
 
 
-def explain_observed(raw, outputs, fps=120, active_start=None, active_end=None):
+def explain_observed(raw, outputs, fps=120, active_start=None, active_end=None, held_events=None):
     """Reconstruct the pacer's decisions using actual output events, not ideal timer fires.
 
     Sample callbacks and onFrame delivery share one serial queue. Matching both source index and
@@ -91,6 +92,8 @@ def explain_observed(raw, outputs, fps=120, active_start=None, active_end=None):
         lag = output["delivered"] - due
         if active(output["delivered"]):
             active_held += 1
+            if held_events is not None:
+                held_events.append({"scheduled": candidates[0][1], "due": due, "fired": output["delivered"]})
             if lag < -0.001:
                 early_timers += 1
             timer_lag.append(lag * 1000)
@@ -242,18 +245,73 @@ def self_test():
         pass
     else:
         raise AssertionError("unordered source was accepted")
-    print("SAMPLING REPLAY SELF-CHECK PASS: regular 60/120/170-Hz sources, observed-event reconstruction, no duplicate source, invalid order rejected; simulation only")
+    # Export is numeric timing only and must never overwrite an existing evidence file.
+    raw = [{"pts": i / 170, "arrival": i / 170 + 0.001, "centerSHA256": "a" * 64}
+           for i in range(170 * 4)]
+    outputs = [{"rawIndex": index, "pts": raw[index]["pts"], "delivered": at} for index, at in replay(raw)]
+    document = {"version": 1, "start": 0.0, "end": 3.0, "raw": raw, "outputs": outputs}
+    with tempfile.TemporaryDirectory() as directory:
+        destination = Path(directory) / "schedule.json"
+        export_timer_schedule(document, destination)
+        exported = destination.read_bytes()
+        assert json.loads(exported)["events"], "empty exported schedule"
+        try:
+            export_timer_schedule(document, destination)
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("evidence file overwritten")
+        assert destination.read_bytes() == exported, "existing evidence changed"
+        invalid = dict(document, version=2)
+        try:
+            export_timer_schedule(invalid, Path(directory) / "invalid.json")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid timeline accepted for timer export")
+    print("SAMPLING REPLAY SELF-CHECK PASS: regular 60/120/170-Hz sources, observed-event reconstruction, no duplicate source, invalid order, timer export and no-overwrite; simulation only")
+
+
+def export_timer_schedule(document, destination):
+    # Apply the same version, source ordering, PTS matching, clock and output checks as analysis.
+    # The exported schedule must not silently legitimize a malformed trace.
+    validated = analyze(document)
+    if not validated["observedDecisionReconstruction"].get("valid"):
+        raise ValueError("invalid observed timer sequence")
+    start, end = document["start"] + 2.0, document["end"]
+    events = []
+    observed = explain_observed(document["raw"], document["outputs"], active_start=start, active_end=end,
+                                held_events=events)
+    if not observed["valid"] or not events or any(e["due"] < e["scheduled"] or e["fired"] < e["scheduled"] for e in events):
+        raise ValueError("invalid observed timer sequence")
+    if any(a["fired"] > b["scheduled"] for a, b in zip(events, events[1:])):
+        raise ValueError("overlapping observed timers")
+    result = {"version": 1, "scope": "relative numeric timing from one owned-window trace, no image data",
+              "duration": end - start,
+              "rawOffsets": [row["arrival"] - start for row in document["raw"] if start <= row["arrival"] < end],
+              "events": [{"offset": event["scheduled"] - start, "wait": event["due"] - event["scheduled"]}
+                         for event in events]}
+    with destination.open("x") as handle:
+        json.dump(result, handle, separators=(",", ":"), allow_nan=False)
+        handle.write("\n")
+    print("TIMER SCHEDULE EXPORTED: held events=", len(events), "raw callbacks=", len(result["rawOffsets"]),
+          "; estimated due times, no image data")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("timeline", nargs="?", type=Path)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--export-timers", type=Path)
     args = parser.parse_args()
     if args.self_test:
         self_test()
     elif args.timeline:
-        print(json.dumps(analyze(json.loads(args.timeline.read_text())), indent=2))
+        document = json.loads(args.timeline.read_text())
+        if args.export_timers:
+            export_timer_schedule(document, args.export_timers)
+        else:
+            print(json.dumps(analyze(document), indent=2))
     else:
         parser.error("supply a timeline or --self-test")
 
