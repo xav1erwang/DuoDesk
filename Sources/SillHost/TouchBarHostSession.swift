@@ -63,7 +63,9 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
     private var lastRefresh = -Double.infinity
     private var delayedRefresh: Task<Void, Never>?
     private var permissionMonitor: Task<Void, Never>?
+    private var startupMonitor: Task<Void, Never>?
     private static let refreshSpacing: TimeInterval = 0.5
+    private static let startupDeadline: Duration = .seconds(8)
     private let encoderCreation = TouchBarEncoderCreationGate()
     private lazy var ingress = TouchBarCaptureIngress { [weak self] token in
         Task { @MainActor [weak self] in self?.consumeFrame(token) }
@@ -106,6 +108,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
                     Task { @MainActor [weak self] in self?.sourceStopped(next) }
                 })
                 monitorPermissions(next)
+                monitorStartup(next)
             } catch { stop() }
             return
         }
@@ -165,6 +168,19 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         surface.acceptsInput = allowed; self.surface = surface
         let status = TouchBarStatus(availability: .live, surface: surface)
         for connection in subscribers.values { send(status, to: connection) }
+    }
+
+    /// A source may return from start yet never deliver an image, or hardware session creation
+    /// may stall off the main actor. Keep the last status honest and release subscribers without
+    /// waiting for that work. The encoder-creation gate still holds its slot until it really exits.
+    private func monitorStartup(_ token: UUID) {
+        startupMonitor?.cancel()
+        startupMonitor = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: Self.startupDeadline) } catch { return }
+            guard !Task.isCancelled, let self, self.token == token, self.surface == nil else { return }
+            print("Touch Bar source did not become available before its startup deadline")
+            self.stop()
+        }
     }
 
     /// A static bar may have no capture callbacks for a long time. Recheck existing permission
@@ -235,6 +251,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         var surface = surface
         surface.acceptsInput = inputAllowed() && source?.supportsInput == true
         preparingEncoder = false; encoder = made; self.surface = surface
+        startupMonitor?.cancel(); startupMonitor = nil
         made.onEncoded = { [weak server] bytes, keyframe, parameters in
             server?.broadcastTouchBarFrame(bytes, keyframe: keyframe, parameters: parameters,
                                            timestamp: Date().timeIntervalSince1970, token: token)
@@ -280,6 +297,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         let old = source; source = nil; token = nil; surface = nil
         ingress.reset(nil); waitingFrame = nil; preparingEncoder = false
         permissionMonitor?.cancel(); permissionMonitor = nil
+        startupMonitor?.cancel(); startupMonitor = nil
         delayedRefresh?.cancel(); delayedRefresh = nil; lastRefresh = -Double.infinity
         _ = encoder?.abandon(); encoder = nil
         for connection in clients {

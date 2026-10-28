@@ -133,6 +133,36 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         let route = loop.server.queue.sync { client.route }, connection = client.connection
         guard route.encrypted, route.pairedName != nil else { throw Failure.invalid("paired route") }
         guard let fingerprint = route.fingerprint else { throw Failure.invalid("paired fingerprint") }
+        if CommandLine.arguments.contains("--startup-timeout-only") {
+            // A source can return from start but never produce a frame (or encoder creation can
+            // wedge). The real coordinator must stop waiting and report unavailable to the peer.
+            permission.recording = true
+            session.subscribe(TouchBarSubscription(watching: true), from: connection, route: route)
+            try await waitFor("starting status") { results.state.0.last?.availability == .starting && fake.starts == 1 }
+            try await Task.sleep(for: .seconds(9))
+            guard results.state.0.last?.availability == .unavailable, fake.stops == 1,
+                  session.token == nil, session.surface == nil else { throw Failure.invalid("startup remained stuck") }
+            fake.emitAfterStop(try frame(96))
+            try await Task.sleep(for: .milliseconds(100))
+            guard session.surface == nil else { throw Failure.invalid("timed out source revived") }
+            // Cancel another stalled attempt before its deadline. Its timer must not affect
+            // the next attempt, which delivers a synthetic frame and becomes live.
+            session.subscribe(TouchBarSubscription(watching: true), from: connection, route: route)
+            guard fake.starts == 2 else { throw Failure.invalid("second attempt did not start") }
+            session.subscribe(TouchBarSubscription(watching: false), from: connection, route: route)
+            guard fake.stops == 2, session.token == nil else { throw Failure.invalid("second attempt did not stop") }
+            session.subscribe(TouchBarSubscription(watching: true), from: connection, route: route)
+            guard fake.starts == 3 else { throw Failure.invalid("third attempt did not start") }
+            fake.emit(try frame(96))
+            try await waitFor("retry is live") { results.state.0.last?.availability == .live && session.surface != nil }
+            try await Task.sleep(for: .seconds(9))
+            guard results.state.0.last?.availability == .live, fake.stops == 2, session.surface != nil else {
+                throw Failure.invalid("startup timeout stopped a live retry")
+            }
+            print("TOUCH BAR STARTUP PASS: stalled source becomes unavailable; retry survives canceled timers; late frame is fenced")
+            print("SCOPE: injected fake source and permissions with paired loopback QUIC; no real Touch Bar, capture, input, Duo or FPS acceptance")
+            return
+        }
         var trust = TrustSnapshot()
         trust.paired[fingerprint] = "synthetic peer"
         guard StreamCoordinator.touchBarRouteAuthorized(route, trust: trust) else { throw Failure.invalid("paired route policy") }
