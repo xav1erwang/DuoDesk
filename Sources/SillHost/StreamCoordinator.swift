@@ -1556,6 +1556,18 @@ package final class StreamCoordinator {
                         guard !shuttingDown, catalog.clientCount > 0 else {
                             _ = duoDesktop.restore(); active = .none; broadcastList(); return
                         }
+                        // The first physical mode can have a slower unchanged clock than the
+                        // requested rate. Reconcile the sampling target after it is known, before
+                        // creating capture/encoder or reporting link quality to the clients.
+                        let negotiatedFPS = effectiveFPS(maximum: maxFPS, for: source)
+                        if fps != negotiatedFPS {
+                            _ = try await duoDesktop.prepareGraphics(native, fps: negotiatedFPS)
+                            guard !shuttingDown, catalog.clientCount > 0 else {
+                                _ = duoDesktop.restore(); active = .none; broadcastList(); return
+                            }
+                            fps = negotiatedFPS
+                            judgeLinks(LinkJudge.Quality(bitrate: bitrate, fps: fps, captureScale: Double(captureScale)))
+                        }
                         d = prepared.display
                     } catch {
                         _ = duoDesktop.restore()

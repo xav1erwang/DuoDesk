@@ -15,10 +15,9 @@ enum StreamSamplingPolicy {
     }
 }
 
-/// A transaction on the Mac desktop. A native physical mode is preferred. Otherwise a precisely
-/// sized HiDPI display becomes the mirror master of the existing main desktop; it is not an empty
-/// second workspace. Capture and input both use that same desktop's global coordinate rectangle.
-/// Original modes, origins and mirror relationships are restored when the temporary display ends.
+/// A transaction on the Mac desktop. An exact physical mode may be selected at its original
+/// refresh rate. Virtual mirroring is withheld until the system can establish it without changing
+/// physical refresh. Original modes, origins and mirror relationships are restored on exit.
 @MainActor
 final class DuoDesktopDisplay {
     // Independent primary is a CLI-only experiment until existing full-screen Spaces migrate.
@@ -29,7 +28,7 @@ final class DuoDesktopDisplay {
         let mirrored: Bool
     }
     enum Failure: LocalizedError {
-        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable, samplingClockTooSlow
+        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable, samplingClockTooSlow, refreshInvariantUnavailable
         var errorDescription: String? {
             switch self {
             case .invalidResolution: return "Duo 上屏原生分辨率无效。"
@@ -42,6 +41,7 @@ final class DuoDesktopDisplay {
             case .topologyChanging: return "Mac 显示器配置正在变化，无法安全记录原始状态；未启动新的原生桌面。"
             case .recoveryUnavailable: return "无法安全保存 Mac 显示配置；未启动新的原生桌面。"
             case .samplingClockTooSlow: return "当前桌面时钟低于请求的采样率；更高目标可在下次连接时尝试。"
+            case .refreshInvariantUnavailable: return "当前无法在保持 Mac 屏幕刷新率不变的情况下建立 Duo 原生桌面。"
             }
         }
     }
@@ -146,7 +146,7 @@ final class DuoDesktopDisplay {
     /// Keep the diagnostic filter choice separate from the capture interval policy.
     var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && activeModeMatches }
     /// A physical resolution may change, but its reported refresh must stay exactly as it was.
-    /// Unknown or slower physical clocks use the virtual desktop instead of a different mode.
+    /// A slower physical clock caps sampling instead of forcing a different panel refresh.
     nonisolated static func permitsPhysicalMode(currentHz: Double, candidateHz: Double, fps: Int) -> Bool {
         currentHz.isFinite && candidateHz.isFinite && currentHz > 0 && (1...240).contains(fps)
             && candidateHz == currentHz && candidateHz >= Double(fps) - 0.5
@@ -156,6 +156,17 @@ final class DuoDesktopDisplay {
     nonisolated static func samplingCeiling(refreshHz: Double) -> Int? {
         guard refreshHz.isFinite, refreshHz >= 1, refreshHz <= 1000 else { return nil }
         return min(240, Int((refreshHz + 0.5).rounded(.down)))
+    }
+    nonisolated static func initialPhysicalSamplingFPS(requested: Int, refreshHz: Double) -> Int {
+        samplingCeiling(refreshHz: refreshHz).map { min(requested, $0) } ?? requested
+    }
+    /// No public guarantee has been established that creating a mirror set keeps every physical
+    /// clock unchanged throughout the transaction. Preserve the future path, but fail before
+    /// creating or attaching its virtual display until a compliant mechanism is demonstrated.
+    private static let virtualMirrorTimingSafetyVerified = false
+
+    private static func physicalModeSharesMirrorSet(main: CGDirectDisplayID, originals: [Original]) -> Bool {
+        originals.contains { ($0.id == main && $0.mirror != kCGNullDirectDisplay) || $0.mirror == main }
     }
     /// Only an already established and verified desktop has a clock that can cap a later request.
     var currentSamplingCeiling: Int? {
@@ -272,16 +283,21 @@ final class DuoDesktopDisplay {
         originalSystemMainID = systemMain
         didAttemptDisplayChange = false
         do {
+            let physicalFPS = Self.initialPhysicalSamplingFPS(requested: fps, refreshHz: home.mode.refreshRate)
             let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
             let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
             let matchingModes = modes.filter {
                 wanted.accepts(width: $0.pixelWidth, height: $0.pixelHeight)
-                    && Self.permitsPhysicalMode(currentHz: home.mode.refreshRate, candidateHz: $0.refreshRate, fps: fps)
+                    && Self.permitsPhysicalMode(currentHz: home.mode.refreshRate, candidateHz: $0.refreshRate, fps: physicalFPS)
             }
             let native = matchingModes.first { Self.sameMode($0, home.mode) }
                 ?? matchingModes.min { $0.width < $1.width }
             if let native {
                 if !Self.sameMode(native, home.mode) {
+                    // Quartz may adjust every display in a mirror set when one mode changes.
+                    guard !Self.physicalModeSharesMirrorSet(main: main, originals: sampled) else {
+                        throw Failure.refreshInvariantUnavailable
+                    }
                     try persistRecovery(recoveryRecord)
                     if let recoveryRecord, let intent = Self.singleDisplayIntent(original: recoveryRecord, mode: native) {
                         do { try recoveryStore?.saveIntent(intent, for: recoveryRecord) }
@@ -302,6 +318,7 @@ final class DuoDesktopDisplay {
                 }
                 capturedID = main
             } else {
+                guard Self.virtualMirrorTimingSafetyVerified else { throw Failure.refreshInvariantUnavailable }
                 try persistRecovery(recoveryRecord)
                 #if DUO_DISPLAY_RESTORE_TESTING
                 if testPreventDisplayMutation { throw Failure.modeRejected }
@@ -339,7 +356,7 @@ final class DuoDesktopDisplay {
                 }
             }
             resolution = wanted
-            requestedFPS = fps
+            requestedFPS = temporary == nil ? physicalFPS : fps
             guard pendingMirror || activeModeMatches else { throw Failure.modeRejected }
             let kind = temporary == nil ? "physical mode" : layout == .mirrored ? "mirrored HiDPI mode" : "independent native primary"
             print("Duo desktop: \(wanted.width)×\(wanted.height) native; canvas \(wanted.encodedWidth)×\(wanted.encodedHeight) pixels; \(pendingMirror ? "awaiting desktop attachment" : kind)")
@@ -367,6 +384,7 @@ final class DuoDesktopDisplay {
     }
 
     private func attachMirror(_ display: VirtualDisplay, home: Original) throws {
+        guard Self.virtualMirrorTimingSafetyVerified else { throw Failure.refreshInvariantUnavailable }
         // The virtual desktop supplies the negotiated clock. Do not select a new panel mode.
         try configure { config in
             let origin = CGConfigureDisplayOrigin(config, display.displayID, Int32(home.origin.x), Int32(home.origin.y))
@@ -869,6 +887,44 @@ final class DuoDesktopDisplay {
                 && desktop.testSnapshotReads == 0 && desktop.testConfigurationAttempts == 0
             return [virtualReady, downOnlySampled, upOnlySampled, rejectedWithoutReconfiguration, physicalOnlySampled]
         } catch { return nil }
+    }
+
+    /// Exercise the actual no-matching-mode path with all configuration writes intercepted. The
+    /// live display is only queried; no virtual display, capture, mirror or input is created.
+    static func inspectRefreshSafetyForTesting() async -> [Bool]? {
+        let main = CGMainDisplayID()
+        guard isDisplayOnline(main), let mode = CGDisplayCopyDisplayMode(main) else { return nil }
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
+        let candidates = [(2007, 1427), (987, 765), (1871, 1043), (777, 555)]
+        guard let size = candidates.first(where: { pair in
+            let wanted = DuoDesktopResolution(width: pair.0, height: pair.1)
+            return !modes.contains { wanted.accepts(width: $0.pixelWidth, height: $0.pixelHeight) }
+        }) else { return nil }
+        let wanted = DuoDesktopResolution(width: size.0, height: size.1)
+        var rejectedWithoutMutation = true
+        for (layout, deferMirror) in [(Layout.mirrored, false), (.mirrored, true), (.nativePrimary, false)] {
+            let desktop = DuoDesktopDisplay(layout: layout)
+            desktop.testPreventDisplayMutation = true
+            desktop.testInterceptConfiguration = true
+            var rejected = false
+            do { _ = try await desktop.prepareGraphics(wanted, fps: 60, deferMirror: deferMirror) }
+            catch Failure.refreshInvariantUnavailable { rejected = true }
+            catch { }
+            rejectedWithoutMutation = rejectedWithoutMutation && rejected && desktop.testConfigurationAttempts == 0
+                && !desktop.didAttemptDisplayChange && desktop.temporary == nil && !desktop.pendingMirror
+                && desktop.originals.isEmpty && desktop.capturedID == 0 && desktop.recoveryToken == nil
+        }
+        let peer = main == CGDirectDisplayID.max ? main - 1 : main + 1
+        let unmirrored = [Original(id: main, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay),
+                          Original(id: peer, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)]
+        let master = [Original(id: main, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay),
+                      Original(id: peer, mode: mode, origin: .zero, mirror: main)]
+        let slave = [Original(id: main, mode: mode, origin: .zero, mirror: peer),
+                     Original(id: peer, mode: mode, origin: .zero, mirror: kCGNullDirectDisplay)]
+        return [rejectedWithoutMutation, !physicalModeSharesMirrorSet(main: main, originals: unmirrored),
+                physicalModeSharesMirrorSet(main: main, originals: master),
+                physicalModeSharesMirrorSet(main: main, originals: slave)]
     }
 
     /// Exercise the production replay sequence with synthetic records and intercepted writes.
