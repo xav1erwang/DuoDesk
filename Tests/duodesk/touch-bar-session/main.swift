@@ -336,6 +336,22 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         loop.sendControl(.touchBarRefresh, payload: TouchBarRefresh(surfaceID: coordinatorSurface.id).encoded)
         try await waitFor("coordinator ordered input") { fake.posted.count == beforeCoordinatedInput + 2 }
         guard Array(fake.posted.suffix(2)).map(\.phase) == [.began, .ended] else { throw Failure.invalid("coordinator input order") }
+
+        // A client can lose the last image when a status supersedes its pending frame. Prove the
+        // network refresh recovers the latest source pixels after the synthetic source goes idle.
+        let beforeLatest = results.state.1.count
+        fake.emit(try frame(32))
+        try await waitFor("latest synthetic source frame") {
+            results.state.1.dropFirst(beforeLatest).contains { abs($0 - 32) <= 12 }
+        }
+        // Let initial connection/refresh keyframes drain before measuring the new request.
+        try await Task.sleep(for: .milliseconds(800))
+        let beforeStaticRefresh = results.state.1.count
+        loop.sendControl(.touchBarRefresh, payload: TouchBarRefresh(surfaceID: coordinatorSurface.id).encoded)
+        try await waitFor("static frame refresh through coordinator") {
+            results.state.1.dropFirst(beforeStaticRefresh).contains { abs($0 - 32) <= 12 }
+        }
+        print("PASS: paired network refresh recovers the latest synthetic image after its source becomes static")
         loop.sendControl(.touchBarSubscription, payload: Wire.encode(TouchBarSubscription(watching: false)))
         try await waitFor("coordinator network unsubscribe") { session.token == nil && fake.stops == 5 }
         loop.sendControl(.touchBarSubscription, payload: Wire.encode(TouchBarSubscription(watching: true)))

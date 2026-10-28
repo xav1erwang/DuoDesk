@@ -35,6 +35,26 @@ import StreamProtocol
             try await Task.sleep(for: .milliseconds(100))
             try expect(client.video.frames == [Data([10]), Data([11])] && client.video.parameterApplications == 1,
                        "unchanged parameters admitted once")
+
+            // Hold the main queue while the last frame and a capability-only status arrive.
+            // The inbox deliberately discards that pending frame when the status replaces it.
+            // Once the source goes quiet, the client must ask for the real latest image again.
+            sent.removeAll()
+            inbox.receiveFrame(frame(a, 12), keyframe: true, from: old)
+            var readOnly = surface(a)
+            readOnly.acceptsInput = false
+            inbox.receiveStatus(Wire.encode(TouchBarStatus(availability: .live, surface: readOnly)), from: old)
+            try await Task.sleep(for: .milliseconds(100))
+            try expect(client.video.frames == [Data([10]), Data([11])] && client.status.surface == readOnly,
+                       "capability update discarded pending image")
+            let refresh = sent.filter { $0.0 == .touchBarRefresh }.compactMap { TouchBarRefresh(encoded: $0.1) }
+            try expect(refresh == [TouchBarRefresh(surfaceID: a)], "static image refresh after capability update")
+            inbox.receiveFrame(frame(a, 12), keyframe: true, from: old)
+            try await Task.sleep(for: .milliseconds(100))
+            try expect(client.video.frames.last == Data([12]), "recovered static image")
+            inbox.receiveStatus(Wire.encode(TouchBarStatus(availability: .live, surface: surface(a))), from: old)
+            try await Task.sleep(for: .milliseconds(100))
+            sent.removeAll()
             client.send(TouchBarTouch(surfaceID: a, phase: .began, x: 0.1, y: 0.5))
             client.send(TouchBarTouch(surfaceID: a, phase: .moved, x: 0.3, y: 0.5))
             client.send(TouchBarTouch(surfaceID: a, phase: .moved, x: 0.8, y: 0.5))
@@ -45,7 +65,7 @@ import StreamProtocol
             inbox.receiveStatus(Wire.encode(TouchBarStatus(availability: .live, surface: surface(a))), from: old)
             inbox.receiveFrame(frame(a, 20), keyframe: true, from: old)
             try await Task.sleep(for: .milliseconds(100))
-            try expect(client.status.surface == nil && client.video.frames == [Data([10]), Data([11])], "old connection fenced")
+            try expect(client.status.surface == nil && client.video.frames == [Data([10]), Data([11]), Data([12])], "old connection fenced")
             inbox.receiveStatus(Wire.encode(TouchBarStatus(availability: .live, surface: surface(b))), from: new)
             inbox.receiveFrame(frame(b, 30), keyframe: true, from: new)
             try await Task.sleep(for: .milliseconds(100))

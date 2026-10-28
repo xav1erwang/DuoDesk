@@ -59,7 +59,11 @@ import UIKit
             video.requireTouchBarSurface(new)
         }
         status = next
-        if changed, new != nil { requestRefresh() }
+        // The bounded inbox drops a pending frame whenever a newer status wins. That can happen
+        // even when only input capability changed and the source UUID stayed the same. Request
+        // the actual latest frame after every live status so a now-static bar cannot stay stale.
+        // The host coalesces and rate-limits these requests across subscribers.
+        if new != nil { requestRefresh() }
     }
 
     private func receive(_ frame: TouchBarKeyframe, from source: NWConnection) {
