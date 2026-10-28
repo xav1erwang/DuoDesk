@@ -170,7 +170,6 @@ struct PortraitStreamScreen: View {
     /// arrangement (the switch off, the Desktop or nothing streaming), and in the halves.
     var largerKeyboard: CGFloat? = nil
 
-    private var streamShape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }
     /// The Duo's fold across this screen (StreamScreen, iOS 27.1): where the halves split.
     @Environment(\.duoFold) private var duoFold
     @State private var resolutionWaitFailed = false
@@ -502,8 +501,7 @@ struct PortraitStreamScreen: View {
         }
         .background(Palette.panel)
         .overlay(alignment: .top) { LinkLineView(text: linkLine) }
-        .clipShape(streamShape)
-        .overlay(streamShape.strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
+        .modifier(DesktopPictureChrome(native: client.nativeDesktopResolution != nil))
         .onGeometryChange(for: CGSize.self, of: { $0.size }, action: { if measured { onPanelSize($0) } })
         .tourTarget(.stream)
     }
