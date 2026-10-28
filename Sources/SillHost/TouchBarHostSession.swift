@@ -62,6 +62,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
     private var touch = TouchBarTouchGate<ObjectIdentifier>()
     private var lastRefresh = -Double.infinity
     private var delayedRefresh: Task<Void, Never>?
+    private var permissionMonitor: Task<Void, Never>?
     private static let refreshSpacing: TimeInterval = 0.5
     private let encoderCreation = TouchBarEncoderCreationGate()
     private lazy var ingress = TouchBarCaptureIngress { [weak self] token in
@@ -104,6 +105,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
                 try made.start(onFrame: { frame in ingress.offer(frame, token: next) }, onStopped: { [weak self] in
                     Task { @MainActor [weak self] in self?.sourceStopped(next) }
                 })
+                monitorPermissions(next)
             } catch { stop() }
             return
         }
@@ -134,9 +136,9 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
               let surface, let source, permit.surfaceID == surface.id, permit.connectionID == id,
               permit.isValid else { return }
         guard recordingAllowed() else { stop(); return }
-        guard source.supportsInput else { return }
-        guard inputAllowed() else {
+        guard source.supportsInput, inputAllowed() else {
             if touch.release() != nil { stop() }
+            else { updateInputCapability(false) }
             return
         }
         // A newly granted input capability is published before any touch can use it.
@@ -163,6 +165,32 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         surface.acceptsInput = allowed; self.surface = surface
         let status = TouchBarStatus(availability: .live, surface: surface)
         for connection in subscribers.values { send(status, to: connection) }
+    }
+
+    /// A static bar may have no capture callbacks for a long time. Recheck existing permission
+    /// state while subscribed so the last picture and input capability do not outlive revocation.
+    /// This never requests permission; the token prevents an old task from affecting a new source.
+    private func monitorPermissions(_ token: UUID) {
+        permissionMonitor?.cancel()
+        permissionMonitor = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard !Task.isCancelled, let self, self.reconcilePermissions(token) else { return }
+            }
+        }
+    }
+
+    private func reconcilePermissions(_ token: UUID) -> Bool {
+        guard self.token == token, let source else { return false }
+        guard recordingAllowed() else { stop(); return false }
+        guard surface != nil else { return true }
+        let acceptsInput = source.supportsInput && inputAllowed()
+        if !acceptsInput, touch.release() != nil {
+            // No authorized backend remains to send a release; stop it instead.
+            stop(); return false
+        }
+        updateInputCapability(acceptsInput)
+        return true
     }
 
     private func consumeFrame(_ token: UUID) {
@@ -251,6 +279,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         if let release = touch.release(), inputAllowed() { _ = source?.post(release) }
         let old = source; source = nil; token = nil; surface = nil
         ingress.reset(nil); waitingFrame = nil; preparingEncoder = false
+        permissionMonitor?.cancel(); permissionMonitor = nil
         delayedRefresh?.cancel(); delayedRefresh = nil; lastRefresh = -Double.infinity
         _ = encoder?.abandon(); encoder = nil
         for connection in clients {

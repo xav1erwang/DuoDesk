@@ -159,6 +159,18 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         }
         guard results.state.2.isEmpty, let surface = results.state.0.last(where: { $0.availability == .live })?.surface,
               surface.acceptsInput, results.state.1.last.map({ abs($0 - 96) <= 20 }) == true else { throw Failure.invalid("live output") }
+        // No more frames or touches are sent here. A static system bar must still publish the
+        // current input capability when authorization changes in either direction.
+        permission.input = false
+        try await waitFor("idle input revocation is published") {
+            results.state.0.last?.surface?.id == surface.id && results.state.0.last?.surface?.acceptsInput == false
+        }
+        guard fake.stops == 0 else { throw Failure.invalid("idle input revocation stopped read-only capture") }
+        permission.input = true
+        try await waitFor("idle input restoration is published") {
+            results.state.0.last?.surface?.id == surface.id && results.state.0.last?.surface?.acceptsInput == true
+        }
+        print("PASS: idle input revocation and restoration publish without a new frame or touch")
         try await waitFor("first input permit") { loop.server.queue.sync { client.touchBarInputPermit != nil } }
         guard var firstPermit = loop.server.queue.sync(execute: { client.touchBarInputPermit }) else { throw Failure.invalid("first permit") }
         let begin = TouchBarTouch(surfaceID: surface.id, phase: .began, x: 0.2, y: 0.5)
@@ -263,10 +275,12 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
         guard fake.posted.count == before + 1 else { throw Failure.invalid("input after capability update") }
         permission.input = false
-        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .moved, x: 0.6, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
+        // Losing input access while a contact is held must not wait for another touch or frame.
+        try await waitFor("idle held input revocation") { fake.stops == 2 }
         guard fake.stops == 2, fake.posted.count == before + 1, session.token == nil else {
             throw Failure.invalid("input revocation did not stop source")
         }
+        print("PASS: idle held-contact input revocation stops the source without injecting a release")
         // Stand in for a VideoToolbox creation call that never returned. A new source may not
         // allocate a second worker or leave its capture alive behind that blocked preparation.
         permission.input = true
@@ -288,11 +302,13 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         let beforeRevocation = fake.posted.count
         session.receive(TouchBarTouch(surfaceID: finalSurface.id, phase: .began, x: 0.4, y: 0.5), from: connection, route: route, permit: finalPermit)
         permission.recording = false
-        session.receive(TouchBarTouch(surfaceID: finalSurface.id, phase: .moved, x: 0.5, y: 0.5), from: connection, route: route, permit: finalPermit)
+        // Screen access is revoked with no subsequent input or capture callback.
+        try await waitFor("idle recording revocation") { fake.stops == 4 }
         guard fake.stops == 4, session.token == nil,
               fake.posted.count == beforeRevocation + 2, fake.posted.last?.phase == .cancelled else {
             throw Failure.invalid("recording revocation did not stop and release")
         }
+        print("PASS: idle recording revocation stops the source and releases a trusted held contact")
         try loop.check()
 
         // Use the production coordinator's actual network callbacks against this paired loopback
