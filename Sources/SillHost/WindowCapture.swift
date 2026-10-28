@@ -42,6 +42,11 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     var onSampleObservation: ((SampleObservation) -> Void)?
     /// Test-only view of actual SCK inputs before cadence selection. No production build includes it.
     var onUnpacedSample: ((CVPixelBuffer, CMTime, CMTime) -> Void)?
+    /// For diagnostics that must retain a particular raw CMSampleBuffer through a GPU operation.
+    var onUnpacedSampleBuffer: ((CMSampleBuffer) -> Void)?
+    /// A diagnostic may retain the sample itself until its asynchronous GPU read completes.
+    /// This hook is absent from production and must not capture anything outside its own fixture.
+    var onDeliveredSample: ((CMSampleBuffer) -> Void)?
     static func diagnosticRect(_ value: Any) -> CGRect? {
         if let rect = value as? CGRect { return rect }
         if let wrapped = value as? NSValue { return wrapped.rectValue }
@@ -171,6 +176,9 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             let arrival = CMClockGetTime(CMClockGetHostTimeClock())
             onUnpacedSample(image, pts, arrival)
         }
+        if let onUnpacedSampleBuffer, stateLock.withLock({ self.stream === stream }) {
+            onUnpacedSampleBuffer(sampleBuffer)
+        }
         #endif
         let selection = stateLock.withLock { () -> Selection in
             guard self.stream === stream else { return .ignored }
@@ -281,6 +289,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let surfaceID = CVPixelBufferGetIOSurface(pixelBuffer).map { IOSurfaceGetID($0.takeUnretainedValue()) }
         onSampleObservation?(SampleObservation(displayTime: displayTime, dirtyRectCount: rectCount,
                                                dirtyCenter: dirtyCenter, dirtyElementType: dirtyElementType, surfaceID: surfaceID))
+        onDeliveredSample?(sampleBuffer)
         #endif
         onFrame?(pixelBuffer, pts)
     }

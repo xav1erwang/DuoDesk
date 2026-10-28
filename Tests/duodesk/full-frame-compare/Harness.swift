@@ -5,7 +5,7 @@ import Darwin
 import Foundation
 
 enum CheckFailure: Error { case failed(String) }
-enum Edit { case none, padding, lastLuma, lastU, lastV, both }
+enum Edit { case none, padding, lastLuma, lastU, lastV, both, sampledCenter, unsampledCenter }
 
 func image(_ edit: Edit, width: Int = 2008, height: Int = 1428,
            format: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) throws -> CVPixelBuffer {
@@ -24,9 +24,36 @@ func image(_ edit: Edit, width: Int = 2008, height: Int = 1428,
     for row in 0..<uvHeight { memset(uv.advanced(by: row * uvRow), padding, uvRow); memset(uv.advanced(by: row * uvRow), 128, uvWidth * 2) }
     let lastY = (yHeight - 1) * yRow + yWidth - 1, lastUV = (uvHeight - 1) * uvRow + (uvWidth - 1) * 2
     if edit == .lastLuma || edit == .both { y.storeBytes(of: UInt8(65), toByteOffset: lastY, as: UInt8.self) }
+    if edit == .sampledCenter || edit == .unsampledCenter {
+        let x = yWidth * 3 / 10 + (edit == .unsampledCenter ? 1 : 0), row = yHeight * 3 / 10
+        y.storeBytes(of: UInt8(65), toByteOffset: row * yRow + x, as: UInt8.self)
+    }
     if edit == .lastU || edit == .both { uv.storeBytes(of: UInt8(129), toByteOffset: lastUV, as: UInt8.self) }
     if edit == .lastV { uv.storeBytes(of: UInt8(129), toByteOffset: lastUV + 1, as: UInt8.self) }
     return result
+}
+
+/// Independent CPU check of the old 128×90 sampled center grid, not a full-image comparison.
+func cpuChangedCenterSamples(_ a: CVPixelBuffer, _ b: CVPixelBuffer) throws -> Int {
+    guard CVPixelBufferLockBaseAddress(a, .readOnly) == kCVReturnSuccess else { throw CheckFailure.failed("grid lock first") }
+    defer { CVPixelBufferUnlockBaseAddress(a, .readOnly) }
+    guard CVPixelBufferLockBaseAddress(b, .readOnly) == kCVReturnSuccess else { throw CheckFailure.failed("grid lock second") }
+    defer { CVPixelBufferUnlockBaseAddress(b, .readOnly) }
+    guard let first = CVPixelBufferGetBaseAddressOfPlane(a, 0)?.assumingMemoryBound(to: UInt8.self),
+          let second = CVPixelBufferGetBaseAddressOfPlane(b, 0)?.assumingMemoryBound(to: UInt8.self) else {
+        throw CheckFailure.failed("grid plane")
+    }
+    let w = CVPixelBufferGetWidthOfPlane(a, 0), h = CVPixelBufferGetHeightOfPlane(a, 0)
+    let firstStride = CVPixelBufferGetBytesPerRowOfPlane(a, 0), secondStride = CVPixelBufferGetBytesPerRowOfPlane(b, 0)
+    var changed = 0
+    for row in 0..<90 {
+        let y = min(h - 1, h * 3 / 10 + row * (max(h * 4 / 10, 1) - 1) / 89)
+        for column in 0..<128 {
+            let x = min(w - 1, w * 3 / 10 + column * (max(w * 4 / 10, 1) - 1) / 127)
+            if first[y * firstStride + x] != second[y * secondStride + x] { changed += 1 }
+        }
+    }
+    return changed
 }
 
 /// Independent CPU byte comparison of active image bytes; test buffers are held immutable.
@@ -59,18 +86,22 @@ func cpuEqual(_ a: CVPixelBuffer, _ b: CVPixelBuffer, plane: Int) throws -> Bool
         let fixtures: [(String, Edit, Bool, Bool)] = [
             ("equal", .none, true, true), ("padding-only", .padding, true, true),
             ("last luma pixel", .lastLuma, false, true), ("last U byte", .lastU, true, false),
-            ("last V byte", .lastV, true, false), ("both planes", .both, false, false)
+            ("last V byte", .lastV, true, false), ("both planes", .both, false, false),
+            ("sampled center", .sampledCenter, false, true), ("unsampled center", .unsampledCenter, false, true)
         ]
         var equalCopy: CVPixelBuffer?
         for (name, edit, expectedY, expectedUV) in fixtures {
             let other = try image(edit)
             let result = try await audit.compare(reference, other)
             let cpuY = try cpuEqual(reference, other, plane: 0), cpuUV = try cpuEqual(reference, other, plane: 1)
+            let cpuCenter = try cpuChangedCenterSamples(reference, other)
             guard cpuY == expectedY, cpuUV == expectedUV,
                   (result.changedLumaTiles == 0) == cpuY, (result.changedChromaTiles == 0) == cpuUV,
-                  result.samePlaneBytes == (cpuY && cpuUV) else { throw CheckFailure.failed(name) }
+                  result.samePlaneBytes == (cpuY && cpuUV), result.changedCenterSamples == cpuCenter,
+                  edit != .sampledCenter || cpuCenter > 0,
+                  edit != .unsampledCenter || cpuCenter == 0 else { throw CheckFailure.failed(name) }
             if edit == .none { equalCopy = other }
-            print("PASS: \(name), lumaTiles=\(result.changedLumaTiles), chromaTiles=\(result.changedChromaTiles)")
+            print("PASS: \(name), lumaTiles=\(result.changedLumaTiles), chromaTiles=\(result.changedChromaTiles), centerSamples=\(result.changedCenterSamples)")
         }
         guard let equalCopy else { throw CheckFailure.failed("equal buffer") }
         let mismatch = try image(.none, width: 2006)

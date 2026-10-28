@@ -13,6 +13,7 @@ final class FramePlaneComparison: @unchecked Sendable {
     struct Result {
         let changedLumaTiles: Int
         let changedChromaTiles: Int
+        let changedCenterSamples: Int
         let gpuSeconds: Double?
         var samePlaneBytes: Bool { changedLumaTiles == 0 && changedChromaTiles == 0 }
     }
@@ -42,9 +43,9 @@ final class FramePlaneComparison: @unchecked Sendable {
                                   texture2d<float, access::read> bY [[texture(1)]],
                                   texture2d<float, access::read> aUV [[texture(2)]],
                                   texture2d<float, access::read> bUV [[texture(3)]],
-                                  device uint2 *out [[buffer(0)]], uint2 tile [[thread_position_in_grid]]) {
-            uint columns = (aY.get_width() + 15u) / 16u;
-            uint rows = (aY.get_height() + 15u) / 16u;
+                                  device uint4 *out [[buffer(0)]], uint2 tile [[thread_position_in_grid]]) {
+            uint columns = max((aY.get_width() + 15u) / 16u, 128u);
+            uint rows = max((aY.get_height() + 15u) / 16u, 90u);
             if (tile.x >= columns || tile.y >= rows) return;
             uint2 origin = tile * 16u;
             bool yChanged = false, uvChanged = false;
@@ -54,7 +55,15 @@ final class FramePlaneComparison: @unchecked Sendable {
             for (uint y = origin.y; y < min(origin.y + 16u, aUV.get_height()) && !uvChanged; ++y)
                 for (uint x = origin.x; x < min(origin.x + 16u, aUV.get_width()); ++x)
                     if (any(aUV.read(uint2(x, y)).rg != bUV.read(uint2(x, y)).rg)) { uvChanged = true; break; }
-            out[tile.y * columns + tile.x] = uint2(yChanged ? 1u : 0u, uvChanged ? 1u : 0u);
+            bool centerChanged = false;
+            if (tile.x < 128u && tile.y < 90u) {
+                uint w = aY.get_width(), h = aY.get_height();
+                uint x = min(w - 1u, w * 3u / 10u + tile.x * (max(w * 4u / 10u, 1u) - 1u) / 127u);
+                uint y = min(h - 1u, h * 3u / 10u + tile.y * (max(h * 4u / 10u, 1u) - 1u) / 89u);
+                centerChanged = aY.read(uint2(x, y)).r != bY.read(uint2(x, y)).r;
+            }
+            out[tile.y * columns + tile.x] = uint4(yChanged ? 1u : 0u, uvChanged ? 1u : 0u,
+                                                    centerChanged ? 1u : 0u, 0u);
         }
         """, options: nil)
         guard let function = library.makeFunction(name: "comparePlanes") else { throw Failure.unavailable }
@@ -96,9 +105,9 @@ final class FramePlaneComparison: @unchecked Sendable {
                 let surfaces = try [surface(a, plane: 0, format: .r8Unorm), surface(b, plane: 0, format: .r8Unorm),
                                     surface(a, plane: 1, format: .rg8Unorm), surface(b, plane: 1, format: .rg8Unorm)]
                 let textures = surfaces.compactMap(CVMetalTextureGetTexture)
-                let columns = (yWidth + 15) / 16, rows = (yHeight + 15) / 16, count = columns * rows
+                let columns = max((yWidth + 15) / 16, 128), rows = max((yHeight + 15) / 16, 90), count = columns * rows
                 guard textures.count == 4,
-                      let output = queue.device.makeBuffer(length: count * MemoryLayout<SIMD2<UInt32>>.stride, options: .storageModeShared),
+                      let output = queue.device.makeBuffer(length: count * MemoryLayout<SIMD4<UInt32>>.stride, options: .storageModeShared),
                       let command = queue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else { throw Failure.submission }
                 encoder.setComputePipelineState(pipeline)
                 for (index, texture) in textures.enumerated() { encoder.setTexture(texture, index: index) }
@@ -110,10 +119,11 @@ final class FramePlaneComparison: @unchecked Sendable {
                 command.addCompletedHandler { [self, submission] completed in
                     let result: Result? = withExtendedLifetime(submission) {
                         guard completed.status == .completed else { return nil }
-                        let tiles = UnsafeBufferPointer(start: submission.result.contents().assumingMemoryBound(to: SIMD2<UInt32>.self), count: count)
+                        let tiles = UnsafeBufferPointer(start: submission.result.contents().assumingMemoryBound(to: SIMD4<UInt32>.self), count: count)
                         let y = tiles.reduce(0) { $0 + Int($1.x) }, uv = tiles.reduce(0) { $0 + Int($1.y) }
+                        let center = tiles.reduce(0) { $0 + Int($1.z) }
                         let gpu = completed.gpuEndTime - completed.gpuStartTime
-                        return Result(changedLumaTiles: y, changedChromaTiles: uv,
+                        return Result(changedLumaTiles: y, changedChromaTiles: uv, changedCenterSamples: center,
                                       gpuSeconds: completed.gpuStartTime > 0 && gpu.isFinite && gpu >= 0 ? gpu : nil)
                     }
                     lock.withLock { busy = false }
