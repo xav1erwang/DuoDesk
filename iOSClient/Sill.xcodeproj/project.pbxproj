@@ -59,6 +59,7 @@
 		A1000001000000000000AB02 /* DuoPostureReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001000000000000FB02 /* DuoPostureReader.swift */; };
 		D0000001000000000000D701 /* DuoControlModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F701 /* DuoControlModel.swift */; };
 		D0000001000000000000D702 /* DuoControlDeck.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F702 /* DuoControlDeck.swift */; };
+		D0000001000000000000D712 /* TouchBarPictureChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F712 /* TouchBarPictureChrome.swift */; };
 		D0000001000000000000D707 /* DuoTouchBarRemoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F707 /* DuoTouchBarRemoteView.swift */; };
 		D0000001000000000000D708 /* DuoTouchBarTouchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F708 /* DuoTouchBarTouchView.swift */; };
 		D0000001000000000000D709 /* DuoTouchBarInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F709 /* DuoTouchBarInbox.swift */; };
@@ -123,6 +124,7 @@
 		A1000001000000000000FB02 /* DuoPostureReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoPostureReader.swift; sourceTree = "<group>"; };
 		D0000001000000000000F701 /* DuoControlModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoControlModel.swift; sourceTree = "<group>"; };
 		D0000001000000000000F702 /* DuoControlDeck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoControlDeck.swift; sourceTree = "<group>"; };
+		D0000001000000000000F712 /* TouchBarPictureChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchBarPictureChrome.swift; sourceTree = "<group>"; };
 		D0000001000000000000F707 /* DuoTouchBarRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTouchBarRemoteView.swift; sourceTree = "<group>"; };
 		D0000001000000000000F708 /* DuoTouchBarTouchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTouchBarTouchView.swift; sourceTree = "<group>"; };
 		D0000001000000000000F709 /* DuoTouchBarInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTouchBarInbox.swift; sourceTree = "<group>"; };
@@ -156,6 +158,7 @@
 				A1000001000000000000F008 /* StreamScreen.swift */,
 				D0000001000000000000F701 /* DuoControlModel.swift */,
 				D0000001000000000000F702 /* DuoControlDeck.swift */,
+				D0000001000000000000F712 /* TouchBarPictureChrome.swift */,
 				D0000001000000000000F707 /* DuoTouchBarRemoteView.swift */,
 				D0000001000000000000F708 /* DuoTouchBarTouchView.swift */,
 				D0000001000000000000F709 /* DuoTouchBarInbox.swift */,
@@ -312,6 +315,7 @@
 				A1000001000000000000A007 /* StreamScreen.swift in Sources */,
 				D0000001000000000000D701 /* DuoControlModel.swift in Sources */,
 				D0000001000000000000D702 /* DuoControlDeck.swift in Sources */,
+				D0000001000000000000D712 /* TouchBarPictureChrome.swift in Sources */,
 				D0000001000000000000D707 /* DuoTouchBarRemoteView.swift in Sources */,
 				D0000001000000000000D708 /* DuoTouchBarTouchView.swift in Sources */,
 				D0000001000000000000D709 /* DuoTouchBarInbox.swift in Sources */,

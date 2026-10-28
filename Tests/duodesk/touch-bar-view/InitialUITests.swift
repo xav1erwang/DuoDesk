@@ -1,6 +1,27 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 import XCTest
 final class InitialUITests: XCTestCase {
+    @MainActor func testPictureChromePreservesPixelsAndEdgeTouches() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launch(); defer { app.terminate() }
+        let surface = app.otherElements["duo.touchbar.surface"]
+        let audit = app.staticTexts["fixture.chromeAudit"]
+        let events = app.staticTexts["fixture.events"]
+        XCTAssertTrue(surface.waitForExistence(timeout: 12), app.debugDescription)
+        expectation(for: NSPredicate(format: "label != 'Checking'"), evaluatedWith: audit)
+        waitForExpectations(timeout: 12)
+        XCTAssertTrue(audit.label.hasPrefix("PASS live=0"), audit.label)
+        print("TOUCH BAR CHROME PIXELS: \(audit.label) (synthetic picture)")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).tap()
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
+        let log = events.label
+        let endpoints = log.components(separatedBy: ",").filter { !$0.hasPrefix("moved:") }
+        XCTAssertEqual(endpoints, ["began:1:1", "ended:1:1", "began:99:1", "ended:99:1"], log)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Touch Bar chrome fixture (synthetic, not live)"
+        screenshot.lifetime = .keepAlways; add(screenshot)
+    }
+
     @MainActor func testTouchCoordinatesAndSourceReplacement() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launch(); defer { app.terminate() }

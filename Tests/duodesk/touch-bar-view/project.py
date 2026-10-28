@@ -19,6 +19,7 @@ for name in ['DuoTouchBarTouchView.swift', 'DuoTouchBarRemoteView.swift']:
     source = (root / 'iOSClient' / name).read_text()
     assert source.count('import StreamProtocol\n') == 1
     (out / name).write_text(source.replace('import StreamProtocol\n', ''))
+shutil.copyfile(root / 'iOSClient/TouchBarPictureChrome.swift', out / 'TouchBarPictureChrome.swift')
 project = out / 'SystemKeyboard.xcodeproj'
 project.mkdir(parents=True, exist_ok=True)
 objects = {}
@@ -47,7 +48,7 @@ def configs(name, extra):
         ids.append(obj(name + variant, 'XCBuildConfiguration', name=variant, buildSettings=settings))
     return obj(name + 'Configurations', 'XCConfigurationList', buildConfigurations=ids, defaultConfigurationIsVisible=0, defaultConfigurationName='Debug')
 
-app_phase, app_refs = sources('App', [out / 'FixtureApp.swift', out / 'TouchBar.swift', out / 'StreamMessage.swift', out / 'DuoTouchBarTouchView.swift', out / 'DuoTouchBarRemoteView.swift', out / 'HEVCDisplayViewStub.swift'])
+app_phase, app_refs = sources('App', [out / 'FixtureApp.swift', out / 'TouchBar.swift', out / 'StreamMessage.swift', out / 'DuoTouchBarTouchView.swift', out / 'DuoTouchBarRemoteView.swift', out / 'TouchBarPictureChrome.swift', out / 'HEVCDisplayViewStub.swift'])
 test_phase, test_refs = sources('Test', [out / 'InitialUITests.swift'])
 app_product = obj('AppProduct', 'PBXFileReference', explicitFileType='wrapper.application', path='InputSystemFixture.app', sourceTree='BUILT_PRODUCTS_DIR')
 test_product = obj('TestProduct', 'PBXFileReference', explicitFileType='wrapper.cfbundle', path='KeyboardUITests.xctest', sourceTree='BUILT_PRODUCTS_DIR')

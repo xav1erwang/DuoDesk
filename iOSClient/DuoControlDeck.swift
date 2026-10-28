@@ -199,8 +199,7 @@ private struct DuoTouchBarStrip: View {
                 .fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.08)],
                                      startPoint: .top, endPoint: .bottom))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
+        .modifier(TouchBarPictureChrome(showingPicture: touchBar.status.surface != nil))
         .onAppear { touchBar.setVisible(true) }
         .onDisappear { touchBar.setVisible(false) }
     }
