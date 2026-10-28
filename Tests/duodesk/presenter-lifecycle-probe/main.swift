@@ -14,6 +14,34 @@ enum CheckError: Error { case failed(String) }
 func require(_ value: @autoclosure () -> Bool, _ message: String) throws {
     if !value() { throw CheckError.failed(message) }
 }
+/// Each queued sample owns a separate pixel buffer. The renderer can attach colour metadata to a
+/// buffer it receives, so reusing that buffer with an earlier format description is unsafe.
+func makeSample(_ sequence: Int64) throws -> CMSampleBuffer {
+    var pixel: CVPixelBuffer?
+    let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
+    guard CVPixelBufferCreate(nil, 640, 360, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                              attributes, &pixel) == kCVReturnSuccess, let pixel,
+          CVPixelBufferLockBaseAddress(pixel, []) == kCVReturnSuccess else {
+        throw CheckError.failed("could not create the owned image")
+    }
+    for plane in 0..<CVPixelBufferGetPlaneCount(pixel) {
+        memset(CVPixelBufferGetBaseAddressOfPlane(pixel, plane), 128,
+               CVPixelBufferGetBytesPerRowOfPlane(pixel, plane) * CVPixelBufferGetHeightOfPlane(pixel, plane))
+    }
+    CVPixelBufferUnlockBaseAddress(pixel, [])
+    var description: CMVideoFormatDescription?
+    guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pixel,
+          formatDescriptionOut: &description) == noErr, let description else { throw CheckError.failed("image format") }
+    var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 120),
+        presentationTimeStamp: CMTime(value: sequence, timescale: 120), decodeTimeStamp: .invalid)
+    var sample: CMSampleBuffer?
+    let status = CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: pixel,
+        formatDescription: description, sampleTiming: &timing, sampleBufferOut: &sample)
+    guard status == noErr, let sample else {
+        throw CheckError.failed("image sample status=\(status), sequence=\(sequence)")
+    }
+    return sample
+}
 
 @main enum PresenterLifecycleCheck {
     @MainActor static func main() throws {
@@ -34,21 +62,6 @@ func require(_ value: @autoclosure () -> Bool, _ message: String) throws {
         let presenter = HardwareVideoPresenter(renderer: layer.sampleBufferRenderer, onFirstImage: { _, generation in
             observations.lock.withLock { observations.firstImages.append(generation) }
         }, onFailure: { message, _, _ in observations.lock.withLock { observations.errors.append(message) } })
-        var pixel: CVPixelBuffer?
-        let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
-        guard CVPixelBufferCreate(nil, 640, 360, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-                                  attributes, &pixel) == kCVReturnSuccess, let pixel else {
-            throw CheckError.failed("could not create the owned image")
-        }
-        CVPixelBufferLockBaseAddress(pixel, [])
-        for plane in 0..<CVPixelBufferGetPlaneCount(pixel) {
-            memset(CVPixelBufferGetBaseAddressOfPlane(pixel, plane), 128,
-                   CVPixelBufferGetBytesPerRowOfPlane(pixel, plane) * CVPixelBufferGetHeightOfPlane(pixel, plane))
-        }
-        CVPixelBufferUnlockBaseAddress(pixel, [])
-        var description: CMVideoFormatDescription?
-        guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pixel,
-              formatDescriptionOut: &description) == noErr, let description else { throw CheckError.failed("image format") }
         window.makeKeyAndOrderFront(nil)
         app.activate()
         Task { @MainActor in
@@ -56,12 +69,7 @@ func require(_ value: @autoclosure () -> Bool, _ message: String) throws {
             @MainActor func feed(_ generation: UInt64, frames: Int = 80) async throws {
                 for _ in 0..<frames {
                     sequence += 1
-                    var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 120),
-                        presentationTimeStamp: CMTime(value: sequence, timescale: 120), decodeTimeStamp: .invalid)
-                    var sample: CMSampleBuffer?
-                    guard CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: pixel,
-                          formatDescription: description, sampleTiming: &timing, sampleBufferOut: &sample) == noErr,
-                          let sample else { throw CheckError.failed("image sample") }
+                    let sample = try makeSample(sequence)
                     presenter.enqueue(sample, generation: generation)
                     try await Task.sleep(for: .milliseconds(5))
                 }
@@ -102,12 +110,7 @@ func require(_ value: @autoclosure () -> Bool, _ message: String) throws {
                 var discarded: HardwareVideoPresenter? = HardwareVideoPresenter(renderer: secondLayer.sampleBufferRenderer,
                     onFirstImage: { _, _ in }, onFailure: { _, _, _ in })
                 discarded!.reset(9)
-                var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 120),
-                    presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
-                var finalSample: CMSampleBuffer?
-                guard CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: pixel,
-                      formatDescription: description, sampleTiming: &timing, sampleBufferOut: &finalSample) == noErr,
-                      let finalSample else { throw CheckError.failed("final image") }
+                let finalSample = try makeSample(0)
                 discarded!.enqueue(finalSample, generation: 9)
                 for _ in 0..<100 {
                     if discarded!.isReady(9) { break }

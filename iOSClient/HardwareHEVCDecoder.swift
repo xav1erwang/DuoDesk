@@ -22,6 +22,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     let onSample: (CMSampleBuffer, UInt64, VideoOutputPermit) -> Void
     let onFailure: (String, UInt64) -> Void
     let onNeedsKeyframe: (UInt64) -> Void
+    let onOutputInvalidated: (VideoOutputPermit, UInt64) -> Void
     private let queue = DispatchQueue(label: "duodesk.hardware-decoder", qos: .userInteractive)
     // Only this small admission/generation state crosses the network, UI and VT callback queues.
     private let lock = NSLock()
@@ -29,6 +30,8 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     // Once retired, this instance cannot admit work even if an old network callback kept it.
     private var retired = false
     private var outputPermit: VideoOutputPermit? = VideoOutputPermit() // guarded by lock
+    // Avoid queuing notifications for repeated invalid inputs when this epoch submitted no frame.
+    private var outputPermitHasFlight = false // guarded by lock
     // A queued parameter-set operation belongs to the connection/resolution that admitted it.
     // It must not mint a new generation after clear() has already fenced that connection out.
     private var inputEpoch: UInt64 = 0
@@ -88,10 +91,11 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
 
     init(initialGeneration: UInt64 = 0, onFormat: @escaping (CGSize, UInt64) -> Void,
          onSample: @escaping (CMSampleBuffer, UInt64, VideoOutputPermit) -> Void,
-         onFailure: @escaping (String, UInt64) -> Void, onNeedsKeyframe: @escaping (UInt64) -> Void = { _ in }) {
+         onFailure: @escaping (String, UInt64) -> Void, onNeedsKeyframe: @escaping (UInt64) -> Void = { _ in },
+         onOutputInvalidated: @escaping (VideoOutputPermit, UInt64) -> Void = { _, _ in }) {
         self.generation = initialGeneration
         self.onFormat = onFormat; self.onSample = onSample; self.onFailure = onFailure
-        self.onNeedsKeyframe = onNeedsKeyframe
+        self.onNeedsKeyframe = onNeedsKeyframe; self.onOutputInvalidated = onOutputInvalidated
         let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
         timer.schedule(deadline: .now() + 0.5, repeating: 0.5, leeway: .milliseconds(100))
         timer.setEventHandler { [weak self] in self?.checkWatchdog() }
@@ -122,13 +126,16 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
     private func replaceOutputPermitLocked(allow: Bool) {
         outputPermit?.invalidate()
         outputPermit = allow ? VideoOutputPermit() : nil
+        outputPermitHasFlight = false
     }
 
     /// A reset invalidates tickets already admitted in this generation. Revoke their output
     /// permit as well, but retain it when an earlier frame survives a later budget gap.
-    private func resetBacklogLocked() {
+    private func resetBacklogLocked() -> VideoOutputPermit? {
+        let invalidated = outputPermitHasFlight ? outputPermit : nil
         backlog.reset()
         replaceOutputPermitLocked(allow: !failed && !retired)
+        return invalidated
     }
 
     private func advance(ifInputEpoch epoch: UInt64) -> UInt64? {
@@ -345,9 +352,10 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         // in-flight compressed data share one wire-sized budget.
         let count = data.count, limit = Self.compressedBytesLimit
         guard count > 0, count <= limit else {
-            resetBacklogLocked()
+            let invalidated = resetBacklogLocked(), token = generation
             let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
             lock.unlock()
+            if let invalidated { onOutputInvalidated(invalidated, token) }
             if let request { print("Video backlog: waiting for a fresh keyframe"); onNeedsKeyframe(request) }
             return
         }
@@ -362,10 +370,13 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         }
         let previousEpoch = backlog.epoch
         let ticket = backlog.admit(bytes: data.count, keyframe: isKeyframe)
+        let invalidated = backlog.epoch != previousEpoch && outputPermitHasFlight ? outputPermit : nil
         if backlog.epoch != previousEpoch { replaceOutputPermitLocked(allow: true) }
         guard let ticket else {
+            let token = generation
             let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
             lock.unlock()
+            if let invalidated { onOutputInvalidated(invalidated, token) }
             if let request { print("Video backlog: waiting for a fresh keyframe"); onNeedsKeyframe(request) }
             return
         }
@@ -405,6 +416,7 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
                 // exactly once, and an older fenced ticket cannot enter the decoder.
                 if inFlight == 0 { callbackProgressAt = ProcessInfo.processInfo.systemUptime }
                 inFlight += 1; inFlightBytes += data.count
+                outputPermitHasFlight = true
                 backlog.complete(ticket); queued = false
             }
             lock.unlock()
@@ -486,9 +498,10 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
         guard generation == flight.generation, !failed, backlog.isCurrent(flight.ticket), flight.sequence > latestOutputSequence else {
             lock.unlock(); return
         }
-        resetBacklogLocked()
+        let invalidated = resetBacklogLocked()
         let request = requestRecoveryLocked(now: ProcessInfo.processInfo.systemUptime)
         lock.unlock()
+        if let invalidated { onOutputInvalidated(invalidated, flight.generation) }
         if let request { onNeedsKeyframe(request) }
     }
 

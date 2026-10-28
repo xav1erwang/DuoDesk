@@ -18,11 +18,14 @@ final class Once: @unchecked Sendable {
     func take() -> Bool { lock.withLock { defer { first = false }; return first } }
 }
 final class Results: @unchecked Sendable {
-    private let lock = NSLock(); private var admitted = 0, requests = 0, failures = 0
+    private let lock = NSLock(); private var admitted = 0, requests = 0, failures = 0, revocations = 0
     func admit() { lock.withLock { admitted += 1 } }
     func request() { lock.withLock { requests += 1 } }
     func fail() { lock.withLock { failures += 1 } }
-    var state: (admitted: Int, requests: Int, failures: Int) { lock.withLock { (admitted, requests, failures) } }
+    func revoke() { lock.withLock { revocations += 1 } }
+    var state: (admitted: Int, requests: Int, failures: Int, revocations: Int) {
+        lock.withLock { (admitted, requests, failures, revocations) }
+    }
 }
 func image() -> CVPixelBuffer {
     var result: CVPixelBuffer?
@@ -35,7 +38,8 @@ let done = DispatchSemaphore(value: 0)
 let router = HardwareDecoderRouter(onFormat: { _, _ in }, onSample: { _, _, permit in
     if mode != "before-router" && once.take() { afterEntered.signal(); afterRelease.wait() }
     permit.admit { results.admit() }
-}, onFailure: { _, _ in results.fail() }, onNeedsKeyframe: { _ in results.request() })
+}, onFailure: { _, _ in results.fail() }, onNeedsKeyframe: { _ in results.request() },
+   onOutputInvalidated: { _, _ in results.revoke() })
 let token = router.require(DuoDesktopResolution(width: 2007, height: 1427))
 let deadline = ProcessInfo.processInfo.systemUptime + 2
 while !router.lock.withLock({ router.retiring.isEmpty }) && ProcessInfo.processInfo.systemUptime < deadline {
@@ -47,6 +51,7 @@ decoder.queue.sync { }
 let flight = decoder.lock.withLock { () -> HardwareHEVCDecoder.Flight in
     let ticket = decoder.backlog.admit(bytes: 1, keyframe: true)!
     decoder.backlog.complete(ticket); decoder.inFlight = 1; decoder.inFlightBytes = 1
+    decoder.outputPermitHasFlight = true
     return HardwareHEVCDecoder.Flight(generation: token, ticket: ticket, sequence: 1,
         started: ProcessInfo.processInfo.systemUptime, outputPermit: decoder.outputPermit!, compressedBytes: 1)
 }
@@ -77,7 +82,11 @@ if mode == "preserved" {
             started: ProcessInfo.processInfo.systemUptime, outputPermit: decoder.outputPermit!, compressedBytes: 1)
     }
     decoder.decoded(nil, status: noErr, flags: [], flight: missing, pts: .invalid)
-} else { decoder.enqueue(Data(), isKeyframe: false) }
+} else {
+    decoder.enqueue(Data(), isKeyframe: false)
+    // Empty-input floods must not queue a new invalidation event for every unused permit.
+    if mode == "before-router" { for _ in 0..<12 { decoder.enqueue(Data(), isKeyframe: false) } }
+}
 let after = decoder.lock.withLock { decoder.backlog.epoch }
 let activePermit = decoder.admissionPermit(for: token)!
 let preserved = mode == "preserved" || mode == "preserve-queue"
@@ -85,6 +94,7 @@ let permitCorrect = preserved ? activePermit === flight.outputPermit && activePe
                               : activePermit !== flight.outputPermit && activePermit.isValid && !flight.outputPermit.isValid
 if mode == "before-router" { EpochFault.release.signal() } else { afterRelease.signal() }
 let returned = done.wait(timeout: .now() + 2) == .success
+router.recoveryQueue.sync { }
 let state = results.state
 if let reservation { decoder.lock.withLock { decoder.backlog.complete(reservation) } }
 if mode == "preserved" { decoder.lock.withLock { decoder.inFlight = 0; decoder.inFlightBytes = 0 } }
@@ -97,8 +107,9 @@ let recovery = decoder.lock.withLock { () -> HardwareHEVCDecoder.Flight in
 }
 decoder.decoded(image(), status: noErr, flags: [], flight: recovery, pts: .invalid)
 let recoveryAdmitted = results.state.admitted == state.admitted + 1
-let passed = held && returned && permitCorrect && recoveryAdmitted && state.failures == 0
+let notificationCorrect = state.revocations == (preserved ? 0 : 1)
+let passed = held && returned && permitCorrect && recoveryAdmitted && notificationCorrect && state.failures == 0
     && (preserved ? after == before && state.admitted == 1 : after != before && state.admitted == 0)
-print("\(passed ? "PASS" : "FAIL") epoch handoff mode=\(mode), before=\(before), after=\(after), prior=\(state.admitted), recovery=\(recoveryAdmitted), permit=\(permitCorrect), failures=\(state.failures); synthetic callbacks only")
+print("\(passed ? "PASS" : "FAIL") epoch handoff mode=\(mode), before=\(before), after=\(after), prior=\(state.admitted), recovery=\(recoveryAdmitted), permit=\(permitCorrect), notifications=\(state.revocations), failures=\(state.failures); synthetic callbacks only")
 _ = router.clear()
 exit(passed ? 0 : 1)

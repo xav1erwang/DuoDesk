@@ -60,7 +60,8 @@ final class HEVCDisplayView: UIView {
                 guard let self, self.hardwareDecoder.canOutput(token) else { return }
                 self.onKeyframeNeeded?()
             }
-        }, onReset: { token in presenter.reset(token) })
+        }, onReset: { token in presenter.reset(token) },
+        onOutputInvalidated: { permit, token in presenter.invalidateOutput(permit, generation: token) })
     }()
 
     func requireNativeResolution(_ resolution: DuoDesktopResolution?) {

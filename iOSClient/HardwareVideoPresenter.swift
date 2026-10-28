@@ -53,6 +53,9 @@ final class HardwareVideoPresenter: @unchecked Sendable {
         var hasImage = false
         var enqueuing = false
         var flushing = false
+        var pendingImageRemoval = false
+        var flushWaiters: [CheckedContinuation<Void, Never>] = []
+        var lastSubmittedPermit: VideoOutputPermit?
         var stopped = false
         var received = 0
 
@@ -69,14 +72,53 @@ final class HardwareVideoPresenter: @unchecked Sendable {
             guard !stopped, token >= generation, revision > self.revision, fence.accepts(token, revision: revision) else { return }
             self.revision = revision
             generation = token; lastSequence = -1
-            let mustFlush = hasImage || enqueuing
-            hasImage = false
-            guard mustFlush, !flushing else { return }
-            flushing = true
+            let mustFlush = hasImage || enqueuing || flushing
+            hasImage = false; lastSubmittedPermit = nil
+            guard mustFlush else { return }
             // enqueue and flush inherit this actor's isolation in SDK 27. Flush deliberately
             // cancels a suspended enqueue; all synchronous receiver access stays serialized.
-            await receiver.flush(removingDisplayedImage: true)
+            await flushReceiver(removingDisplayedImage: true)
+        }
+
+        /// A revoked backlog epoch can leave an old enqueue suspended even though the generation
+        /// remains current. Flush that receiver operation without removing the displayed image.
+        /// A delayed notification must not flush a later epoch that has already been submitted.
+        func invalidateOutput(_ permit: VideoOutputPermit, generation token: UInt64) async {
+            guard !stopped, generation == token, lastSubmittedPermit === permit, !permit.isValid else { return }
+            lastSubmittedPermit = nil
+            await flushReceiver(removingDisplayedImage: false)
+        }
+
+        /// A reset arriving during a keep-image flush must still clear the displayed image. Keep
+        /// new samples waiting until that stronger request has also completed.
+        private func flushReceiver(removingDisplayedImage: Bool) async {
+            if flushing {
+                if removingDisplayedImage { pendingImageRemoval = true }
+                return
+            }
+            flushing = true
+            var remove = removingDisplayedImage
+            repeat {
+                pendingImageRemoval = false
+                await receiver.flush(removingDisplayedImage: remove)
+                remove = pendingImageRemoval
+            } while remove
+            finishFlush()
+        }
+
+        private func waitForFlush() async {
+            guard flushing, !stopped else { return }
+            await withCheckedContinuation { flushWaiters.append($0) }
+        }
+
+        private func releaseFlushWaiters() {
+            let waiting = flushWaiters; flushWaiters.removeAll(keepingCapacity: true)
+            waiting.forEach { $0.resume() }
+        }
+
+        private func finishFlush() {
             flushing = false
+            releaseFlushWaiters()
         }
 
         func present(_ event: Event) async {
@@ -85,6 +127,7 @@ final class HardwareVideoPresenter: @unchecked Sendable {
             guard !stopped, event.permit?.isValid != false,
                   token >= generation, fence.accepts(token, revision: eventRevision) else { return }
             if eventRevision > revision { await reset(token, revision: eventRevision) }
+            if flushing { await waitForFlush() }
             guard !stopped, !flushing, !enqueuing, token == generation, eventRevision == revision,
                   event.permit?.isValid != false, fence.accepts(token, revision: eventRevision) else { return }
             let sequence = CMSampleBufferGetPresentationTimeStamp(image).value
@@ -111,6 +154,7 @@ final class HardwareVideoPresenter: @unchecked Sendable {
             }
             let ready = CMReadySampleBuffer<CMSampleBuffer.DynamicContent>(unsafeBuffer: copy)
             guard event.permit?.isValid != false else { return }
+            lastSubmittedPermit = event.permit
             enqueuing = true
             defer { enqueuing = false }
             do {
@@ -150,7 +194,8 @@ final class HardwareVideoPresenter: @unchecked Sendable {
 
         func stop() async {
             stopped = true
-            if !flushing { await receiver.flush(removingDisplayedImage: true) }
+            releaseFlushWaiters()
+            await flushReceiver(removingDisplayedImage: true)
             hasImage = false
         }
     }
@@ -205,6 +250,9 @@ final class HardwareVideoPresenter: @unchecked Sendable {
     func makeInputFence(_ generation: UInt64) -> @Sendable () -> Bool {
         fence.lock.lock(); let revision = fence.revision; fence.lock.unlock()
         return { [fence] in fence.isReady(generation, revision: revision) }
+    }
+    func invalidateOutput(_ permit: VideoOutputPermit, generation: UInt64) {
+        Task { [pump] in await pump.invalidateOutput(permit, generation: generation) }
     }
     func enqueue(_ image: CMSampleBuffer, generation: UInt64, permit: VideoOutputPermit? = nil) {
         var reportDrop = false

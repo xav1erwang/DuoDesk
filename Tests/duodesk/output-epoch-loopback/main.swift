@@ -25,12 +25,16 @@ enum EpochFault {
 final class Results: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [(UInt8, UInt64)] = [], failures: [String] = []
-    private var requests = 0, encoded = 0, denied = 0, channel: LoopbackVideo?
+    private var requests = 0, encoded = 0, denied = 0, invalidations = 0, channel: LoopbackVideo?
     func attach(_ value: LoopbackVideo?) { lock.withLock { channel = value } }
     func request() { let target = lock.withLock { requests += 1; return channel }; target?.requestKeyframe() }
     func fail(_ value: String) { lock.withLock { failures.append(value) } }
     func sent() { lock.withLock { encoded += 1 } }
     func reject() { lock.withLock { denied += 1 } }
+    func invalidate(_ permit: VideoOutputPermit) {
+        if permit.isValid { fail("invalidated permit is still valid"); return }
+        lock.withLock { invalidations += 1 }
+    }
     func sample(_ sample: CMSampleBuffer, token: UInt64) {
         guard let pixel = CMSampleBufferGetImageBuffer(sample), CVPixelBufferGetPlaneCount(pixel) >= 1,
               CVPixelBufferGetWidthOfPlane(pixel, 0) == 2008, CVPixelBufferGetHeightOfPlane(pixel, 0) == 1428,
@@ -42,8 +46,8 @@ final class Results: @unchecked Sendable {
         let value = base[714 * CVPixelBufferGetBytesPerRowOfPlane(pixel, 0) + 1004]
         lock.withLock { samples.append((value, token)) }
     }
-    var state: (samples: [(UInt8, UInt64)], failures: [String], requests: Int, encoded: Int, denied: Int) {
-        lock.withLock { (samples, failures, requests, encoded, denied) }
+    var state: (samples: [(UInt8, UInt64)], failures: [String], requests: Int, encoded: Int, denied: Int, invalidations: Int) {
+        lock.withLock { (samples, failures, requests, encoded, denied, invalidations) }
     }
 }
 enum Failure: Error { case timeout(String), invalid(String) }
@@ -75,7 +79,8 @@ struct Check {
         let router = HardwareDecoderRouter(onFormat: { _, _ in }, onSample: { sample, token, permit in
             EpochFault.afterRouter()
             if permit.admit({ }) { results.sample(sample, token: token) } else { results.reject() }
-        }, onFailure: { message, _ in results.fail(message) }, onNeedsKeyframe: { _ in results.request() })
+        }, onFailure: { message, _ in results.fail(message) }, onNeedsKeyframe: { _ in results.request() },
+        onOutputInvalidated: { permit, _ in results.invalidate(permit) })
         router.require(DuoDesktopResolution(width: 2007, height: 1427))
         let encoder = try HEVCEncoder(width: 2008, height: 1428, fps: 120, bitrate: 20_000_000,
                                       prioritizeSpeed: true, software: false, quiet: true)
@@ -104,17 +109,17 @@ struct Check {
         EpochFault.gate.release.signal()
         try await wait("denied old callback and recovery keyframe") {
             let state = results.state
-            return (state.denied >= 1 && state.samples.contains { $0.0 > 150 }) || !state.failures.isEmpty
+            return (state.denied >= 1 && state.invalidations >= 1 && state.samples.contains { $0.0 > 150 }) || !state.failures.isEmpty
         }
         try loop.check()
         let state = results.state
-        guard state.failures.isEmpty, state.denied == 1, state.samples.count >= 2,
+        guard state.failures.isEmpty, state.denied == 1, state.invalidations == 1, state.samples.count >= 2,
               state.samples.last.map({ $0.0 > 150 && $0.1 == initial.1 }) == true,
               state.requests >= 1, state.encoded >= 3, loop.counters.keyframes >= 2 else {
             throw Failure.invalid("recovery outcome: \(state)")
         }
         let position = EpochFault.before ? "before router" : "after router"
-        print("OUTPUT EPOCH LOOPBACK PASS: native hardware HEVC, QUIC on 127.0.0.1, held \(position), stale callback denied, same-generation recovery; luma=\(state.samples.map(\.0)), requests=\(state.requests), encoded=\(state.encoded)")
+        print("OUTPUT EPOCH LOOPBACK PASS: native hardware HEVC, QUIC on 127.0.0.1, held \(position), stale callback denied, invalidation sent, same-generation recovery; luma=\(state.samples.map(\.0)), requests=\(state.requests), encoded=\(state.encoded)")
         print("SCOPE: synthetic frames and injected gap, temporary in-memory TLS; not desktop, FPS, public network or Duo")
     }
     static func main() async {

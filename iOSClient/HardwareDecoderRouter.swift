@@ -14,6 +14,7 @@ final class HardwareDecoderRouter: @unchecked Sendable {
     private let onFailure: (String, UInt64) -> Void
     private let onNeedsKeyframe: (UInt64) -> Void
     private let onReset: (UInt64) -> Void
+    private let onOutputInvalidated: (VideoOutputPermit, UInt64) -> Void
     private var decoder: HardwareHEVCDecoder?
     private var identity = UUID()
     private var retiring: Set<UUID> = [] // guarded by lock, at most one
@@ -26,9 +27,10 @@ final class HardwareDecoderRouter: @unchecked Sendable {
 
     init(onFormat: @escaping (CGSize, UInt64) -> Void, onSample: @escaping (CMSampleBuffer, UInt64, VideoOutputPermit) -> Void,
          onFailure: @escaping (String, UInt64) -> Void, onNeedsKeyframe: @escaping (UInt64) -> Void = { _ in },
-         onReset: @escaping (UInt64) -> Void = { _ in }) {
+         onReset: @escaping (UInt64) -> Void = { _ in },
+         onOutputInvalidated: @escaping (VideoOutputPermit, UInt64) -> Void = { _, _ in }) {
         self.onFormat = onFormat; self.onSample = onSample; self.onFailure = onFailure
-        self.onNeedsKeyframe = onNeedsKeyframe; self.onReset = onReset
+        self.onNeedsKeyframe = onNeedsKeyframe; self.onReset = onReset; self.onOutputInvalidated = onOutputInvalidated
         decoder = makeDecoder(initialGeneration: 0, identity: identity)
     }
 
@@ -42,6 +44,9 @@ final class HardwareDecoderRouter: @unchecked Sendable {
         }, onNeedsKeyframe: { [weak self] token in
             // enqueue can ask synchronously while the router holds its admission lock.
             self?.recoveryQueue.async { [weak self] in self?.request(token, identity: id) }
+        }, onOutputInvalidated: { [weak self] permit, token in
+            // A backlog reset can also occur while the router holds its admission lock.
+            self?.recoveryQueue.async { [weak self] in self?.outputInvalidated(permit, token: token, identity: id) }
         })
     }
 
@@ -143,6 +148,11 @@ final class HardwareDecoderRouter: @unchecked Sendable {
     private func request(_ token: UInt64, identity id: UUID) {
         lock.lock(); let current = identity == id && decoder?.canOutput(token) == true; lock.unlock()
         if current { onNeedsKeyframe(token) }
+    }
+
+    private func outputInvalidated(_ permit: VideoOutputPermit, token: UInt64, identity id: UUID) {
+        lock.lock(); let current = identity == id && decoder?.canOutput(token) == true; lock.unlock()
+        if current { onOutputInvalidated(permit, token) }
     }
 
     private func reportUnavailable(_ token: UInt64, identity id: UUID) {
