@@ -93,10 +93,12 @@ func dial(_ port: UInt16, using parameters: NWParameters? = nil, timeout: Double
 }
 func selfParameters() -> NWParameters { parameters() }
 func productionDial(_ port: UInt16, identity: RemoteIdentity = clientIdentity,
-                    preferQUIC: Bool = true) async throws -> RemoteConnector.Winner {
-    let candidate = RemoteDialPolicy.Candidate(host: "127.0.0.1", port: Int(port), kind: MacAddress.lan, via: "")
-    let dialer = RemoteConnector(candidates: [candidate], mode: .session(pin: hostIdentity.fingerprint),
-                                identity: identity, queue: clientQueue, preferQUIC: preferQUIC)
+                    preferQUIC: Bool = true, pin: Data? = nil, acceptedSuccessors: [Data] = [],
+                    candidateKind: String = MacAddress.lan) async throws -> RemoteConnector.Winner {
+    let candidate = RemoteDialPolicy.Candidate(host: "127.0.0.1", port: Int(port), kind: candidateKind, via: "")
+    let dialer = RemoteConnector(candidates: [candidate], mode: .session(pin: pin ?? hostIdentity.fingerprint),
+                                identity: identity, queue: clientQueue,
+                                successors: [candidate.key: acceptedSuccessors], preferQUIC: preferQUIC)
     return try await withCheckedThrowingContinuation { continuation in
         let once = Once()
         let deadline = DispatchWorkItem {
@@ -253,6 +255,23 @@ func run() async throws {
         let winner = try await productionDial(port, preferQUIC: false)
         try require(winner.fingerprint == hostIdentity.fingerprint, "TCP retry lost the original host pin")
         try require(winner.connection.metadata(definition: NWProtocolQUIC.definition) == nil, "TCP retry opened QUIC again")
+        try await echo(winner.connection)
+        winner.connection.cancel(); try await waitCount(0)
+    case "remote-connector-wrong-pin":
+        // The candidate kind exercises public-address error classification; the socket remains
+        // loopback-only and uses ephemeral test identities.
+        do {
+            let winner = try await productionDial(port, pin: Data(repeating: 0, count: 32), candidateKind: MacAddress.internet)
+            winner.connection.cancel()
+            throw CheckError.failed("wrong server pin was accepted")
+        } catch let failure as DialFailure {
+            try require(failure.failure == .wrongMac, "wrong server pin did not report wrong Mac")
+        }
+        try await waitCount(0)
+    case "remote-connector-successor-pin":
+        let winner = try await productionDial(port, pin: Data(repeating: 0, count: 32),
+                                              acceptedSuccessors: [hostIdentity.fingerprint])
+        try require(winner.fingerprint == hostIdentity.fingerprint, "explicit successor pin did not win")
         try await echo(winner.connection)
         winner.connection.cancel(); try await waitCount(0)
     case "remote-connector-revoked":

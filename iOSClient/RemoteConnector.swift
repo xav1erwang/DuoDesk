@@ -41,14 +41,16 @@ final class RemoteConnector {
     }
 
     private final class Attempt {
+        let id: UUID
         let candidate: RemoteDialPolicy.Candidate
         let connection: NWConnection
         var ended = false
         var started = false
         var startItem: DispatchWorkItem?
+        var deadlineItem: DispatchWorkItem?
         var fallback: Attempt?
-        init(_ candidate: RemoteDialPolicy.Candidate, _ connection: NWConnection) {
-            self.candidate = candidate; self.connection = connection
+        init(id: UUID, _ candidate: RemoteDialPolicy.Candidate, _ connection: NWConnection) {
+            self.id = id; self.candidate = candidate; self.connection = connection
         }
     }
 
@@ -105,7 +107,9 @@ final class RemoteConnector {
             guard !finished else { return }
             finished = true
             staggerItem?.cancel(); wholeItem?.cancel()
-            for a in attempts where !a.ended { a.ended = true; a.startItem?.cancel(); a.connection.cancel() }
+            for a in attempts where !a.ended {
+                a.ended = true; a.startItem?.cancel(); a.deadlineItem?.cancel(); a.connection.cancel()
+            }
         }
     }
 
@@ -131,15 +135,24 @@ final class RemoteConnector {
         // The one TLS builder every connection to a Mac goes through (DeviceTLS).
         let others: [Data] = { if case .session = mode { return successors[candidate.key] ?? [] }; return [] }()
         func makeAttempt(quic: Bool) -> Attempt {
+            let id = UUID()
+            // A refused pin may leave Network.framework in .preparing. Dispatch after the verify
+            // callback returns so cancelling this attempt cannot reenter the TLS verify block.
+            let pinRefused: () -> Void = { [weak self] in
+                guard let queue = self?.queue else { return }
+                queue.async { [weak self] in self?.pinRefused(id) }
+            }
             let parameters: NWParameters
             if quic {
-                parameters = DeviceTLS.quic(identity: identity, alpn: alpn, pin: pin, queue: queue, alsoAccept: others)
+                parameters = DeviceTLS.quic(identity: identity, alpn: alpn, pin: pin, queue: queue, alsoAccept: others,
+                                            onPinRefused: pinRefused)
             } else {
-                let tls = DeviceTLS.options(identity: identity, alpn: alpn, pin: pin, queue: queue, alsoAccept: others)
+                let tls = DeviceTLS.options(identity: identity, alpn: alpn, pin: pin, queue: queue, alsoAccept: others,
+                                            onPinRefused: pinRefused)
                 parameters = RemoteTLS.parameters(tls: tls, dialing: true)
             }
             let connection = NWConnection(host: NWEndpoint.Host(candidate.host), port: port, using: parameters)
-            let attempt = Attempt(candidate, connection)
+            let attempt = Attempt(id: id, candidate, connection)
             attempts.append(attempt)
             connection.stateUpdateHandler = { [weak self, weak attempt] state in
                 guard let self, let attempt else { return }
@@ -170,7 +183,21 @@ final class RemoteConnector {
         guard !finished, !attempt.ended, !attempt.started else { return }
         attempt.started = true
         attempt.startItem?.cancel(); attempt.startItem = nil
+        // TCP's connectionTimeout covers its handshake, not a peer that accepts TCP and stalls
+        // TLS. QUIC has the same per-attempt bound. Start the clock only when the attempt starts.
+        let deadline = DispatchWorkItem { [weak self, weak attempt] in
+            guard let self, let attempt, !attempt.ended else { return }
+            self.end(attempt, .timeout)
+        }
+        attempt.deadlineItem = deadline
+        queue.asyncAfter(deadline: .now() + Double(RemoteTLS.dialTimeout), execute: deadline)
         attempt.connection.start(queue: queue)
+    }
+
+    private func pinRefused(_ id: UUID) {
+        guard !finished, let attempt = attempts.first(where: { $0.id == id }),
+              attempt.started, !attempt.ended else { return }
+        end(attempt, .tls(-9808))
     }
 
     private func stateChanged(_ attempt: Attempt, _ state: NWConnection.State) {
@@ -188,10 +215,12 @@ final class RemoteConnector {
             #endif
             finished = true
             attempt.ended = true
+            attempt.deadlineItem?.cancel(); attempt.deadlineItem = nil
             staggerItem?.cancel(); wholeItem?.cancel()
             for other in attempts where other !== attempt && !other.ended {
                 other.ended = true
                 other.startItem?.cancel(); other.startItem = nil
+                other.deadlineItem?.cancel(); other.deadlineItem = nil
                 other.connection.cancel()
             }
             c.stateUpdateHandler = nil
@@ -209,8 +238,10 @@ final class RemoteConnector {
     /// An attempt is over: its failure counts (unless it does not, a stranger at a LAN address),
     /// and the next address starts at once.
     private func end(_ attempt: Attempt, _ how: RemoteDialPolicy.End?) {
+        guard !attempt.ended else { return }
         attempt.ended = true
         attempt.startItem?.cancel(); attempt.startItem = nil
+        attempt.deadlineItem?.cancel(); attempt.deadlineItem = nil
         let usedTunnel = attempt.connection.currentPath.map { $0.usesInterfaceType(.other) }
         attempt.connection.cancel()
         if let how, let failure = RemoteDialPolicy.classify(how, candidate: attempt.candidate, usedTunnel: usedTunnel) {
@@ -229,6 +260,7 @@ final class RemoteConnector {
         for a in attempts where !a.ended {
             a.ended = true
             a.startItem?.cancel(); a.startItem = nil
+            a.deadlineItem?.cancel(); a.deadlineItem = nil
             a.connection.cancel()
             results.append((RemoteDialPolicy.classify(.timeout, candidate: a.candidate, usedTunnel: a.connection.currentPath.map { $0.usesInterfaceType(.other) }) ?? .noAnswer, a.candidate))
         }
