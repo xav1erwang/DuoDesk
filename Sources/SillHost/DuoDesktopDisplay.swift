@@ -5,6 +5,16 @@ import CoreGraphics
 import ScreenCaptureKit
 import StreamProtocol
 
+/// The pipeline target is independent of the source display's negotiated clock.
+enum StreamSamplingPolicy {
+    nonisolated static func target(maximum: Int, highestRequested: Int?, softwareEncoder: Bool,
+                                   sourceClockCeiling: Int?) -> Int {
+        let wanted = min(maximum, max(24, highestRequested ?? 60))
+        let codecTarget = softwareEncoder ? min(wanted, 60) : wanted
+        return sourceClockCeiling.map { min(codecTarget, $0) } ?? codecTarget
+    }
+}
+
 /// A transaction on the Mac desktop. A native physical mode is preferred. Otherwise a precisely
 /// sized HiDPI display becomes the mirror master of the existing main desktop; it is not an empty
 /// second workspace. Capture and input both use that same desktop's global coordinate rectangle.
@@ -19,7 +29,7 @@ final class DuoDesktopDisplay {
         let mirrored: Bool
     }
     enum Failure: LocalizedError {
-        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable
+        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable, samplingClockTooSlow
         var errorDescription: String? {
             switch self {
             case .invalidResolution: return "Duo 上屏原生分辨率无效。"
@@ -31,6 +41,7 @@ final class DuoDesktopDisplay {
             case .restorePending: return "此前的 Mac 显示配置仍待恢复，原显示器可能已离线、配置已变化或系统拒绝恢复。"
             case .topologyChanging: return "Mac 显示器配置正在变化，无法安全记录原始状态；未启动新的原生桌面。"
             case .recoveryUnavailable: return "无法安全保存 Mac 显示配置；未启动新的原生桌面。"
+            case .samplingClockTooSlow: return "当前桌面时钟低于请求的采样率；更高目标可在下次连接时尝试。"
             }
         }
     }
@@ -68,6 +79,8 @@ final class DuoDesktopDisplay {
     private var testRecoveryModes: [CGDisplayMode]?
     private var testRecoveryRead: (() throws -> DisplayRecoveryRecord)?
     private var testAfterRecoveryConfiguration: (() -> Void)?
+    private var testVirtualSampling = false
+    private var testSnapshotReads = 0
     #endif
     private let mainDisplay: @MainActor () -> CGDirectDisplayID
     private let layout: Layout
@@ -112,6 +125,8 @@ final class DuoDesktopDisplay {
     }
     private(set) var resolution: DuoDesktopResolution?
     private var requestedFPS: Int?
+    /// Set once when a virtual desktop is created. Sampling changes never change this clock.
+    private var virtualDesktopClockFPS: Int?
     var captureBounds: CGRect? { capturedID == 0 ? nil : CGDisplayBounds(capturedID) }
     /// SCK may follow an exact native clock on both the mirrored product desktop and the
     /// independent diagnostic desktop. A second 1/fps limiter is unnecessary in either case.
@@ -122,26 +137,47 @@ final class DuoDesktopDisplay {
         return abs(mode.refreshRate - Double(requestedFPS)) < 0.5
     }
     /// Only a faster, known clock needs software-side frame selection after an unthrottled SCK
-    /// sample. The virtual desktop already runs at its negotiated clock and uses native cadence.
+    /// sample. This includes a virtual desktop whose sampling target is below its fixed clock.
     var needsCadenceResampling: Bool {
         guard activeModeMatches, let requestedFPS,
               let mode = CGDisplayCopyDisplayMode(capturedID) else { return false }
         return mode.refreshRate > Double(requestedFPS) + 0.5
     }
     /// Keep the diagnostic filter choice separate from the capture interval policy.
-    var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && followsNativeCadence }
+    var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && activeModeMatches }
     /// A physical resolution may change, but its reported refresh must stay exactly as it was.
     /// Unknown or slower physical clocks use the virtual desktop instead of a different mode.
     nonisolated static func permitsPhysicalMode(currentHz: Double, candidateHz: Double, fps: Int) -> Bool {
         currentHz.isFinite && candidateHz.isFinite && currentHz > 0 && (1...240).contains(fps)
             && candidateHz == currentHz && candidateHz >= Double(fps) - 0.5
     }
+    /// Treat near-integer clocks such as 59.94 Hz as the corresponding target; this is only a
+    /// sampling/encoder ceiling, not a claim about delivered frames. Unknown clocks do not cap.
+    nonisolated static func samplingCeiling(refreshHz: Double) -> Int? {
+        guard refreshHz.isFinite, refreshHz >= 1, refreshHz <= 1000 else { return nil }
+        return min(240, Int((refreshHz + 0.5).rounded(.down)))
+    }
+    /// Only an already established and verified desktop has a clock that can cap a later request.
+    var currentSamplingCeiling: Int? {
+        guard activeModeMatches, let mode = CGDisplayCopyDisplayMode(capturedID) else { return nil }
+        return Self.samplingCeiling(refreshHz: mode.refreshRate)
+    }
+    private var isVirtualDesktop: Bool {
+        #if DUO_DISPLAY_RESTORE_TESTING
+        if testVirtualSampling { return true }
+        #endif
+        return temporary != nil
+    }
     var activeModeMatches: Bool {
         guard !pendingMirror, let resolution, let requestedFPS, let mode = CGDisplayCopyDisplayMode(capturedID),
               mode.refreshRate >= Double(requestedFPS) - 0.5,
               physicalRefreshMatchesOriginal else { return false }
-        if temporary != nil {
-            guard abs(mode.refreshRate - Double(requestedFPS)) < 0.5 else { return false }
+        if isVirtualDesktop {
+            guard let virtualDesktopClockFPS,
+                  abs(mode.refreshRate - Double(virtualDesktopClockFPS)) < 0.5 else { return false }
+            #if DUO_DISPLAY_RESTORE_TESTING
+            if testVirtualSampling { return resolution.accepts(width: mode.pixelWidth, height: mode.pixelHeight) }
+            #endif
             switch layout {
             case .mirrored:
                 guard CGDisplayMirrorsDisplay(originalMainID) == capturedID else { return false }
@@ -189,18 +225,14 @@ final class DuoDesktopDisplay {
         guard wanted.isValid else { throw Failure.invalidResolution }
         guard (1...240).contains(fps) else { throw Failure.invalidFrameRate }
         guard !deferMirror || layout == .mirrored else { throw Failure.invalidResolution }
-        if resolution == wanted, requestedFPS == fps, activeModeMatches { return capturedID }
-        if resolution == wanted, activeModeMatches, let temporary {
-            do {
-                try await temporary.updateRefreshRate(Double(fps))
-                requestedFPS = fps
-                guard activeModeMatches else { throw Failure.modeRejected }
-                print("Duo desktop: existing native desktop clock updated to \(fps) Hz")
-                return capturedID
-            } catch {
-                _ = restore()
-                throw error
-            }
+        if resolution == wanted, activeModeMatches {
+            guard let ceiling = currentSamplingCeiling, fps <= ceiling else { throw Failure.samplingClockTooSlow }
+            guard requestedFPS != fps else { return capturedID }
+            let previous = requestedFPS
+            requestedFPS = fps
+            guard activeModeMatches else { requestedFPS = previous; throw Failure.modeRejected }
+            print("Duo desktop: sampling target updated to \(fps) fps; desktop clock unchanged")
+            return capturedID
         }
         guard restore() else { throw Failure.restorePending }
         let store: DisplayRecoveryStore?
@@ -282,6 +314,7 @@ final class DuoDesktopDisplay {
                                                  vendorID: 0x4455, productID: 0x4F01,
                                                  serialNum: Self.virtualDesktopSerial(source: main))
                 temporary = display
+                virtualDesktopClockFPS = fps
                 guard await display.waitUntilOnline(),
                       wanted.accepts(width: display.pixelSize.width, height: display.pixelSize.height) else {
                     throw Failure.modeRejected
@@ -357,7 +390,7 @@ final class DuoDesktopDisplay {
         if !didAttemptDisplayChange {
             originals = []; originalIdentityCounts.removeAll(); observedOffline.removeAll()
             capturedID = 0; originalMainID = 0; originalSystemMainID = 0; primaryOrigins = [:]
-            resolution = nil; requestedFPS = nil
+            resolution = nil; requestedFPS = nil; virtualDesktopClockFPS = nil
             return finishRecovery()
         }
         var success = true
@@ -428,6 +461,7 @@ final class DuoDesktopDisplay {
         primaryOrigins = [:]
         resolution = nil
         requestedFPS = nil
+        virtualDesktopClockFPS = nil
         if success {
             var pending = unavailable
             let verifiedIdentities = onlineIdentitySnapshot()
@@ -635,6 +669,9 @@ final class DuoDesktopDisplay {
     }
 
     private func snapshot() throws -> [Original] {
+        #if DUO_DISPLAY_RESTORE_TESTING
+        testSnapshotReads += 1
+        #endif
         let main = CGMainDisplayID()
         let captured = try Self.stableSnapshot {
             var count: UInt32 = 0
@@ -783,6 +820,45 @@ final class DuoDesktopDisplay {
     }
 
     #if DUO_DISPLAY_RESTORE_TESTING
+    /// Uses the current main mode as a read-only stand-in for a virtual desktop. No display is
+    /// created, configured, captured or mirrored. Any attempted configuration is intercepted.
+    static func inspectSamplingSwitchForTesting() async -> [Bool]? {
+        do {
+            let desktop = DuoDesktopDisplay()
+            let original = try desktop.snapshot()
+            let id = CGMainDisplayID()
+            guard let main = original.first(where: { $0.id == id }),
+                  let ceiling = samplingCeiling(refreshHz: main.mode.refreshRate), ceiling >= 120, ceiling < 240 else { return nil }
+            let native = DuoDesktopResolution(width: main.mode.pixelWidth, height: main.mode.pixelHeight)
+            guard native.isValid, native.accepts(width: main.mode.pixelWidth, height: main.mode.pixelHeight) else { return nil }
+            desktop.originals = original
+            desktop.originalMainID = id; desktop.originalSystemMainID = id; desktop.capturedID = id
+            desktop.resolution = native; desktop.requestedFPS = 120
+            desktop.virtualDesktopClockFPS = ceiling
+            desktop.testVirtualSampling = true
+            desktop.testPreventDisplayMutation = true; desktop.testInterceptConfiguration = true
+            desktop.testSnapshotReads = 0
+            let virtualReady = desktop.activeModeMatches && desktop.currentSamplingCeiling == ceiling
+            let down = try await desktop.prepareGraphics(native, fps: 60)
+            let downOnlySampled = down == id && desktop.requestedFPS == 60 && desktop.virtualDesktopClockFPS == ceiling
+                && desktop.activeModeMatches && desktop.needsCadenceResampling && desktop.testSnapshotReads == 0
+                && desktop.testConfigurationAttempts == 0
+            let up = try await desktop.prepareGraphics(native, fps: 120)
+            let upOnlySampled = up == id && desktop.requestedFPS == 120 && desktop.virtualDesktopClockFPS == ceiling
+                && desktop.activeModeMatches && desktop.testSnapshotReads == 0 && desktop.testConfigurationAttempts == 0
+            var rejectedTooFast = false
+            do { _ = try await desktop.prepareGraphics(native, fps: ceiling + 1) }
+            catch Failure.samplingClockTooSlow { rejectedTooFast = true }
+            let rejectedWithoutReconfiguration = rejectedTooFast && desktop.requestedFPS == 120
+                && desktop.activeModeMatches && desktop.testSnapshotReads == 0 && desktop.testConfigurationAttempts == 0
+            desktop.testVirtualSampling = false; desktop.virtualDesktopClockFPS = nil
+            let physical = try await desktop.prepareGraphics(native, fps: 60)
+            let physicalOnlySampled = physical == id && desktop.requestedFPS == 60 && desktop.activeModeMatches
+                && desktop.testSnapshotReads == 0 && desktop.testConfigurationAttempts == 0
+            return [virtualReady, downOnlySampled, upOnlySampled, rejectedWithoutReconfiguration, physicalOnlySampled]
+        } catch { return nil }
+    }
+
     /// Exercise the production replay sequence with synthetic records and intercepted writes.
     /// The live mode object is read only to stand in for an available original mode.
     static func inspectSingleDisplayReplayForTesting() -> [Bool]? {

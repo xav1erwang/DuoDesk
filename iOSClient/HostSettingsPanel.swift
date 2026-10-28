@@ -499,7 +499,7 @@ struct HostSettingsPanel: View {
                 .accessibilityIdentifier("duo.settings.rate")
             }
         }
-        Footnote(text: "此设备的请求受屏幕、低电量模式和 Mac 帧率上限限制。")
+        Footnote(text: "目标受屏幕、低电量模式、Mac 帧率上限和当前桌面时钟限制。更高目标可能需要重新连接后生效。")
         if offersLargerPicture {
             Rows {
                 Toggle(isOn: $largerPicture) {

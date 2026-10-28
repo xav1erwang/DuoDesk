@@ -20,8 +20,8 @@ package final class StreamCoordinator {
     /// Ceiling for the stream rate (HostConfig). Each device asks for its own panel's rate
     /// through the viewport: 120 on ProMotion, 60 elsewhere, 60 while Low Power Mode caps it.
     private var maxFPS: Int { config.maxFPS }
-    /// The rate the current pipeline runs at, re-read from `wantedFPS` at every select. Capture
-    /// interval, encoder session and virtual display refresh all follow it.
+    /// The sampling and encoder target, re-read on every select. An existing native desktop
+    /// keeps its negotiated clock even when the clients change their target.
     private(set) var fps: Int = 60
     /// Each connected client's wanted rate (60 for one that has not said). The stream runs at the
     /// highest, so a ProMotion device is not held to a 60 Hz one beside it; a re-sent viewport
@@ -41,8 +41,17 @@ package final class StreamCoordinator {
         return duoDesktop.resolution != nil
     }
     private var wantedFPS: Int { min(maxFPS, max(24, clientFPS.values.max() ?? 60)) }
-    /// What the next pipeline will run at: the software encoder is not asked for more than 60.
-    private var effectiveFPS: Int { useSoftwareEncoder ? min(wantedFPS, 60) : wantedFPS }
+    /// A faster request cannot make new desktop images arrive above the existing source clock.
+    /// Keep that clock stable until the session ends and report the actual sampling target.
+    private func effectiveFPS(maximum: Int, for source: StreamSource) -> Int {
+        let ceiling: Int?
+        if source == .desktop, !synthetic, let native = desktopResolution, duoDesktop.resolution == native {
+            ceiling = duoDesktop.currentSamplingCeiling
+        } else { ceiling = nil }
+        return StreamSamplingPolicy.target(maximum: maximum, highestRequested: clientFPS.values.max(),
+                                           softwareEncoder: useSoftwareEncoder, sourceClockCeiling: ceiling)
+    }
+    private var effectiveFPS: Int { effectiveFPS(maximum: maxFPS, for: active) }
     /// The bitrate knob is per 60 fps; a faster stream gets proportionally more so each frame
     /// keeps its share of bits.
     private var streamBitrate: Int { bitrate * fps / 60 }
@@ -816,8 +825,7 @@ package final class StreamCoordinator {
     /// low-latency rate control follow a live change.
     private func restartNeeded(for new: HostConfig, away: Bool) -> Bool {
         guard active != .none else { return false }
-        let wanted = min(new.maxFPS, max(24, clientFPS.values.max() ?? 60))
-        let newFPS = useSoftwareEncoder ? min(wanted, 60) : wanted
+        let newFPS = effectiveFPS(maximum: new.maxFPS, for: active)
         let pair = new.effective(away: away)
         let newScale = useSoftwareEncoder ? min(pair.captureScale, 1.0) : pair.captureScale
         if newFPS != fps || newScale != captureScale { return true }
@@ -1432,7 +1440,7 @@ package final class StreamCoordinator {
             // Home or away changed (a device joined or left): the pipeline takes the other pair.
             adopt(config, away: awayWanted)
         }
-        fps = effectiveFPS             // the devices' panel rate (highest), or 60 before any has said
+        fps = effectiveFPS(maximum: maxFPS, for: source) // source clock can cap an existing native desktop
         // The devices' links: judged afresh when the stream comes back at another quality or not at
         // all, kept through a restart that keeps it (a window picked, a rotation, a resize).
         judgeLinks(source == .none ? nil : LinkJudge.Quality(bitrate: bitrate, fps: fps, captureScale: Double(captureScale)))

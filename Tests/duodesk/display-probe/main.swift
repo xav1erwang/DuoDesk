@@ -178,7 +178,7 @@ Task { @MainActor in
         session = test
         guard !test.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
         let native = DuoDesktopResolution(width: 2007, height: 1427)
-        var master = try await test.prepareGraphics(native, fps: switchesRate ? 60 : 120)
+        var master = try await test.prepareGraphics(native, fps: 120)
         if let recoveryDirectory {
             let path = recoveryDirectory.appendingPathComponent("pending-display.json")
             let record = try JSONDecoder().decode(DisplayRecoveryRecord.self, from: Data(contentsOf: path))
@@ -271,14 +271,17 @@ Task { @MainActor in
             guard rate >= 119.5, master != target else { throw DuoDesktopDisplay.Failure.modeRejected }
         }
         if switchesRate {
-            for rate in [120, 60, 120] {
+            guard let originalClock = CGDisplayCopyDisplayMode(master)?.refreshRate else { throw DuoDesktopDisplay.Failure.modeRejected }
+            for rate in [60, 120] {
                 let previous = master
                 master = try await test.prepareGraphics(native, fps: rate)
                 let actual = CGDisplayCopyDisplayMode(master)?.refreshRate ?? 0
-                print("Graphics rate switch: requested=\(rate), actual=\(actual), master=\(master)")
-                guard abs(actual - Double(rate)) < 0.5 else { throw DuoDesktopDisplay.Failure.modeRejected }
-                guard test.followsNativeCadence else { throw DuoDesktopDisplay.Failure.modeRejected }
-                if previous != target, master != previous { throw DuoDesktopDisplay.Failure.modeRejected }
+                print("Graphics sampling switch: requested=\(rate), desktop clock=\(actual), master=\(master)")
+                guard actual == originalClock, master == previous,
+                      test.followsNativeCadence == (abs(actual - Double(rate)) < 0.5),
+                      test.needsCadenceResampling == (actual > Double(rate) + 0.5) else {
+                    throw DuoDesktopDisplay.Failure.modeRejected
+                }
             }
         }
         let same = try await test.prepareGraphics(native, fps: 120)

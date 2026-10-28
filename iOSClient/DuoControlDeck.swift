@@ -114,7 +114,7 @@ struct DuoControlDeck: View {
         }
         .accessibilityLabel("目标帧率")
         .accessibilityValue("\(DuoStreamPolicy.normalizedFPS(preferredFPS)) FPS")
-        .accessibilityHint("选择本机请求的帧率，实际帧率会受连接和 Mac 上限影响")
+        .accessibilityHint("选择本机目标帧率，受连接和 Mac 当前桌面时钟限制；更高目标可能需要重新连接")
         .accessibilityIdentifier("duo.rate")
     }
 
