@@ -18,7 +18,7 @@ final class HardwareDecoderRouter: @unchecked Sendable {
     private var decoder: HardwareHEVCDecoder?
     private var identity = UUID()
     private var retiring: Set<UUID> = [] // guarded by lock, at most one
-    private var required: DuoDesktopResolution?
+    private var required: HardwareVideoRequirement?
     private var parameters: ParameterSets?
     private var attemptedRecovery = false
     private var requestAfterFormat: UUID?
@@ -63,8 +63,15 @@ final class HardwareDecoderRouter: @unchecked Sendable {
 
     @discardableResult
     func require(_ resolution: DuoDesktopResolution?) -> UInt64 {
+        requireVideo(resolution.map(HardwareVideoRequirement.desktop))
+    }
+
+    /// A separate decoder instance may admit a validated narrow Touch Bar image without
+    /// weakening the desktop's native-resolution rule.
+    @discardableResult
+    func requireVideo(_ resolution: HardwareVideoRequirement?) -> UInt64 {
         lock.lock(); defer { lock.unlock() }
-        guard required != resolution else { return decoder!.require(resolution) }
+        guard required != resolution else { return decoder!.requireVideo(resolution) }
         required = resolution
         parameters = nil; requestAfterFormat = nil; attemptedRecovery = false
         if retiring.isEmpty { return replaceLocked().token }
@@ -72,7 +79,7 @@ final class HardwareDecoderRouter: @unchecked Sendable {
             unavailableToken = token; unavailableReported = false; return token
         }
         unavailableToken = nil
-        let token = decoder!.require(resolution)
+        let token = decoder!.requireVideo(resolution)
         decoder!.watchQueue()
         return token
     }
@@ -123,7 +130,7 @@ final class HardwareDecoderRouter: @unchecked Sendable {
         }
         let newID = UUID(), next = makeDecoder(initialGeneration: barrier, identity: newID)
         identity = newID; decoder = next; unavailableToken = nil; unavailableReported = false
-        return (next, next.require(required))
+        return (next, next.requireVideo(required))
     }
 
     private func matchesLocked(_ id: UUID, token: UInt64) -> Bool {
