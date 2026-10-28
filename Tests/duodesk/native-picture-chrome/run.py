@@ -6,15 +6,16 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import struct
 import subprocess
 import sys
 import time
 import uuid
 
 root = Path(__file__).resolve().parents[3]
-if len(sys.argv) != 3:
-    raise SystemExit('usage: run.py SIMULATOR_UDID NEW_OUTPUT_DIRECTORY')
-device, output = sys.argv[1], Path(sys.argv[2]).absolute()
+if len(sys.argv) != 4:
+    raise SystemExit('usage: run.py SIMULATOR_UDID NEW_OUTPUT_DIRECTORY DISPLAY (for example primary or primary-1)')
+device, output, display = sys.argv[1], Path(sys.argv[2]).absolute(), sys.argv[3]
 output.mkdir(parents=True, exist_ok=False)
 app = output / 'NativePictureChromeFixture.app'
 app.mkdir()
@@ -50,6 +51,16 @@ try:
         raise RuntimeError('fixture did not write a fresh result')
     for name in ['result.json', 'reference.png', 'native.png', 'legacy.png']:
         shutil.copyfile(container / 'Documents' / name, output / name)
+    # The report can be ready before the scene's first presentation reaches the framebuffer.
+    time.sleep(1)
+    subprocess.run(['xcrun', 'simctl', 'io', device, 'screenshot', '--display=' + display,
+                    str(output / 'simulator.png')], check=True)
+    header = (output / 'simulator.png').read_bytes()[:24]
+    if header[:8] != b'\x89PNG\r\n\x1a\n' or header[12:16] != b'IHDR':
+        raise RuntimeError('simulator screenshot is not PNG')
+    screenshot_size = struct.unpack('>II', header[16:24])
+    if sorted(screenshot_size) != sorted(report['sceneNativePixels']):
+        raise RuntimeError(f'screenshot is from {screenshot_size}, fixture scene is on {report["sceneNativePixels"]}')
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if not report['passed']:
         raise SystemExit(1)

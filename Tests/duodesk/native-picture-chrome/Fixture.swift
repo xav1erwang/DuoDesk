@@ -70,9 +70,16 @@ private struct Pattern: View {
         let nativeCorners = cornerOffsets.map { reference[$0..<($0 + 4)].elementsEqual(actual[$0..<($0 + 4)]) }
         let legacyCorners = cornerOffsets.map { !reference[$0..<($0 + 4)].elementsEqual(old[$0..<($0 + 4)]) }
         let passed = nativeChanged == 0 && nativeCorners.allSatisfy { $0 } && legacyChanged > 0 && legacyCorners.allSatisfy { $0 }
+        // On a foldable simulator the foreground scene may be on either built-in display.
+        // Record its actual screen, so the runner can reject a screenshot of the other one.
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive && $0.windows.contains(where: \.isKeyWindow) })
+        else { return "NO FOREGROUND SCENE" }
+        let display = scene.screen.nativeBounds.size
         let report: [String: Any] = ["passed": passed, "nativeChangedPixels": nativeChanged,
             "legacyChangedPixels": legacyChanged, "nativeCornersMatch": nativeCorners,
             "legacyCornersDiffer": legacyCorners, "width": cg.width, "height": cg.height,
+            "sceneNativePixels": [Int(display.width), Int(display.height)],
             "syntheticPicture": true, "realDuoVerified": false, "networkUsed": false,
             "runID": ProcessInfo.processInfo.environment["NATIVE_FRAME_RUN_ID"] ?? "missing"]
         do {

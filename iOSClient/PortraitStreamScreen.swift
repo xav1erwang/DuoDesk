@@ -198,6 +198,16 @@ struct PortraitStreamScreen: View {
         client.select(.desktop)
     }
 
+    private var waitingForDesktop: LocalizedStringResource {
+        #if DEBUG
+        // The layout harness has no Mac or video; don't report a connection failure in a preview.
+        if client.mockDiscovery { return "模拟预览 · 未连接 Mac" }
+        #endif
+        if client.nativeDesktopResolution == nil { return "展开 Duo 以读取上屏原生分辨率" }
+        if resolutionWaitFailed { return "Mac 未能匹配原生分辨率，请更新服务端或重新连接。" }
+        return "正在让 Mac 匹配 Duo 上屏…"
+    }
+
     // MARK: Two halves: the inner display, an iPad window
 
     private func halves(_ size: CGSize) -> some View {
@@ -491,8 +501,7 @@ struct PortraitStreamScreen: View {
                          sendGesture: { client.sendGesture($0, fingers: $1) })
                 .allowsHitTesting(client.hasNativeDesktopVideo)
             if !client.hasNativeDesktopVideo {
-                Text(client.nativeDesktopResolution == nil ? "展开 Duo 以读取上屏原生分辨率"
-                     : resolutionWaitFailed ? "Mac 未能匹配原生分辨率，请更新服务端或重新连接。" : "正在让 Mac 匹配 Duo 上屏…")
+                Text(waitingForDesktop)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding()
