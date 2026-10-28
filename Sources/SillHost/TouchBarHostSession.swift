@@ -7,16 +7,8 @@ import Network
 import QuartzCore
 import StreamProtocol
 
-/// A source must own each pixel buffer for as long as VideoToolbox may use it. A private display
-/// stream's borrowed IOSurface cannot simply be retained beyond its callback without observing
-/// its use-count contract. No real backend is enabled until it is independently verified.
-struct TouchBarCapturedFrame: @unchecked Sendable {
-    let pixels: CVPixelBuffer
-    let contentWidth: Int
-    let contentHeight: Int
-    let pts: CMTime
-}
-
+/// A private display stream's borrowed IOSurface cannot simply be retained beyond its callback
+/// without observing its use-count contract. No real backend is enabled until verified.
 @MainActor protocol TouchBarCaptureSource: AnyObject {
     /// These operations must return promptly; capture callbacks may arrive on a separate queue.
     /// In particular, post must never block or call back into StreamServer's network queue:
