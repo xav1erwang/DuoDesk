@@ -9,7 +9,8 @@ final class HEVCDisplayView: UIView {
     var onDecoderFailure: ((String) -> Void)?
     var requirements: [UUID?] = []
     var frames: [Data] = []
+    var parameterApplications = 0
     func requireTouchBarSurface(_ surface: TouchBarSurface?) { requirements.append(surface?.id) }
-    func apply(_ parameters: ParameterSets) { }
+    func apply(_ parameters: ParameterSets) { parameterApplications += 1 }
     func enqueue(_ data: Data, isKeyframe: Bool) { if isKeyframe { frames.append(data) } }
 }

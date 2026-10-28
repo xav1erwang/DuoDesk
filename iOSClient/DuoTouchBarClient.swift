@@ -14,6 +14,7 @@ import UIKit
     private let transmit: (StreamMessageKind, Data) -> Void
     private var connection: NWConnection?
     private var visible = false
+    private var parameters: Data?
     private var pendingMove: TouchBarTouch?
     private var moveTimer: DispatchWorkItem?
 
@@ -54,6 +55,7 @@ import UIKit
             || old?.pixelHeight != new?.pixelHeight
         if changed {
             pendingMove = nil; moveTimer?.cancel(); moveTimer = nil
+            parameters = nil
             video.requireTouchBarSurface(new)
         }
         status = next
@@ -63,7 +65,11 @@ import UIKit
     private func receive(_ frame: TouchBarKeyframe, from source: NWConnection) {
         guard visible, connection === source, let surface = status.surface,
               surface.id == frame.surfaceID else { return }
-        video.apply(frame.parameters)
+        let encodedParameters = frame.parameters.encoded()
+        if parameters != encodedParameters {
+            parameters = encodedParameters
+            video.apply(frame.parameters)
+        }
         video.enqueue(frame.accessUnit, isKeyframe: true)
     }
 
@@ -108,6 +114,7 @@ import UIKit
     private func clear() {
         inbox.invalidate()
         pendingMove = nil; moveTimer?.cancel(); moveTimer = nil
+        parameters = nil
         if status.surface != nil { video.requireTouchBarSurface(nil) }
         status = TouchBarStatus(availability: .unavailable)
     }

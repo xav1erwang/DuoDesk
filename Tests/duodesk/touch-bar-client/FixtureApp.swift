@@ -31,6 +31,10 @@ import StreamProtocol
             inbox.receiveFrame(frame(a, 10), keyframe: true, from: old)
             try await Task.sleep(for: .milliseconds(100))
             try expect(client.status.surface?.id == a && client.video.frames == [Data([10])], "first source")
+            inbox.receiveFrame(frame(a, 11), keyframe: true, from: old)
+            try await Task.sleep(for: .milliseconds(100))
+            try expect(client.video.frames == [Data([10]), Data([11])] && client.video.parameterApplications == 1,
+                       "unchanged parameters admitted once")
             client.send(TouchBarTouch(surfaceID: a, phase: .began, x: 0.1, y: 0.5))
             client.send(TouchBarTouch(surfaceID: a, phase: .moved, x: 0.3, y: 0.5))
             client.send(TouchBarTouch(surfaceID: a, phase: .moved, x: 0.8, y: 0.5))
@@ -41,11 +45,12 @@ import StreamProtocol
             inbox.receiveStatus(Wire.encode(TouchBarStatus(availability: .live, surface: surface(a))), from: old)
             inbox.receiveFrame(frame(a, 20), keyframe: true, from: old)
             try await Task.sleep(for: .milliseconds(100))
-            try expect(client.status.surface == nil && client.video.frames == [Data([10])], "old connection fenced")
+            try expect(client.status.surface == nil && client.video.frames == [Data([10]), Data([11])], "old connection fenced")
             inbox.receiveStatus(Wire.encode(TouchBarStatus(availability: .live, surface: surface(b))), from: new)
             inbox.receiveFrame(frame(b, 30), keyframe: true, from: new)
             try await Task.sleep(for: .milliseconds(100))
-            try expect(client.status.surface?.id == b && client.video.frames.last == Data([30]), "new connection")
+            try expect(client.status.surface?.id == b && client.video.frames.last == Data([30]) &&
+                       client.video.parameterApplications == 2, "new connection")
             try expect(client.video.requirements == [a, nil, b], "decoder generations")
             client.setVisible(false)
             let last = sent.last

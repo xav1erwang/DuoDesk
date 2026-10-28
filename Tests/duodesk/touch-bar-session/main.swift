@@ -69,6 +69,7 @@ final class HeldControls: @unchecked Sendable {
 }
 @MainActor final class SyntheticTouchBarSource: TouchBarCaptureSource {
     var starts = 0, stops = 0
+    var supportsInput = true
     var posted: [TouchBarTouch] = []
     private var frameHandler: (@Sendable (TouchBarCapturedFrame) -> Void)?
     private var oldFrameHandler: (@Sendable (TouchBarCapturedFrame) -> Void)?
@@ -237,6 +238,7 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         guard results.state.1.count == observed else { throw Failure.invalid("late frame after stop") }
 
         permission.input = false
+        fake.supportsInput = false
         session.subscribe(TouchBarSubscription(watching: true), from: connection, route: route)
         fake.emit(try frame(144))
         try await waitFor("read-only surface") {
@@ -251,6 +253,9 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
         guard fake.posted.count == before else { throw Failure.invalid("posted without input permission") }
         permission.input = true
+        session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
+        guard fake.posted.count == before else { throw Failure.invalid("capture-only backend accepted input") }
+        fake.supportsInput = true
         session.receive(TouchBarTouch(surfaceID: readOnly.id, phase: .began, x: 0.5, y: 0.5), from: connection, route: route, permit: readOnlyPermit)
         try await waitFor("updated input capability") {
             results.state.0.last(where: { $0.availability == .live })?.surface?.acceptsInput == true

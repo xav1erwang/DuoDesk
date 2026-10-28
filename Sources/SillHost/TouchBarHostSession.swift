@@ -10,6 +10,8 @@ import StreamProtocol
 /// A private display stream's borrowed IOSurface cannot simply be retained beyond its callback
 /// without observing its use-count contract. No real backend is enabled until verified.
 @MainActor protocol TouchBarCaptureSource: AnyObject {
+    /// A capture-only backend stays read-only even when macOS Accessibility is authorized.
+    var supportsInput: Bool { get }
     /// These operations must return promptly; capture callbacks may arrive on a separate queue.
     /// In particular, post must never block or call back into StreamServer's network queue:
     /// its admission lock also serializes network-side subscription revocation.
@@ -147,6 +149,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
               let surface, let source, permit.surfaceID == surface.id, permit.connectionID == id,
               permit.isValid else { return }
         guard recordingAllowed() else { stop(); return }
+        guard source.supportsInput else { return }
         guard inputAllowed() else {
             if touch.release() != nil { stop() }
             return
@@ -183,7 +186,8 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         guard recordingAllowed() else { stop(); return }
         let width = CVPixelBufferGetWidth(frame.pixels), height = CVPixelBufferGetHeight(frame.pixels)
         let candidate = TouchBarSurface(id: token, pixelWidth: frame.contentWidth, pixelHeight: frame.contentHeight,
-                                        encodedWidth: width, encodedHeight: height, acceptsInput: inputAllowed())
+                                        encodedWidth: width, encodedHeight: height,
+                                        acceptsInput: inputAllowed() && source?.supportsInput == true)
         guard candidate.isValid else { stop(); return }
         if let existing = surface {
             guard existing.pixelWidth == candidate.pixelWidth, existing.pixelHeight == candidate.pixelHeight,
@@ -216,7 +220,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
             return
         }
         var surface = surface
-        surface.acceptsInput = inputAllowed()
+        surface.acceptsInput = inputAllowed() && source?.supportsInput == true
         preparingEncoder = false; encoder = made; self.surface = surface
         made.onEncoded = { [weak server] bytes, keyframe, parameters in
             server?.broadcastTouchBarFrame(bytes, keyframe: keyframe, parameters: parameters,
