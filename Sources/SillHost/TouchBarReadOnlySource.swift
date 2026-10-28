@@ -5,9 +5,9 @@ import Foundation
 import IOSurface
 import StreamProtocol
 
-/// A future native driver must deliver each borrowed surface inside its callback and return
-/// promptly from start/stop. Nothing in this protocol changes system access or requests it.
-protocol TouchBarSurfaceDriver: AnyObject {
+/// A future native driver must deliver each borrowed surface inside its callback, return promptly
+/// from start/stop and leave any existing run untouched if start throws. Nothing here requests access.
+protocol TouchBarSurfaceDriver: AnyObject, Sendable {
     func start(onSurface: @escaping @Sendable (IOSurfaceRef, CMTime) -> Void,
                onStopped: @escaping @Sendable () -> Void) throws
     func stop()
@@ -42,6 +42,10 @@ private final class TouchBarSourceGate: @unchecked Sendable {
         self.driver = driver; self.recordingAllowed = recordingAllowed
     }
 
+    deinit {
+        if let token { _ = gate.end(token); driver.stop() }
+    }
+
     func start(onFrame: @escaping @Sendable (TouchBarCapturedFrame) -> Void,
                onStopped: @escaping @Sendable () -> Void) throws {
         guard token == nil else { throw Failure.alreadyRunning }
@@ -63,7 +67,6 @@ private final class TouchBarSourceGate: @unchecked Sendable {
             })
         } catch {
             _ = gate.end(next); token = nil; self.onStopped = nil
-            driver.stop()
             throw error
         }
     }
