@@ -113,3 +113,41 @@ public struct TouchBarMedia: Equatable, Sendable {
         return data
     }
 }
+
+/// One self-contained HEVC keyframe and its parameter sets. A slow client may drop any whole
+/// packet without invalidating the next; the producer must actually force and verify keyframes.
+/// Layout inside the UUID-fenced media envelope: parameter length (4, BE), parameter sets, NALs.
+public struct TouchBarKeyframe {
+    public let surfaceID: UUID
+    public let parameters: ParameterSets
+    public let accessUnit: Data
+
+    public init?(surfaceID: UUID, parameters: ParameterSets, accessUnit: Data) {
+        guard parameters.nalUnitHeaderLength == 4, parameters.sets.count == 3,
+              parameters.sets.allSatisfy({ !$0.isEmpty && $0.count <= 65_535 }), !accessUnit.isEmpty else { return nil }
+        let parameterLength = 2 + parameters.sets.reduce(0) { $0 + 2 + $1.count }
+        guard parameterLength + 4 < TouchBarProtocol.maximumEncodedBytes,
+              accessUnit.count <= TouchBarProtocol.maximumEncodedBytes - parameterLength - 4 else { return nil }
+        self.surfaceID = surfaceID; self.parameters = parameters; self.accessUnit = accessUnit
+    }
+
+    public init?(encoded: Data) {
+        guard let media = TouchBarMedia(encoded: encoded), media.bytes.count > 4 else { return nil }
+        let parameterLength = Int(media.bytes.readBigEndian(UInt32.self, at: 0))
+        guard parameterLength > 0, parameterLength < media.bytes.count - 4 else { return nil }
+        let start = media.bytes.startIndex + 4
+        let parameterData = media.bytes.subdata(in: start..<(start + parameterLength))
+        guard let parameters = ParameterSets(encoded: parameterData),
+              parameters.nalUnitHeaderLength == 4, parameters.sets.count == 3,
+              parameters.sets.allSatisfy({ !$0.isEmpty }), parameters.encoded() == parameterData else { return nil }
+        let frame = media.bytes.subdata(in: (start + parameterLength)..<media.bytes.endIndex)
+        self.init(surfaceID: media.surfaceID, parameters: parameters, accessUnit: frame)
+    }
+
+    public var encoded: Data {
+        let parameterData = parameters.encoded()
+        var body = Data(capacity: 4 + parameterData.count + accessUnit.count)
+        body.appendBigEndian(UInt32(parameterData.count)); body.append(parameterData); body.append(accessUnit)
+        return TouchBarMedia(surfaceID: surfaceID, bytes: body)!.encoded
+    }
+}

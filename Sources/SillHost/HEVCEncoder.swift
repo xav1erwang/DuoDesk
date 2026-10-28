@@ -56,6 +56,9 @@ final class HEVCEncoder {
     private let fps: Int
     private let bitrate: Int
     private let prioritizeSpeed: Bool
+    /// For an independent small side stream, each output must stand alone so a slow client can
+    /// drop a whole packet without losing the reference chain. The desktop keeps its normal GOP.
+    private let independentFrames: Bool
     /// The session frames go into. It changes only in `submit`, on `encodeQueue`, when a new one
     /// replaces it; read there and in `deinit`.
     private var session: VTCompressionSession?
@@ -125,7 +128,7 @@ final class HEVCEncoder {
     }()
 
     init(width: Int, height: Int, fps: Int, bitrate: Int, prioritizeSpeed: Bool, software: Bool = false,
-         quiet: Bool = false) throws {
+         quiet: Bool = false, independentFrames: Bool = false) throws {
         self.width = width
         self.height = height
         self.software = software
@@ -133,6 +136,7 @@ final class HEVCEncoder {
         self.fps = fps
         self.bitrate = bitrate
         self.prioritizeSpeed = prioritizeSpeed
+        self.independentFrames = independentFrames
         Self.serialLock.lock(); Self.lastSerial += 1; serial = Self.lastSerial; Self.serialLock.unlock()
         session = try Self.makeSession(width: width, height: height, fps: fps, bitrate: bitrate, prioritizeSpeed: prioritizeSpeed,
                                        software: software)
@@ -388,7 +392,7 @@ final class HEVCEncoder {
         }
         if handOver.ptsFixed { bump("enc.ptsFixed") }
         // A new session starts with a keyframe anyway; forcing it keeps the retry below for it.
-        let forced = handOver.keyframe || retired != nil
+        let forced = independentFrames || handOver.keyframe || retired != nil
         let props: CFDictionary? = forced ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let pts = handOver.pts
 

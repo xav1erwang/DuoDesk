@@ -31,6 +31,29 @@ check(TouchBarMedia(encoded: media.encoded.prefix(16)) == nil, "empty media refu
 check(TouchBarMedia(encoded: Data(repeating: 0, count: 17 + TouchBarProtocol.maximumEncodedBytes)) == nil,
       "oversized media refused")
 check(TouchBarMedia(surfaceID: first, bytes: Data()) == nil, "empty access unit refused")
+let parameters = ParameterSets(nalUnitHeaderLength: 4, sets: [Data([1, 2]), Data([3]), Data([4, 5, 6])])
+let packet = TouchBarKeyframe(surfaceID: first, parameters: parameters, accessUnit: bytes)!
+let packetCopy = TouchBarKeyframe(encoded: packet.encoded)
+check(packetCopy?.surfaceID == first && packetCopy?.parameters.encoded() == parameters.encoded()
+      && packetCopy?.accessUnit == bytes, "self-contained HEVC packet round trip")
+check(TouchBarKeyframe(surfaceID: first, parameters: ParameterSets(nalUnitHeaderLength: 3, sets: parameters.sets),
+                       accessUnit: bytes) == nil, "wrong NAL length rejected")
+check(TouchBarKeyframe(surfaceID: first, parameters: ParameterSets(nalUnitHeaderLength: 4, sets: [Data(), Data([1]), Data([2])]),
+                       accessUnit: bytes) == nil, "empty parameter set rejected")
+check(TouchBarKeyframe(surfaceID: first, parameters: parameters,
+                       accessUnit: Data(repeating: 0, count: TouchBarProtocol.maximumEncodedBytes)) == nil,
+      "combined packet budget enforced")
+var badLength = packet.encoded
+for index in 16..<20 { badLength[index] = 0xff }
+check(TouchBarKeyframe(encoded: badLength) == nil, "malformed parameter length rejected")
+var trailingParameter = Data([0, 0, 0, UInt8(parameters.encoded().count + 1)])
+trailingParameter.append(parameters.encoded()); trailingParameter.append(0); trailingParameter.append(bytes)
+check(TouchBarKeyframe(encoded: TouchBarMedia(surfaceID: first, bytes: trailingParameter)!.encoded) == nil,
+      "noncanonical parameter data rejected")
+for kind in [StreamMessageKind.touchBarSubscription, .touchBarStatus, .touchBarFrame, .touchBarTouch, .touchBarRefresh] {
+    let message = StreamMessage(kind: kind, timestamp: 0, isKeyframe: false, payload: Data()).serialized()
+    check(StreamMessage.parseHeader(message)?.kind == kind, "Touch Bar message kind round trip")
+}
 
 func touch(_ phase: TouchBarPhase, _ x: Double = 0.3, _ y: Double = 0.6, id: UUID = first) -> TouchBarTouch {
     TouchBarTouch(surfaceID: id, phase: phase, x: x, y: y)

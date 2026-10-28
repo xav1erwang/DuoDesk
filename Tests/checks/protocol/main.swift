@@ -367,10 +367,13 @@ check("kind 23 is hello (update-notice); 24, 25 and 27 the Mac's menus; 26 the M
       header(23)?.kind == .hello && header(24)?.kind == .macMenu && header(25)?.kind == .pressMenuItem
       && header(27)?.kind == .fetchMenu && header(26)?.kind == .macPointer)
 check("kind 28 is gesture (trackpad gestures), 29 unknown (skipped)", header(28)?.kind == .gesture && header(29)?.kind == .unknown)
-check("kind 32 is the clipboard, 33 requests recovery, 34 resets video; reserved kinds remain unknown",
+check("clipboard and desktop recovery kinds, Touch Bar 35–39, and reserved kinds parse correctly",
       header(32)?.kind == .clipboard && header(33)?.kind == .requestKeyframe
       && header(34)?.kind == .streamReset
-      && [29, 30, 31, 35].allSatisfy { header(UInt8($0))?.kind == .unknown })
+      && header(35)?.kind == .touchBarSubscription && header(36)?.kind == .touchBarStatus
+      && header(37)?.kind == .touchBarFrame && header(38)?.kind == .touchBarTouch
+      && header(39)?.kind == .touchBarRefresh
+      && [29, 30, 31, 40].allSatisfy { header(UInt8($0))?.kind == .unknown })
 let recovery = StreamMessage(kind: .requestKeyframe, timestamp: 1, isKeyframe: false, payload: Data()).serialized()
 check("decoder recovery keeps the bounded header and empty payload",
       recovery.count == StreamMessage.headerLength && StreamMessage.parseHeader(recovery)?.payloadLength == 0)

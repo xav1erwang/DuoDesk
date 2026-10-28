@@ -77,6 +77,13 @@ public enum StreamMessageKind: UInt8 {
                              // on the Mac (or sent by another device), only to a connection that subscribed
     case requestKeyframe = 33 // client → host, empty: recover a bounded decoder queue after a burst
     case streamReset = 34     // host → client: 8-byte video epoch; invalidate old images before a restart
+    // Optional Touch Bar lane. Older peers skip these unknown kinds; it is not advertised until
+    // the host has a working source. Frames are independently decodable hardware HEVC keyframes.
+    case touchBarSubscription = 35 // client → host: JSON TouchBarSubscription
+    case touchBarStatus = 36       // host → client: JSON TouchBarStatus
+    case touchBarFrame = 37        // host → client: TouchBarKeyframe.encoded
+    case touchBarTouch = 38        // client → host: JSON TouchBarTouch
+    case touchBarRefresh = 39      // client → host: 16-byte source UUID for a fresh keyframe
     case unknown = 255       // never sent: what parseHeader yields for a kind this build does not know
 }
 
