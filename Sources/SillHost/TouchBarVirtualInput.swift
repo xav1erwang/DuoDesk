@@ -3,8 +3,9 @@ import AppKit
 import Foundation
 import StreamProtocol
 
-/// The simulated display's point extent must come from a separately verified runtime. It is not
-/// inferred from a physical-bar screenshot, an even-aligned video canvas, or a guessed scale.
+/// The simulated display's input extent comes from its own runtime. It is not inferred from a
+/// physical-bar screenshot, an even-aligned video canvas, or a guessed scale. The native private
+/// API's units and orientation are still unverified and this mapping is not enabled in the app.
 struct TouchBarVirtualInputMapping: Equatable, Sendable {
     let imageWidth: Int
     let imageHeight: Int
@@ -15,6 +16,18 @@ struct TouchBarVirtualInputMapping: Equatable, Sendable {
         imageWidth > 0 && imageWidth <= 8192 && imageHeight > 0 && imageHeight <= 2048
             && pointWidth.isFinite && pointWidth > 0 && pointWidth <= 8192
             && pointHeight.isFinite && pointHeight > 0 && pointHeight <= 2048
+    }
+
+    static func observed(imageWidth: Int, imageHeight: Int, extent: CGSize?) -> Self? {
+        guard let extent else { return nil }
+        let value = Self(imageWidth: imageWidth, imageHeight: imageHeight,
+                         pointWidth: Double(extent.width), pointHeight: Double(extent.height))
+        return value.isValid ? value : nil
+    }
+
+    func matches(extent: CGSize?) -> Bool {
+        guard let extent else { return false }
+        return isValid && Double(extent.width) == pointWidth && Double(extent.height) == pointHeight
     }
 
     /// Wire coordinates are top-left based; the historical simulator's view coordinates are

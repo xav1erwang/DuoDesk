@@ -18,13 +18,15 @@ private final class FakeRuntime: TouchBarVirtualRuntime, @unchecked Sendable {
     private let lock = NSLock()
     private let firstPostGate: DispatchSemaphore?
     private let postResult: Bool
+    private var extent: CGSize?
     private var queue: DispatchQueue?
     private var onSurface: (@Sendable (IOSurfaceRef, CMTime) -> Void)?
     private var onStopped: (@Sendable () -> Void)?
     private var events: [TouchBarVirtualMouseEvent] = []
     private var stops = 0
-    init(firstPostGate: DispatchSemaphore? = nil, postResult: Bool = true) {
-        self.firstPostGate = firstPostGate; self.postResult = postResult
+    init(firstPostGate: DispatchSemaphore? = nil, postResult: Bool = true,
+         extent: CGSize? = CGSize(width: 1004, height: 30)) {
+        self.firstPostGate = firstPostGate; self.postResult = postResult; self.extent = extent
     }
     func start(queue: DispatchQueue, onSurface: @escaping @Sendable (IOSurfaceRef, CMTime) -> Void,
                onUnavailable: @escaping @Sendable () -> Void, onStopped: @escaping @Sendable () -> Void) throws {
@@ -35,6 +37,8 @@ private final class FakeRuntime: TouchBarVirtualRuntime, @unchecked Sendable {
         if first { firstPostGate?.wait() }
         return postResult
     }
+    func inputExtent() -> CGSize? { lock.withLock { extent } }
+    func setExtent(_ value: CGSize?) { lock.withLock { extent = value } }
     func stop() {
         let callback = lock.withLock { () -> (DispatchQueue, @Sendable () -> Void)? in
             guard stops == 0, let queue, let onStopped else { return nil }
@@ -87,12 +91,17 @@ private func touch(_ id: UUID, _ phase: TouchBarPhase, _ x: Double, _ y: Double)
         let id = UUID()
         let mapping = TouchBarVirtualInputMapping(imageWidth: 2008, imageHeight: 60, pointWidth: 1004, pointHeight: 30)
         let wrong = TouchBarVirtualInputMapping(imageWidth: 2006, imageHeight: 60, pointWidth: 1003, pointHeight: 30)
+        let wrongExtent = TouchBarVirtualInputMapping(imageWidth: 2008, imageHeight: 60, pointWidth: 502, pointHeight: 30)
         try driver.start(onSurface: { _, _ in audit.frame() }, onStopped: { audit.stop() })
         guard !driver.postForExperiment(touch(id, .began, 0, 0), mapping: mapping) else { throw Failure.invalid("input before frame") }
         try await waitFor("runtime started") { fake.started }
         fake.emit(try surface())
         try await waitFor("surface callback") { audit.counts.0 == 1 }
+        guard driver.mappingForExperiment == mapping else { throw Failure.invalid("source-provided input extent") }
         guard !driver.postForExperiment(touch(id, .began, 0, 0), mapping: wrong) else { throw Failure.invalid("wrong source geometry") }
+        guard !driver.postForExperiment(touch(id, .began, 0, 0), mapping: wrongExtent) else {
+            release.signal(); throw Failure.invalid("incorrect runtime input extent accepted")
+        }
         inputAllowed.set(false)
         guard !driver.postForExperiment(touch(id, .began, 0, 0), mapping: mapping) else { throw Failure.invalid("denied input") }
         inputAllowed.set(true)
@@ -157,7 +166,53 @@ private func touch(_ id: UUID, _ phase: TouchBarPhase, _ x: Double, _ y: Double)
         try await waitFor("fourth surface") { audit.counts.0 == 4 }
         guard fourth.postForExperiment(touch(id, .began, 0.5, 0.5), mapping: mapping) else { throw Failure.invalid("fourth down") }
         try await waitFor("failed post stopped source") { failing.snapshot.1 == 1 && fourth.isQuiescent && audit.counts.1 == 2 }
-        print("VIRTUAL TOUCH BAR INTERACTION PASS: same injected runtime/surface, coordinate mapping, bounded move coalescing, stop and permission gates")
+
+        // An unavailable or malformed native extent does not suppress capture, but it must never
+        // authorize input. A later valid frame replaces that metadata on the same fake runtime.
+        let noExtent = FakeRuntime(extent: nil)
+        let fifth = TouchBarVirtualDriver(recordingAllowed: { true }, inputAllowed: { true }, makeRuntime: { noExtent })
+        try fifth.start(onSurface: { _, _ in audit.frame() }, onStopped: { audit.stop() })
+        try await waitFor("fifth runtime started") { noExtent.started }
+        noExtent.emit(try surface())
+        try await waitFor("fifth surface without extent") { audit.counts.0 == 5 }
+        guard fifth.mappingForExperiment == nil,
+              !fifth.postForExperiment(touch(id, .began, 0.2, 0.2), mapping: mapping) else {
+            throw Failure.invalid("input without runtime extent")
+        }
+        noExtent.setExtent(CGSize(width: CGFloat.nan, height: 30)); noExtent.emit(try surface())
+        try await waitFor("fifth surface with malformed extent") { audit.counts.0 == 6 }
+        guard fifth.mappingForExperiment == nil,
+              !fifth.postForExperiment(touch(id, .began, 0.2, 0.2), mapping: mapping) else {
+            throw Failure.invalid("input with malformed runtime extent")
+        }
+        noExtent.setExtent(CGSize(width: 1004, height: 30)); noExtent.emit(try surface())
+        try await waitFor("fifth surface with valid extent") { audit.counts.0 == 7 }
+        guard fifth.mappingForExperiment == mapping,
+              fifth.postForExperiment(touch(id, .began, 0.2, 0.2), mapping: mapping) else {
+            throw Failure.invalid("input after runtime extent became valid")
+        }
+        try await waitFor("fifth down delivered") { noExtent.snapshot.0.count == 1 }
+        fifth.stop()
+        try await waitFor("fifth runtime stopped") { noExtent.snapshot.1 == 1 && fifth.isQuiescent }
+
+        // The bar may change size after the last picture while a native call is blocked. Waiting
+        // input must be rejected by the current runtime extent, not just the captured metadata.
+        let sizeGate = DispatchSemaphore(value: 0), changed = FakeRuntime(firstPostGate: sizeGate)
+        let sixth = TouchBarVirtualDriver(recordingAllowed: { true }, inputAllowed: { true }, makeRuntime: { changed })
+        try sixth.start(onSurface: { _, _ in audit.frame() }, onStopped: { audit.stop() })
+        try await waitFor("sixth runtime started") { changed.started }
+        changed.emit(try surface())
+        try await waitFor("sixth surface") { audit.counts.0 == 8 }
+        guard sixth.postForExperiment(touch(id, .began, 0.2, 0.2), mapping: mapping) else { throw Failure.invalid("sixth down") }
+        try await waitFor("sixth post blocked") { changed.snapshot.0.count == 1 }
+        guard sixth.postForExperiment(touch(id, .moved, 0.8, 0.2), mapping: mapping) else {
+            sizeGate.signal(); throw Failure.invalid("sixth queued move")
+        }
+        changed.setExtent(CGSize(width: 502, height: 30)); sizeGate.signal()
+        try await waitFor("changed extent stops source") { changed.snapshot.1 == 1 && sixth.isQuiescent && audit.counts.1 == 3 }
+        guard changed.snapshot.0.count == 1 else { throw Failure.invalid("stale extent reached runtime") }
+
+        print("VIRTUAL TOUCH BAR INTERACTION PASS: same injected runtime/surface, runtime extent, changed extent, bounded movement and permission gates")
         print("SCOPE: fake runtime and permissions, generated surface; no private system call, actual input, real Touch Bar, Duo, WAN or FPS acceptance")
     }
     static func main() async {

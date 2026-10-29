@@ -15,11 +15,15 @@ protocol TouchBarVirtualRuntime: AnyObject {
                onUnavailable: @escaping @Sendable () -> Void,
                onStopped: @escaping @Sendable () -> Void) throws
     func stop()
+    /// Current native input-coordinate extent for this exact runtime, only on its serial queue.
+    /// Nil leaves capture available but refuses input. A value is not proof of real compatibility.
+    func inputExtent() -> CGSize?
     /// Runs only on the runtime's serial queue. Real input is guarded again by the native runtime.
     func post(_ event: TouchBarVirtualMouseEvent) -> Bool
 }
 
 extension TouchBarVirtualRuntime {
+    func inputExtent() -> CGSize? { nil }
     func post(_ event: TouchBarVirtualMouseEvent) -> Bool { false }
 }
 
@@ -42,7 +46,7 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
     private let inputAllowed: @Sendable () -> Bool
     private let makeRuntime: @Sendable () throws -> any TouchBarVirtualRuntime
     private var active: UUID?
-    private var observedSurface: (width: Int, height: Int)? // under lock
+    private var observedSurface: (width: Int, height: Int, mapping: TouchBarVirtualInputMapping?)? // under lock
     private let input = TouchBarVirtualInputMailbox()
     /// Keep the callback owner alive until a successful stream reports it has actually stopped.
     /// If a private API wedges, the single occupied slot bounds this retained state.
@@ -50,6 +54,8 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
     private var running: (UUID, any TouchBarVirtualRuntime, @Sendable () -> Void)? // only on queue
     /// Used by an isolated diagnostic to wait for a stopped callback without touching the queue.
     var isQuiescent: Bool { lock.withLock { keepAlive == nil } }
+    /// Diagnostic metadata from the same runtime and latest surface; not a verified native ABI.
+    var mappingForExperiment: TouchBarVirtualInputMapping? { lock.withLock { observedSurface?.mapping } }
 
     init(recordingAllowed: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
          inputAllowed: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
@@ -74,8 +80,9 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
                 let runtime = try makeRuntime()
                 guard isActive(token) else { runtime.stop(); releaseSlot(); return }
                 running = (token, runtime, onStopped)
-                try runtime.start(queue: queue, onSurface: { [weak self] surface, pts in
-                    guard self?.observe(surface, token: token) == true else { return }
+                try runtime.start(queue: queue, onSurface: { [weak self, weak runtime] surface, pts in
+                    guard let self, let runtime, self.isActive(token),
+                          self.observe(surface, extent: runtime.inputExtent(), token: token) else { return }
                     onSurface(surface, pts)
                 }, onUnavailable: { [weak self] in
                     self?.unavailable(token, onStopped: onStopped)
@@ -104,15 +111,16 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
     }
 
     /// Experimental same-instance input, intentionally not wired to TouchBarCaptureSource or the
-    /// product factory. `mapping` must be established for this exact runtime and surface. A true
-    /// result means only that the bounded queue accepted the contact, not that the system acted.
+    /// product factory. `mapping` must equal the observed extent for this exact runtime and
+    /// surface. A true result means the queue accepted the contact, not that the system acted.
     /// A future product adapter must additionally carry the revocable paired-session permit to
     /// the actual native post, and validate coordinates/orientation on a real system.
     func postForExperiment(_ touch: TouchBarTouch, mapping: TouchBarVirtualInputMapping) -> Bool {
         guard recordingAllowed(), inputAllowed(), let event = mapping.event(touch) else { return false }
         let token = lock.withLock { () -> UUID? in
             guard let active, let observedSurface,
-                  observedSurface.width == mapping.imageWidth, observedSurface.height == mapping.imageHeight else { return nil }
+                  observedSurface.width == mapping.imageWidth, observedSurface.height == mapping.imageHeight,
+                  observedSurface.mapping == mapping else { return nil }
             return active
         }
         guard let token else { return false }
@@ -121,10 +129,11 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
         return offer.accepted
     }
 
-    private func observe(_ surface: IOSurfaceRef, token: UUID) -> Bool {
+    private func observe(_ surface: IOSurfaceRef, extent: CGSize?, token: UUID) -> Bool {
         lock.withLock {
             guard active == token else { return false }
-            observedSurface = (IOSurfaceGetWidth(surface), IOSurfaceGetHeight(surface))
+            let width = IOSurfaceGetWidth(surface), height = IOSurfaceGetHeight(surface)
+            observedSurface = (width, height, .observed(imageWidth: width, imageHeight: height, extent: extent))
             return true
         }
     }
@@ -135,8 +144,10 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
             let geometryMatches = lock.withLock {
                 active == token && observedSurface?.width == event.mapping.imageWidth
                     && observedSurface?.height == event.mapping.imageHeight
+                    && observedSurface?.mapping == event.mapping
             }
-            guard geometryMatches, recordingAllowed(), inputAllowed(), running.1.post(event) else {
+            guard geometryMatches, recordingAllowed(), inputAllowed(),
+                  event.mapping.matches(extent: running.1.inputExtent()), running.1.post(event) else {
                 input.reset(to: nil)
                 unavailable(token, onStopped: running.2)
                 return
@@ -179,6 +190,7 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
 private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Sendable {
     private typealias MakeSimulator = @convention(c) (Int32, UnsafeRawPointer?, Int32) -> UnsafeMutableRawPointer?
     private typealias GetBar = @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
+    private typealias GetScreenSize = @convention(c) (UnsafeMutableRawPointer?) -> CGSize
     private typealias FrameBlock = @convention(block) (CGDisplayStreamFrameStatus, UInt64, IOSurfaceRef?, CGDisplayStreamUpdate?) -> Void
     private typealias MakeStream = @convention(c) (UnsafeMutableRawPointer?, Int32, DispatchQueue, FrameBlock) -> Unmanaged<CGDisplayStream>?
     private typealias StreamControl = @convention(c) (CGDisplayStream) -> CGError
@@ -190,6 +202,7 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
         let library: UnsafeMutableRawPointer
         let makeSimulator: MakeSimulator
         let getBar: GetBar
+        let screenSize: GetScreenSize?
         let makeStream: MakeStream
         let start: StreamControl
         let stop: StreamControl
@@ -199,6 +212,7 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
     private enum Failure: Error { case recordingUnavailable, symbols, simulator, bar, stream, start }
     private var api: API?
     private var simulator: AnyObject?
+    private var bar: AnyObject?
     private var stream: CGDisplayStream?
     private var stopping = false
     private var invalidated = false
@@ -213,7 +227,8 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
         api = loaded
         guard let raw = loaded.makeSimulator(3, nil, 3) else { cleanup(); throw Failure.simulator }
         simulator = Unmanaged<AnyObject>.fromOpaque(raw).takeUnretainedValue()
-        guard let bar = loaded.getBar(raw) else { cleanup(); throw Failure.bar }
+        guard let rawBar = loaded.getBar(raw) else { cleanup(); throw Failure.bar }
+        bar = Unmanaged<AnyObject>.fromOpaque(rawBar).takeUnretainedValue()
         let callback: FrameBlock = { [weak self] status, time, surface, _ in
             guard let self else { return }
             if status == .stopped {
@@ -230,7 +245,7 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
                 queue.async { onUnavailable() }
             }
         }
-        guard let made = loaded.makeStream(bar, 0, queue, callback)?.takeRetainedValue() else {
+        guard let made = loaded.makeStream(rawBar, 0, queue, callback)?.takeRetainedValue() else {
             cleanup(); throw Failure.stream
         }
         stream = made
@@ -245,18 +260,30 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
         _ = api.stop(stream)
     }
 
+    /// Candidate metadata from the same simulator bar used to make the stream. The getter's
+    /// current signature is inferred from system code, not a documented ABI or hardware proof.
+    func inputExtent() -> CGSize? {
+        guard !stopping, !invalidated, CGPreflightScreenCaptureAccess(),
+              let size = api?.screenSize, let bar else { return nil }
+        let extent = size(Unmanaged.passUnretained(bar).toOpaque())
+        guard extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return nil }
+        return extent
+    }
+
     /// The private event targets the very simulator that owns this stream. Test-injected outer
     /// permission gates cannot authorize a real post: both process grants are independently
     /// checked immediately before the call. No permission is requested and no entitlement is set.
     func post(_ event: TouchBarVirtualMouseEvent) -> Bool {
         guard !stopping, !invalidated, CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(),
-              let api, let postMouse = api.postMouse, let simulator else { return false }
+              let api, let postMouse = api.postMouse, let simulator,
+              event.mapping.matches(extent: inputExtent()) else { return false }
         postMouse(Unmanaged.passUnretained(simulator).toOpaque(), event.type.rawValue, event.point)
         return true // The private call returned; this does not prove the system accepted the touch.
     }
 
     private func cleanup() {
         stream = nil
+        bar = nil
         if let simulator, let api { api.invalidate(Unmanaged.passUnretained(simulator).toOpaque()) }
         simulator = nil
         if let api { dlclose(api.library) }
@@ -281,7 +308,8 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
               let stop = loadSymbol(defaultSymbols, "CGDisplayStreamStop", StreamControl.self) else {
             dlclose(library); throw Failure.symbols
         }
-        return API(library: library, makeSimulator: make, getBar: get, makeStream: create,
+        return API(library: library, makeSimulator: make, getBar: get,
+                   screenSize: loadSymbol(library, "DFRTouchBarGetScreenSize", GetScreenSize.self), makeStream: create,
                    start: start, stop: stop, invalidate: invalidate,
                    postMouse: loadSymbol(library, "DFRTouchBarSimulatorPostEventWithMouseActivity", PostMouse.self))
     }
