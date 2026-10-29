@@ -12,5 +12,5 @@ swiftc -swift-version 5 -O -whole-module-optimization -warnings-as-errors -parse
   -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
   Sources/SillHost/TouchBarCapturedFrame.swift Sources/SillHost/TouchBarCaptureSource.swift \
   Sources/SillHost/TouchBarSurfaceCopier.swift Sources/SillHost/TouchBarReadOnlySource.swift \
-  Sources/SillHost/TouchBarVirtualDriver.swift Tests/duodesk/touch-bar-virtual-driver/main.swift -o "$out/check"
+  Sources/SillHost/TouchBarVirtualInput.swift Sources/SillHost/TouchBarVirtualDriver.swift Tests/duodesk/touch-bar-virtual-driver/main.swift -o "$out/check"
 "$out/check"

@@ -5,6 +5,7 @@ import CoreMedia
 import Darwin
 import Foundation
 import IOSurface
+import StreamProtocol
 
 /// The runtime's callbacks run on the supplied serial queue. A failed start must have released
 /// all resources; after a successful start, stopped is enqueued only once the stream is quiescent.
@@ -14,6 +15,12 @@ protocol TouchBarVirtualRuntime: AnyObject {
                onUnavailable: @escaping @Sendable () -> Void,
                onStopped: @escaping @Sendable () -> Void) throws
     func stop()
+    /// Runs only on the runtime's serial queue. Real input is guarded again by the native runtime.
+    func post(_ event: TouchBarVirtualMouseEvent) -> Bool
+}
+
+extension TouchBarVirtualRuntime {
+    func post(_ event: TouchBarVirtualMouseEvent) -> Bool { false }
 }
 
 private final class VirtualTouchBarStartGate: @unchecked Sendable {
@@ -25,25 +32,29 @@ private final class VirtualTouchBarStartGate: @unchecked Sendable {
 
 /// Experimental virtual simulator driver. It is deliberately not installed in the product's
 /// source factory. A stuck private API occupies one global slot rather than spawning workers on
-/// every reconnect. It never requests permission and never posts system input.
+/// every reconnect. It never requests permission; its input entry point is diagnostic-only.
 final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
     enum Failure: Error { case recordingUnavailable, busy }
     private static let gate = VirtualTouchBarStartGate()
     private let queue = DispatchQueue(label: "duodesk.touchbar.virtual", qos: .userInitiated)
     private let lock = NSLock()
     private let recordingAllowed: @Sendable () -> Bool
+    private let inputAllowed: @Sendable () -> Bool
     private let makeRuntime: @Sendable () throws -> any TouchBarVirtualRuntime
     private var active: UUID?
+    private var observedSurface: (width: Int, height: Int)? // under lock
+    private let input = TouchBarVirtualInputMailbox()
     /// Keep the callback owner alive until a successful stream reports it has actually stopped.
     /// If a private API wedges, the single occupied slot bounds this retained state.
     private var keepAlive: TouchBarVirtualDriver?
-    private var running: (UUID, any TouchBarVirtualRuntime)? // only on queue
+    private var running: (UUID, any TouchBarVirtualRuntime, @Sendable () -> Void)? // only on queue
     /// Used by an isolated diagnostic to wait for a stopped callback without touching the queue.
     var isQuiescent: Bool { lock.withLock { keepAlive == nil } }
 
     init(recordingAllowed: @escaping @Sendable () -> Bool = { CGPreflightScreenCaptureAccess() },
+         inputAllowed: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
          makeRuntime: @escaping @Sendable () throws -> any TouchBarVirtualRuntime = { TouchBarDFRRuntime() }) {
-        self.recordingAllowed = recordingAllowed; self.makeRuntime = makeRuntime
+        self.recordingAllowed = recordingAllowed; self.inputAllowed = inputAllowed; self.makeRuntime = makeRuntime
     }
 
     func start(onSurface: @escaping @Sendable (IOSurfaceRef, CMTime) -> Void,
@@ -53,17 +64,18 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
         let token = UUID()
         let accepted = lock.withLock { () -> Bool in
             guard active == nil else { return false }
-            active = token; keepAlive = self; return true
+            active = token; observedSurface = nil; keepAlive = self; return true
         }
         guard accepted else { Self.gate.release(); throw Failure.busy }
+        input.reset(to: token)
         queue.async { [self] in
             guard isActive(token) else { releaseSlot(); return }
             do {
                 let runtime = try makeRuntime()
                 guard isActive(token) else { runtime.stop(); releaseSlot(); return }
-                running = (token, runtime)
+                running = (token, runtime, onStopped)
                 try runtime.start(queue: queue, onSurface: { [weak self] surface, pts in
-                    guard self?.isActive(token) == true else { return }
+                    guard self?.observe(surface, token: token) == true else { return }
                     onSurface(surface, pts)
                 }, onUnavailable: { [weak self] in
                     self?.unavailable(token, onStopped: onStopped)
@@ -82,21 +94,65 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
 
     func stop() {
         let token = lock.withLock { () -> UUID? in
-            let token = active; active = nil; return token
+            let token = active; active = nil; observedSurface = nil; return token
         }
         guard let token else { return }
+        input.reset(to: nil)
         queue.async { [self] in
             if running?.0 == token { running?.1.stop() }
         }
     }
 
+    /// Experimental same-instance input, intentionally not wired to TouchBarCaptureSource or the
+    /// product factory. `mapping` must be established for this exact runtime and surface. A true
+    /// result means only that the bounded queue accepted the contact, not that the system acted.
+    /// A future product adapter must additionally carry the revocable paired-session permit to
+    /// the actual native post, and validate coordinates/orientation on a real system.
+    func postForExperiment(_ touch: TouchBarTouch, mapping: TouchBarVirtualInputMapping) -> Bool {
+        guard recordingAllowed(), inputAllowed(), let event = mapping.event(touch) else { return false }
+        let token = lock.withLock { () -> UUID? in
+            guard let active, let observedSurface,
+                  observedSurface.width == mapping.imageWidth, observedSurface.height == mapping.imageHeight else { return nil }
+            return active
+        }
+        guard let token else { return false }
+        let offer = input.offer(event, token: token)
+        if offer.schedule { queue.async { [self] in drainInput(token) } }
+        return offer.accepted
+    }
+
+    private func observe(_ surface: IOSurfaceRef, token: UUID) -> Bool {
+        lock.withLock {
+            guard active == token else { return false }
+            observedSurface = (IOSurfaceGetWidth(surface), IOSurfaceGetHeight(surface))
+            return true
+        }
+    }
+
+    private func drainInput(_ token: UUID) {
+        while let event = input.take(token: token) {
+            guard let running, running.0 == token else { input.reset(to: nil); return }
+            let geometryMatches = lock.withLock {
+                active == token && observedSurface?.width == event.mapping.imageWidth
+                    && observedSurface?.height == event.mapping.imageHeight
+            }
+            guard geometryMatches, recordingAllowed(), inputAllowed(), running.1.post(event) else {
+                input.reset(to: nil)
+                unavailable(token, onStopped: running.2)
+                return
+            }
+            input.completed(event, token: token)
+        }
+    }
+
     private func isActive(_ token: UUID) -> Bool { lock.withLock { active == token } }
     private func takeActive(_ token: UUID) -> Bool {
-        lock.withLock { guard active == token else { return false }; active = nil; return true }
+        lock.withLock { guard active == token else { return false }; active = nil; observedSurface = nil; return true }
     }
     /// Hide the stale picture immediately, but keep the runtime and its slot until it really stops.
     private func unavailable(_ token: UUID, onStopped: @Sendable () -> Void) {
         guard running?.0 == token else { return }
+        input.reset(to: nil)
         if takeActive(token) { onStopped() }
         running?.1.stop()
     }
@@ -104,6 +160,7 @@ final class TouchBarVirtualDriver: TouchBarSurfaceDriver, @unchecked Sendable {
     /// private stream never stops, retain it and refuse new starts rather than free live callbacks.
     private func finished(_ token: UUID, onStopped: @Sendable () -> Void) {
         guard running?.0 == token else { return }
+        input.reset(to: nil)
         running = nil
         let notify = takeActive(token)
         releaseSlot()
@@ -126,6 +183,7 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
     private typealias MakeStream = @convention(c) (UnsafeMutableRawPointer?, Int32, DispatchQueue, FrameBlock) -> Unmanaged<CGDisplayStream>?
     private typealias StreamControl = @convention(c) (CGDisplayStream) -> CGError
     private typealias Invalidate = @convention(c) (UnsafeMutableRawPointer?) -> Void
+    private typealias PostMouse = @convention(c) (UnsafeMutableRawPointer?, UInt, CGPoint) -> Bool
     private struct API {
         let library: UnsafeMutableRawPointer
         let makeSimulator: MakeSimulator
@@ -134,6 +192,7 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
         let start: StreamControl
         let stop: StreamControl
         let invalidate: Invalidate
+        let postMouse: PostMouse?
     }
     private enum Failure: Error { case recordingUnavailable, symbols, simulator, bar, stream, start }
     private var api: API?
@@ -184,6 +243,15 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
         _ = api.stop(stream)
     }
 
+    /// The private event targets the very simulator that owns this stream. Test-injected outer
+    /// permission gates cannot authorize a real post: both process grants are independently
+    /// checked immediately before the call. No permission is requested and no entitlement is set.
+    func post(_ event: TouchBarVirtualMouseEvent) -> Bool {
+        guard !stopping, !invalidated, CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(),
+              let api, let postMouse = api.postMouse, let simulator else { return false }
+        return postMouse(Unmanaged.passUnretained(simulator).toOpaque(), event.type.rawValue, event.point)
+    }
+
     private func cleanup() {
         stream = nil
         if let simulator, let api { api.invalidate(Unmanaged.passUnretained(simulator).toOpaque()) }
@@ -211,6 +279,7 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
             dlclose(library); throw Failure.symbols
         }
         return API(library: library, makeSimulator: make, getBar: get, makeStream: create,
-                   start: start, stop: stop, invalidate: invalidate)
+                   start: start, stop: stop, invalidate: invalidate,
+                   postMouse: loadSymbol(library, "DFRTouchBarSimulatorPostEventWithMouseActivity", PostMouse.self))
     }
 }
