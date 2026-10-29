@@ -128,9 +128,16 @@ private final class FixtureView: NSView {
             try await valid.start(filter: filter, width: pixelWidth, height: pixelHeight, fps: 60,
                                   showsCursor: false, requireNativeGeometry: true)
             let restarted = await wait { accepted.snapshot.0 > firstCounts.0 }
-            await valid.stop()
             guard restarted, accepted.snapshot.1 == firstCounts.1, !valid.isCurrent(oldStop) else { throw Failure.noFrame }
             print("PASS: same capture object restarts; previous stop remains stale")
+            valid.failNativePadding()
+            guard let paddingStop = accepted.lastStopValue,
+                  let paddingError = paddingStop.error as? WindowCapture.NativeGeometryFailure,
+                  case .padding = paddingError, valid.isCurrent(paddingStop),
+                  accepted.snapshot.1 == firstCounts.1 + 1 else { throw Failure.assertions }
+            await valid.stop()
+            guard !valid.isCurrent(paddingStop) else { throw Failure.assertions }
+            print("PASS: padding failure stops the current stream with its distinct reason")
 
             let scaled = WindowCapture(), rejected = Counts()
             scaled.testDestinationRect = CGRect(x: 0, y: 0, width: pixelWidth - 1, height: pixelHeight - 1)

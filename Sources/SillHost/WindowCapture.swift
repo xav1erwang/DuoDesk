@@ -5,13 +5,16 @@ import CoreMedia
 import IOSurface
 #endif
 
-/// Runs one ScreenCaptureKit stream (a window or a display) and hands out 420f pixel buffers.
+/// Runs one ScreenCaptureKit stream (a window or a display) and hands out pixel buffers.
 /// The coordinator stops and restarts it whenever the client picks a different source.
 final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     enum NativeGeometryFailure: LocalizedError {
-        case filter, frame
+        case filter, frame, padding
         var errorDescription: String? {
-            "系统采集的桌面尺寸或缩放比例与原生目标不一致。"
+            switch self {
+            case .filter, .frame: return "系统采集的桌面尺寸或缩放比例与原生目标不一致。"
+            case .padding: return "无法保留原生桌面像素并补齐编码边缘。"
+            }
         }
     }
 
@@ -119,7 +122,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// frames against a stable target clock. This never changes the source display's clock.
     func start(filter: SCContentFilter, width: Int, height: Int, fps: Int, showsCursor: Bool, sourceRect: CGRect? = nil,
                nativeCadence: Bool = false, resampleCadence: Bool = false,
-               requireNativeGeometry: Bool = false) async throws {
+               requireNativeGeometry: Bool = false,
+               pixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) async throws {
         precondition(!nativeCadence || !resampleCadence)
         let geometry = requireNativeGeometry ? NativeGeometry(width: width, height: height) : nil
         let filterScale = Double(filter.pointPixelScale)
@@ -129,7 +133,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let config = SCStreamConfiguration()
         config.width = width
         config.height = height
-        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        config.pixelFormat = pixelFormat
         config.minimumFrameInterval = (nativeCadence || resampleCadence) ? .zero : CMTime(value: 1, timescale: CMTimeScale(fps))
         config.queueDepth = 5   // headroom: a wedged encoder may keep one buffer forever
         config.showsCursor = showsCursor
@@ -339,20 +343,26 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Keep the live stream for stop(): it still needs a real SCK stop and output-queue drain.
     /// At most one report escapes, and a held older sample is discarded before the callback.
-    private func rejectNativeGeometry(_ stream: SCStream) {
+    private func rejectNativeGeometry(_ stream: SCStream, error: NativeGeometryFailure = .frame) {
         let stopped: Stop? = stateLock.withLock {
             guard self.stream === stream, !nativeGeometryRejected else { return nil }
             nativeGeometryRejected = true
-            startupFailure = NativeGeometryFailure.frame
+            startupFailure = error
             framePacer = nil
             pendingSample = nil
             pendingSampleToken = nil
-            return Stop(error: NativeGeometryFailure.frame, generation: generation)
+            return Stop(error: error, generation: generation)
         }
         if let stopped {
-            print("Capture stopped: native desktop content was scaled or incomplete")
+            print("Capture stopped: \(error.localizedDescription)")
             onStopped?(stopped)
         }
+    }
+
+    /// Called from the capture callback if an odd frame cannot be copied into its encoder canvas.
+    func failNativePadding() {
+        let current = stateLock.withLock { stream }
+        if let current { rejectNativeGeometry(current, error: .padding) }
     }
 
     /// Runs on the same serial queue as SCK output. This delivers an actual changed sample even

@@ -12,11 +12,16 @@ enum HardwareVideoRequirement: Equatable {
     case desktop(DuoDesktopResolution)
     case touchBar(id: UUID, width: Int, height: Int)
 
-    func accepts(width: Int, height: Int) -> Bool {
+    func accepts(width: Int, height: Int, canvas: DuoDesktopCanvas? = nil) -> Bool {
         switch self {
-        case .desktop(let size): return size.accepts(width: width, height: height)
+        case .desktop(let size):
+            if let canvas {
+                return canvas.isValid && canvas.encodedWidth == width && canvas.encodedHeight == height
+                    && size.acceptsDisplayMode(width: canvas.width, height: canvas.height)
+            }
+            return size.accepts(width: width, height: height)
         case .touchBar(_, let w, let h):
-            return (1...8192).contains(w) && (1...2048).contains(h)
+            return canvas == nil && (1...8192).contains(w) && (1...2048).contains(h)
                 && w.isMultiple(of: 2) && h.isMultiple(of: 2) && w >= h
                 && w * h <= 4_194_304 && width == w && height == h
         }
@@ -338,7 +343,8 @@ final class HardwareHEVCDecoder: @unchecked Sendable {
             guard status == noErr, let format else { fail(status, generation: token); return }
             let dimensions = CMVideoFormatDescriptionGetDimensions(format)
             lock.lock(); let target = required; lock.unlock()
-            guard let target, target.accepts(width: Int(dimensions.width), height: Int(dimensions.height)) else { return }
+            guard let target, target.accepts(width: Int(dimensions.width), height: Int(dimensions.height),
+                                             canvas: ps.nativeDesktopCanvas) else { return }
             var made: VTDecompressionSession?
             let simulatorTest = Self.simulatorSoftwareEnabled
             let spec = simulatorTest

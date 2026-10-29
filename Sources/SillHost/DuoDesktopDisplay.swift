@@ -246,7 +246,7 @@ final class DuoDesktopDisplay {
             guard activeModeMatches, let mode = CGDisplayCopyDisplayMode(id),
                   wanted.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight) else { throw Failure.modeRejected }
             let width = mode.pixelWidth, height = mode.pixelHeight
-            guard wanted.accepts(width: width, height: height) else { throw Failure.modeRejected }
+            guard DuoDesktopCanvas(width: width, height: height).isValid else { throw Failure.modeRejected }
             return Prepared(display: display, bounds: CGDisplayBounds(id), mirrored: temporary != nil && layout == .mirrored,
                             canvasWidth: width, canvasHeight: height)
         } catch {

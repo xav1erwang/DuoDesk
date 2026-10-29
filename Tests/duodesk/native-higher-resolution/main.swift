@@ -18,8 +18,10 @@ import StreamProtocol
         check("double aligned aspect accepted", target.accepts(width: 4016, height: 2856))
         check("smaller or mismatched aspect rejected", !target.accepts(width: 1920, height: 1080)
               && !target.accepts(width: 3840, height: 2160) && !target.accepts(width: 4016, height: 2854))
-        check("odd modes rejected without resampling", !target.acceptsDisplayMode(width: 2007, height: 1427)
-              && !target.accepts(width: 4013, height: 2854))
+        check("odd native source accepted with padded video", target.acceptsDisplayMode(width: 2007, height: 1427)
+              && !target.accepts(width: 2007, height: 1427) && target.acceptsPaddedEncoded(width: 2008, height: 1428))
+        check("larger odd source requires padded-canvas metadata", target.acceptsDisplayMode(width: 6021, height: 4281)
+              && !target.accepts(width: 6022, height: 4282) && target.acceptsPaddedEncoded(width: 6022, height: 4282))
         check("dimensions bounded before arithmetic", !target.accepts(width: Int.max, height: Int.max)
               && !DuoDesktopResolution(width: Int.max, height: 1427).accepts(width: 4014, height: 2854))
 

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CoreVideo
 import Network
 import ScreenCaptureKit
 import StreamProtocol
@@ -29,12 +30,18 @@ package final class StreamCoordinator {
     private var clientFPS: [ObjectIdentifier: Int] = [:]
     private var clientDesktopResolutions: [ObjectIdentifier: DuoDesktopResolution] = [:]
     private let duoDesktop: DuoDesktopDisplay
+    private var nativeDesktopCanvas: DuoDesktopCanvas?
     private var desktopResolution: DuoDesktopResolution? {
         clientDesktopResolutions.values.max { $0.width * $0.height < $1.width * $1.height }
     }
     private var desktopResolutionNeedsRestart: Bool {
         guard active == .desktop else { return false }
         if let wanted = desktopResolution {
+            if !synthetic, let canvas = nativeDesktopCanvas {
+                return !wanted.acceptsDisplayMode(width: canvas.width, height: canvas.height)
+                    || canvas.encodedWidth != encoderWidth || canvas.encodedHeight != encoderHeight
+                    || duoDesktop.resolution != wanted
+            }
             return !wanted.accepts(width: encoderWidth, height: encoderHeight)
                 || (!synthetic && duoDesktop.resolution != wanted)
         }
@@ -1014,7 +1021,13 @@ package final class StreamCoordinator {
             }
         case .input:
             let control = VideoControlPayload(encoded: message.payload)
-            guard let raw = Wire.decode(InputEvent.self, from: control?.payload ?? message.payload), let event = raw.boundedCoordinates else { return }
+            guard let raw = Wire.decode(InputEvent.self, from: control?.payload ?? message.payload),
+                  let bounded = raw.boundedCoordinates else { return }
+            let event: InputEvent
+            if active == .desktop, let canvas = nativeDesktopCanvas, canvas.requiresPadding {
+                guard let mapped = NativeDesktopInput.map(bounded, canvas: canvas) else { return }
+                event = mapped
+            } else { event = bounded }
             let device = ObjectIdentifier(connection)
             guard routes[device] != nil else { return }
             let currentVideo = control == nil ? desktopResolution == nil : videoEpoch.acceptsControl(control)
@@ -1210,7 +1223,10 @@ package final class StreamCoordinator {
             return nil
         case .desktop:
             if synthetic { return pointer.hasTestPointer ? .rect(Self.testPatternRect) : nil }
-            return (duoDesktop.captureBounds ?? catalog.display?.frame).map { .rect($0) }
+            return (duoDesktop.captureBounds ?? catalog.display?.frame).map {
+                if let canvas = nativeDesktopCanvas, canvas.requiresPadding { return .paddedRect($0, canvas) }
+                return .rect($0)
+            }
         case .window(let id):
             guard !synthetic else { return nil }
             if virtualDisplay, stage.isStaged, let onScreen = stage.captureRectOnScreen { return .rect(onScreen) }
@@ -1417,6 +1433,7 @@ package final class StreamCoordinator {
         releaseKeysOfDevicesThatLeft()
         encoder = nil                  // deinit invalidates the VT session
         nativeVideoActive = false
+        nativeDesktopCanvas = nil
         if source != .desktop || desktopResolution == nil { _ = duoDesktop.restore() }
         server.resetForNewStream(reset: videoEpoch.nextReset()) // input and video share this main-actor epoch
         // New settings take effect here, between pipelines, before the rate, the scale and the
@@ -1474,6 +1491,7 @@ package final class StreamCoordinator {
         var filter: SCContentFilter?     // nil only for the synthetic test pattern
         var sourceRect: CGRect? = nil    // set only when the window streams from the virtual display
         var picked: SCWindow?            // the resolved window, for the fallback after a failed start
+        var selectedNativeCanvas: DuoDesktopCanvas?
         let width: Int, height: Int
         var describe = ""
         var title = ""                   // for the app's menu: "Safari — Apple Developer", "Whole Desktop"
@@ -1554,7 +1572,7 @@ package final class StreamCoordinator {
                 title = "Test Pattern"; kind = .testPattern
             } else {
                 let d: SCDisplay
-                let nativeCanvas: (width: Int, height: Int)?
+                let nativeCanvas: DuoDesktopCanvas?
                 if let native = desktopResolution {
                     do {
                         let prepared = try await duoDesktop.prepare(native, fps: fps)
@@ -1574,7 +1592,7 @@ package final class StreamCoordinator {
                             judgeLinks(LinkJudge.Quality(bitrate: bitrate, fps: fps, captureScale: Double(captureScale)))
                         }
                         d = prepared.display
-                        nativeCanvas = (prepared.canvasWidth, prepared.canvasHeight)
+                        nativeCanvas = DuoDesktopCanvas(width: prepared.canvasWidth, height: prepared.canvasHeight)
                     } catch {
                         _ = duoDesktop.restore()
                         active = .none; broadcastList()
@@ -1615,9 +1633,10 @@ package final class StreamCoordinator {
                     filter = SCContentFilter(display: d, excludingWindows: [])
                 }
                 if let nativeCanvas {
-                    // Retain the full selected, even-sized physical/virtual mode.
-                    // Quality and network settings never shrink the native desktop.
-                    width = nativeCanvas.width; height = nativeCanvas.height
+                    // Capture the selected mode at its actual pixels. Only the encoder canvas is
+                    // rounded up; an odd source is copied into it without scaling.
+                    selectedNativeCanvas = nativeCanvas
+                    width = nativeCanvas.encodedWidth; height = nativeCanvas.encodedHeight
                 } else {
                     width = evenPixels(CGFloat(d.width) * captureScale); height = evenPixels(CGFloat(d.height) * captureScale)
                 }
@@ -1628,7 +1647,7 @@ package final class StreamCoordinator {
 
         do {
             try await startPipeline(source: source, filter: filter, sourceRect: sourceRect, width: width, height: height, describe: describe,
-                                    title: title, kind: kind)
+                                    title: title, kind: kind, nativeCanvas: selectedNativeCanvas)
         } catch {
             // `picked`, not a catalog lookup: a staged window may have left the on-screen list.
             if virtualDisplay, stage.isStaged, let w = picked {
@@ -1671,10 +1690,16 @@ package final class StreamCoordinator {
     /// `active`. Throws with `active` untouched if either refuses; the caller decides what to do.
     /// `title` and `kind` describe the stream in the app's menu.
     private func startPipeline(source: StreamSource, filter: SCContentFilter?, sourceRect: CGRect?, width: Int, height: Int, describe: String,
-                               title: String, kind: HostStatusSnapshot.Stream.Kind) async throws {
+                               title: String, kind: HostStatusSnapshot.Stream.Kind,
+                               nativeCanvas: DuoDesktopCanvas? = nil) async throws {
         // A new display layout can invalidate Quartz's event-builder cache. Prepare it after
         // reconfiguration, before the first streamed image enables interaction. No event is posted.
         if !synthetic { injector.prepareForInput() }
+        let padder: NativeDesktopPadder?
+        if let nativeCanvas, nativeCanvas.requiresPadding {
+            guard let made = NativeDesktopPadder(canvas: nativeCanvas) else { throw WindowCapture.NativeGeometryFailure.padding }
+            padder = made
+        } else { padder = nil }
         let enc = try HEVCEncoder(width: width, height: height, fps: fps, bitrate: streamBitrate, prioritizeSpeed: prioritizeSpeed,
                                   software: useSoftwareEncoder)
         enc.onHung = { [weak self, weak enc] in
@@ -1688,16 +1713,26 @@ package final class StreamCoordinator {
         server.beginVideoStream(videoToken, reset: videoEpoch.nextReset())
         enc.onEncoded = { data, isKey, parameterSets in
             let now = Date().timeIntervalSince1970
-            server.broadcastEncodedFrame(data, keyframe: isKey, parameters: parameterSets, timestamp: now, token: videoToken)
+            var parameters = parameterSets
+            parameters?.nativeDesktopCanvas = nativeCanvas
+            server.broadcastEncodedFrame(data, keyframe: isKey, parameters: parameters, timestamp: now, token: videoToken)
         }
         if let filter {
-            capture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }
+            capture.onFrame = { [weak capture] pixelBuffer, pts in
+                if let padder {
+                    guard let padded = padder.pad(pixelBuffer) else { capture?.failNativePadding(); return }
+                    enc.encode(padded, pts: pts)
+                } else { enc.encode(pixelBuffer, pts: pts) }
+            }
             do {
                 let nativeDesktop = source == .desktop && desktopResolution != nil
-                try await capture.start(filter: filter, width: width, height: height, fps: fps, showsCursor: false, sourceRect: sourceRect,
+                try await capture.start(filter: filter, width: nativeCanvas?.width ?? width, height: nativeCanvas?.height ?? height,
+                                        fps: fps, showsCursor: false, sourceRect: sourceRect,
                                         nativeCadence: nativeDesktop && duoDesktop.followsNativeCadence,
                                         resampleCadence: nativeDesktop && duoDesktop.needsCadenceResampling,
-                                        requireNativeGeometry: nativeDesktop)
+                                        requireNativeGeometry: nativeDesktop,
+                                        pixelFormat: nativeCanvas?.requiresPadding == true
+                                            ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
             } catch {
                 await capture.stop()
                 capture.onFrame = nil
@@ -1710,6 +1745,7 @@ package final class StreamCoordinator {
         }
         encoder = enc
         nativeVideoActive = desktopResolution != nil
+        nativeDesktopCanvas = nativeCanvas
         active = source
         print("Streaming \(describe) at \(width)×\(height), \(fps) fps, \(streamBitrate / 1_000_000) Mbps")
         status.update {

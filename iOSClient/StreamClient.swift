@@ -347,7 +347,7 @@ final class StreamClient: ObservableObject {
 
     var hasNativeDesktopVideo: Bool {
         guard active == .desktop,
-              nativeDesktopResolution?.accepts(width: Int(videoSize.width), height: Int(videoSize.height)) == true else { return false }
+              nativeDesktopResolution?.acceptsPaddedEncoded(width: Int(videoSize.width), height: Int(videoSize.height)) == true else { return false }
         // A remembered size alone cannot authorize input while a new format/connection is
         // awaiting its first native image. The decoder generation fences the old picture out.
         return displayView.hasCurrentImage

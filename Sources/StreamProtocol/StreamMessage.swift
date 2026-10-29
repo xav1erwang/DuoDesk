@@ -143,17 +143,40 @@ public struct StreamMessage {
     }
 }
 
+/// The desktop occupies the top-left of an upward-even-aligned HEVC canvas. Any extra right or
+/// bottom pixels repeat its source edge; source pixels are not resized or replaced.
+public struct DuoDesktopCanvas: Codable, Hashable, Sendable {
+    public var width: Int
+    public var height: Int
+    public init(width: Int, height: Int) { self.width = width; self.height = height }
+    public var isValid: Bool { (1...8192).contains(width) && (1...8192).contains(height) }
+    public var encodedWidth: Int { isValid ? (width + 1) & ~1 : 0 }
+    public var encodedHeight: Int { isValid ? (height + 1) & ~1 : 0 }
+    public var requiresPadding: Bool { isValid && (width != encodedWidth || height != encodedHeight) }
+
+    /// Mac pointer positions are source fractions; the client draws them in the encoded canvas.
+    public func videoPosition(x: Double, y: Double) -> (x: Double, y: Double)? {
+        guard isValid, x.isFinite, y.isFinite else { return nil }
+        return (x * Double(width) / Double(encodedWidth), y * Double(height) / Double(encodedHeight))
+    }
+}
+
 /// HEVC VPS/SPS/PPS as delivered by VideoToolbox, plus the NAL length-prefix size (normally 4).
 public struct ParameterSets {
     public var nalUnitHeaderLength: Int
     public var sets: [Data]
+    /// Optional native desktop content size. The codec canvas is this size rounded up to even;
+    /// older peers ignore the trailing extension and continue to decode ordinary matching sizes.
+    public var nativeDesktopCanvas: DuoDesktopCanvas?
+    private static let canvasMarker = Data([0x44, 0x55, 0x43, 0x31]) // DUC1
 
-    public init(nalUnitHeaderLength: Int, sets: [Data]) {
+    public init(nalUnitHeaderLength: Int, sets: [Data], nativeDesktopCanvas: DuoDesktopCanvas? = nil) {
         self.nalUnitHeaderLength = nalUnitHeaderLength
         self.sets = sets
+        self.nativeDesktopCanvas = nativeDesktopCanvas
     }
 
-    /// nalLen(1) count(1) then per set: length(2) bytes
+    /// nalLen(1) count(1), then per set: length(2) bytes; optional DUC1 + width(2) + height(2).
     public func encoded() -> Data {
         var d = Data()
         d.append(UInt8(nalUnitHeaderLength))
@@ -161,6 +184,12 @@ public struct ParameterSets {
         for s in sets {
             d.appendBigEndian(UInt16(s.count))
             d.append(s)
+        }
+        if let canvas = nativeDesktopCanvas {
+            guard canvas.isValid else { return Data() }
+            d.append(Self.canvasMarker)
+            d.appendBigEndian(UInt16(canvas.width))
+            d.appendBigEndian(UInt16(canvas.height))
         }
         return d
     }
@@ -180,6 +209,15 @@ public struct ParameterSets {
             offset += len
         }
         sets = result
+        nativeDesktopCanvas = nil
+        if d.count >= offset + Self.canvasMarker.count,
+           d[(d.startIndex + offset)..<(d.startIndex + offset + Self.canvasMarker.count)].elementsEqual(Self.canvasMarker) {
+            guard d.count == offset + 8 else { return nil }
+            let canvas = DuoDesktopCanvas(width: Int(d.readBigEndian(UInt16.self, at: offset + 4)),
+                                          height: Int(d.readBigEndian(UInt16.self, at: offset + 6)))
+            guard canvas.isValid else { return nil }
+            nativeDesktopCanvas = canvas
+        }
     }
 }
 

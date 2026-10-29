@@ -10,17 +10,28 @@ public struct DuoDesktopResolution: Codable, Hashable, Sendable {
     public var encodedWidth: Int { isValid ? (width + 1) & ~1 : 0 }
     public var encodedHeight: Int { isValid ? (height + 1) & ~1 : 0 }
     /// A physical display mode must have the native aspect (or the already aligned canvas aspect)
-    /// and at least the Duo's native pixels. Require an even mode so capture does not rescale an
-    /// odd source merely to satisfy the encoder. Keep dimensions bounded before multiplying.
+    /// and at least the Duo's native pixels. Odd dimensions are padded after capture, not scaled.
+    /// Keep dimensions bounded before multiplying.
     public func acceptsDisplayMode(width: Int, height: Int) -> Bool {
+        guard isValid, (self.width...8192).contains(width), (self.height...8192).contains(height) else { return false }
+        return width * self.height == height * self.width || width * encodedHeight == height * encodedWidth
+    }
+
+    /// Legacy video has no content-canvas metadata; only accept a matching even canvas directly.
+    public func accepts(width: Int, height: Int) -> Bool {
         guard isValid, (encodedWidth...8192).contains(width), (encodedHeight...8192).contains(height),
               width.isMultiple(of: 2), height.isMultiple(of: 2) else { return false }
         return width * self.height == height * self.width || width * encodedHeight == height * encodedWidth
     }
 
-    /// Video retains the chosen even display mode's pixels; the native minimum was aligned upward.
-    public func accepts(width: Int, height: Int) -> Bool {
-        acceptsDisplayMode(width: width, height: height)
+    /// Readiness also permits a padded canvas when a possible matching source exists. The decoder
+    /// independently checks the host's explicit content metadata before presenting such a frame.
+    public func acceptsPaddedEncoded(width: Int, height: Int) -> Bool {
+        guard (2...8192).contains(width), (2...8192).contains(height),
+              width.isMultiple(of: 2), height.isMultiple(of: 2) else { return false }
+        return [width, width - 1].contains { w in
+            [height, height - 1].contains { h in acceptsDisplayMode(width: w, height: h) }
+        }
     }
 }
 

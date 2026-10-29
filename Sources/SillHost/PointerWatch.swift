@@ -28,6 +28,8 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
         /// A rectangle that holds while the source streams: the Desktop's display, a window staged
         /// on the virtual display (its crop, or its full-screen band), the test pattern.
         case rect(CGRect)
+        /// The desktop's real bounds and its upward-even-aligned video canvas.
+        case paddedRect(CGRect, DuoDesktopCanvas)
         /// A window in regular mode, where the pointer really moves over it: its bounds as the
         /// coordinator last read them, re-read here (`rereadAfterMove`, `rereadAnyway`); inside
         /// also needs it on screen (not minimized, not on another Space).
@@ -218,11 +220,14 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
         let handedOver = control.read(p, now: now)
         let watched = devices.contains { control.controller != .client($0) }
         var rect: CGRect
+        var canvas: DuoDesktopCanvas? = nil
         var onScreen = true
         var reread: CGWindowID?
         switch geometry {
         case .rect(let r):
             rect = r
+        case .paddedRect(let r, let c):
+            rect = r; canvas = c
         case .window(let id, let r):
             rect = r
             if let w = window, w.id == id { rect = w.state.bounds; onScreen = w.state.onScreen }
@@ -232,7 +237,10 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
             }
         }
         let f = PointerControl.fraction(of: p, in: rect)
-        let reading = Reading(x: f.x, y: f.y, inside: f.inside && onScreen, controller: control.controller,
+        let position = canvas?.videoPosition(x: f.x, y: f.y)
+        let reading = Reading(x: position.map { MacPointer.rounded($0.x) } ?? f.x,
+                              y: position.map { MacPointer.rounded($0.y) } ?? f.y,
+                              inside: f.inside && onScreen, controller: control.controller,
                               moving: control.isMoving(now: now))
         lock.unlock()
         if let reread { dispatchReread(reread) }
