@@ -272,7 +272,8 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
 
     /// The private event targets the very simulator that owns this stream. Test-injected outer
     /// permission gates cannot authorize a real post: both process grants are independently
-    /// checked immediately before the call. No permission is requested and no entitlement is set.
+    /// checked immediately before the call. This size check is not atomic with the private
+    /// post: system geometry could change after it. No permission is requested or entitlement set.
     func post(_ event: TouchBarVirtualMouseEvent) -> Bool {
         guard !stopping, !invalidated, CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(),
               let api, let postMouse = api.postMouse, let simulator,
