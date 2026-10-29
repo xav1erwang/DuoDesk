@@ -340,6 +340,10 @@ final class StreamClient: ObservableObject {
               let value = try? JSONDecoder().decode(DuoDesktopResolution.self, from: data), value.isValid else { return nil }
         return value
     }()
+    /// Legacy devices can send gestures without a native Duo picture. Once this device reports
+    /// the Duo inner display, queued legacy gestures must not outlive that observation. Admission
+    /// is serialized with revocation because the network queue may be busy when the hinge changes.
+    private let legacyGesturePermit = VideoOutputPermit()
 
     var hasNativeDesktopVideo: Bool {
         guard active == .desktop,
@@ -350,6 +354,7 @@ final class StreamClient: ObservableObject {
     }
 
     func updateDuoNativeResolution(innerDisplay: Bool, frame: CGRect, fold: CGRect?) {
+        if innerDisplay { legacyGesturePermit.invalidate() }
         guard innerDisplay, let metrics = nativeDisplayMetrics,
               DuoStreamPolicy.coherentInnerMetrics(metrics, frame: frame, fold: fold),
               let resolution = DuoStreamPolicy.nativeUpperDisplay(width: metrics.pixels.width, height: metrics.pixels.height),
@@ -939,6 +944,10 @@ final class StreamClient: ObservableObject {
     /// the direct connection to the network one (SessionLink).
     private let link = SessionLink()
     let queue = DispatchQueue(label: "sill.net", qos: .userInteractive)
+    #if DUO_GESTURE_GATE_TESTING
+    func holdGestureLinkForTesting(_ connection: NWConnection) -> Bool { link.hold(connection) }
+    func releaseGestureLinkForTesting(_ connection: NWConnection) { _ = link.unhold(connection) }
+    #endif
     private var lastParameterSets: ParameterSets?
 
     // Liveness, on `queue` (docs/remote-access-plan.md §7.6). The host answers every ping, so a
@@ -3479,9 +3488,12 @@ final class StreamClient: ObservableObject {
     /// pointer, no scroll, and a latched modifier stays latched. Main thread. True when it went.
     @discardableResult
     func sendGesture(_ gesture: TrackpadGestures.Gesture, fingers: Int) -> Bool {
-        if nativeDesktopResolution != nil, !hasNativeDesktopVideo { return false }
+        let nativeVideo = nativeDesktopResolution != nil
+        if nativeVideo || !legacyGesturePermit.isValid {
+            guard hasNativeDesktopVideo else { return false }
+        }
         let stillCurrent: @Sendable () -> Bool
-        if nativeDesktopResolution == nil { stillCurrent = { true } }
+        if !nativeVideo { stillCurrent = { true } }
         else { stillCurrent = displayView.makeInputFence() }
         var windowStreams = false
         if case .window = active { windowStreams = true }
@@ -3490,12 +3502,22 @@ final class StreamClient: ObservableObject {
         guard plan.send else { return false }
         if plan.desktopFirst { select(.desktop) }
         let payload = Wire.encode(TrackpadGesture(gesture: gesture.rawValue, fingers: fingers))
-        let nativeVideo = nativeDesktopResolution != nil
+        let legacyPermit = legacyGesturePermit
         queue.async { [weak self] in
-            guard let self, stillCurrent() else { return }
-            self.flushPendingMove()
-            if nativeVideo { self.sendVideoControl(.gesture, payload) }
-            else { self.send(.gesture, payload) }
+            guard let self else { return }
+            if nativeVideo {
+                guard stillCurrent() else { return }
+                self.flushPendingMove()
+                self.sendVideoControl(.gesture, payload)
+            } else {
+                guard legacyPermit.isValid else { return }
+                self.flushPendingMove()
+                let message = StreamMessage(kind: .gesture, timestamp: Date().timeIntervalSince1970,
+                                            isKeyframe: false, payload: payload).serialized()
+                // SessionLink retains this gate while a connection handover holds the message.
+                // Its lock is always acquired before the permit, never the other way around.
+                self.link.sendRevocableGesture(message) { action in legacyPermit.admit(action) }
+            }
         }
         return true
     }

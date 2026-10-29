@@ -68,6 +68,14 @@ final class SessionLink {
         let since = ProcessInfo.processInfo.systemUptime
     }
 
+    /// A revocable gesture keeps its admission gate while a hand-over holds the message. The
+    /// gate is called only around the short send, under this link's lock, and must not reenter it.
+    typealias SendAdmission = (_ send: () -> Void) -> Bool
+    private struct PendingMessage {
+        let data: Data
+        let admission: SendAdmission?
+    }
+
     private let lock = NSLock()
     private var current: NWConnection?
     /// Hand-overs whose fence is still up, oldest first.
@@ -75,7 +83,7 @@ final class SessionLink {
     /// The session's connection has lost its path, and a move to another is under way.
     private var holding: Hold?
     /// What waits for the fences and the hold, in the order sent.
-    private var waiting: [Data] = []
+    private var waiting: [PendingMessage] = []
     /// The old connections of hand-overs whose fence is down, until what waited has gone out.
     private var fencedOff: [NWConnection] = []
     /// Input messages counted for the session's connection: those handed to it since it became the
@@ -99,7 +107,7 @@ final class SessionLink {
     private static func isInput(_ data: Data) -> Bool { data.first == 8 }
 
     /// The input messages among those waiting. Under the lock.
-    private var waitingInputs: Int { waiting.reduce(0) { $0 + (Self.isInput($1) ? 1 : 0) } }
+    private var waitingInputs: Int { waiting.reduce(0) { $0 + (Self.isInput($1.data) ? 1 : 0) } }
 
     /// The session's connection: the one read, and the one sent on outside a hand-over or a hold.
     /// Setting it leaves the fences and the hold alone; `dropHandOver` ends them.
@@ -111,14 +119,33 @@ final class SessionLink {
     /// One message to the Mac: on the session's connection, or kept, in order, while a fence or a
     /// hold stands.
     func send(_ data: Data) {
+        send(data, admission: nil)
+    }
+
+    /// A legacy gesture that was created before Duo detection may become invalid while a link
+    /// hand-over holds it. Keep its gate with the message until the actual Network handoff.
+    func sendRevocableGesture(_ data: Data, admission: @escaping SendAdmission) {
+        guard data.first == 28 else { return }
+        send(data, admission: admission)
+    }
+
+    private func send(_ data: Data, admission: SendAdmission?) {
         lock.lock(); defer { lock.unlock() }
+        let message = PendingMessage(data: data, admission: admission)
         if !fences.isEmpty || holding != nil {
-            waiting.append(data)
+            waiting.append(message)
             if Self.isInput(data) { inputs += 1 }
             return
         }
-        current?.send(content: data, completion: .contentProcessed { _ in })
-        if current != nil, Self.isInput(data) { inputs += 1 }
+        if let current, sendLocked(message, on: current), Self.isInput(data) { inputs += 1 }
+    }
+
+    private func sendLocked(_ message: PendingMessage, on connection: NWConnection) -> Bool {
+        if let admission = message.admission {
+            return admission { connection.send(content: message.data, completion: .contentProcessed { _ in }) }
+        }
+        connection.send(content: message.data, completion: .contentProcessed { _ in })
+        return true
     }
 
     /// Whether `c` is still read: the session's connection, or the old one of a hand-over until its
@@ -211,10 +238,13 @@ final class SessionLink {
         }
         let out = waiting
         waiting = []
-        for data in out { current?.send(content: data, completion: .contentProcessed { _ in }) }
+        var sent = 0
+        if let current {
+            for message in out where sendLocked(message, on: current) { sent += 1 }
+        }
         let close = fencedOff
         fencedOff = []
-        return Released(held: out.count, waiting: 0, clear: true, seconds: seconds, close: close)
+        return Released(held: sent, waiting: 0, clear: true, seconds: seconds, close: close)
     }
 
     /// The session ended during a hand-over or a hold: what waited goes nowhere. Returns the
