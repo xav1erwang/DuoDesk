@@ -15,13 +15,15 @@ struct DuoControlDeck: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let room = max(0, geometry.size.height - (mode == .combined ? 168 : 158))
+            let room = max(0, geometry.size.height - 138)
             let keyHeight = mode == .combined ? min(220, max(200, room * 0.61)) : max(200, room)
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 toolbar
                 if mode.hasKeyboard {
-                    DuoTouchBarStrip(touchBar: client.touchBar, canBegin: { !client.inputPaused })
-                        .frame(height: 30)
+                    DuoTouchBarStrip(touchBar: client.touchBar, canBegin: { !client.inputPaused },
+                                     showsMockPreview: showsMockTouchBar)
+                        .frame(height: 44)
+                        .layoutPriority(1)
                     DuoKeyboardView(latched: $latched, capsLock: $capsLock,
                                     inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
                         .frame(height: keyHeight)
@@ -29,15 +31,14 @@ struct DuoControlDeck: View {
                 }
                 if mode.hasTrackpad {
                     glassTrackpad
-                        .frame(maxWidth: mode == .combined ? min(geometry.size.width * 0.65, 480) : .infinity)
+                        .frame(maxWidth: mode == .combined ? min(geometry.size.width * 0.75, 540) : .infinity)
                         .frame(maxHeight: .infinity)
                         .accessibilityIdentifier("duo.trackpad")
                 }
-                DuoConnectionReadout(client: client)
             }
             .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 30)
+            .padding(.top, 6)
+            .padding(.bottom, 22)
         }
         .clipped()
         .background {
@@ -64,7 +65,7 @@ struct DuoControlDeck: View {
                 ForEach(DuoControlMode.allCases) { item in
                     Button { mode = item } label: {
                         ViewThatFits(in: .horizontal) {
-                            Label(title(item), systemImage: symbol(item))
+                            Label(item == .combined ? "组合" : title(item), systemImage: symbol(item))
                                 .labelStyle(.titleAndIcon)
                             Image(systemName: symbol(item))
                         }
@@ -83,13 +84,21 @@ struct DuoControlDeck: View {
             .padding(3)
             .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.5)))
-            .frame(maxWidth: 430)
+            .frame(maxWidth: 300)
             Spacer(minLength: 0)
             rateMenu
             deckButton("系统键盘", symbol: "keyboard.badge.ellipsis", action: showSystemKeyboard)
             deckButton("设置", symbol: "gearshape", action: showSettings)
         }
-        .frame(height: 50)
+        .frame(height: 44)
+    }
+
+    private var showsMockTouchBar: Bool {
+        #if DEBUG
+        client.mockDiscovery
+        #else
+        false
+        #endif
     }
 
     private var rateMenu: some View {
@@ -171,10 +180,13 @@ struct DuoControlDeck: View {
 private struct DuoTouchBarStrip: View {
     @ObservedObject var touchBar: DuoTouchBarClient
     let canBegin: () -> Bool
+    let showsMockPreview: Bool
 
     var body: some View {
         Group {
-            if let surface = touchBar.status.surface {
+            if showsMockPreview {
+                mockPreview
+            } else if let surface = touchBar.status.surface {
                 DuoTouchBarRemoteView(video: touchBar.video, surface: surface,
                                       canBegin: canBegin, send: touchBar.send,
                                       onAttach: touchBar.requestRefresh)
@@ -194,6 +206,7 @@ private struct DuoTouchBarStrip: View {
                 .accessibilityIdentifier("duo.touchbar.unavailable")
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             RoundedRectangle(cornerRadius: 9)
                 .fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.08)],
@@ -202,6 +215,34 @@ private struct DuoTouchBarStrip: View {
         .modifier(TouchBarPictureChrome(showingPicture: touchBar.status.surface != nil))
         .onAppear { touchBar.setVisible(true) }
         .onDisappear { touchBar.setVisible(false) }
+    }
+
+    @ViewBuilder private var mockPreview: some View {
+        #if DEBUG
+        HStack(spacing: 8) {
+            Text("模拟")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+            Text("esc")
+                .font(.system(size: 12, weight: .medium))
+                .frame(minWidth: 28)
+            Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 20)
+            Spacer(minLength: 0)
+            ForEach(["sun.min", "sun.max", "speaker.slash", "speaker.wave.1", "speaker.wave.3", "backward.fill", "play.fill", "forward.fill"], id: \.self) { symbol in
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Touch Bar 模拟示意，未连接 Mac，不能操作")
+        .accessibilityIdentifier("duo.touchbar.mock")
+        .allowsHitTesting(false)
+        #else
+        EmptyView()
+        #endif
     }
 }
 
@@ -303,38 +344,5 @@ private struct DuoKeycapStyle: ButtonStyle {
             }
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(configuration.isPressed ? 0.05 : 0.18), lineWidth: 0.5))
             .offset(y: configuration.isPressed ? 1 : 0)
-    }
-}
-
-/// Counts the renderer's actual presentation totals, separately from network reception.
-/// A missing renderer metric stays unknown. It must never inherit the requested stream rate.
-private struct DuoConnectionReadout: View {
-    @ObservedObject var client: StreamClient
-    @State private var displayedFPS: Int? = nil
-    @State private var sampler = DuoFrameRateSampler()
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Circle().fill(client.connected ? Color(red: 0.13, green: 0.48, blue: 0.31) : .gray).frame(width: 5, height: 5)
-            Text(client.hasNativeDesktopVideo ? "\(Int(client.videoSize.width))×\(Int(client.videoSize.height)) · 原生" : "匹配原生分辨率…")
-            Spacer()
-            Text("接收 \(client.linkStats.map { String($0.fps) } ?? "—") · 显示 \(displayedFPS.map(String.init) ?? "—") FPS")
-                .monospacedDigit()
-        }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(Color(white: 0.25))
-        .frame(height: 16)
-        .task {
-            while !Task.isCancelled {
-                if let metrics = await client.displayView.presentationMetrics() {
-                    displayedFPS = sampler.sample(total: metrics.total, dropped: metrics.dropped,
-                                                  time: ProcessInfo.processInfo.systemUptime)
-                } else {
-                    displayedFPS = nil
-                    sampler = DuoFrameRateSampler()
-                }
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
-            }
-        }
     }
 }
