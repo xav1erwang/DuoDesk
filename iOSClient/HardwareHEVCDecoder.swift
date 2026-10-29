@@ -6,8 +6,8 @@ import CoreVideo
 import VideoToolbox
 import StreamProtocol
 
-/// The desktop and a Touch Bar have different shape constraints. Both require the encoded
-/// dimensions to match exactly before VideoToolbox creates a session; neither accepts downscaling.
+/// The desktop and a Touch Bar have different shape constraints. The desktop accepts its native
+/// size or a larger matching aspect; the Touch Bar requires its exact advertised dimensions.
 enum HardwareVideoRequirement: Equatable {
     case desktop(DuoDesktopResolution)
     case touchBar(id: UUID, width: Int, height: Int)

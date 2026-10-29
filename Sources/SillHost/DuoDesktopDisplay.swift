@@ -15,7 +15,7 @@ enum StreamSamplingPolicy {
     }
 }
 
-/// A transaction on the Mac desktop. An exact physical mode may be selected at its original
+/// A transaction on the Mac desktop. A matching physical mode may be selected at its original
 /// refresh rate. Virtual mirroring is withheld until the system can establish it without changing
 /// physical refresh. Original modes, origins and mirror relationships are restored on exit.
 @MainActor
@@ -26,6 +26,8 @@ final class DuoDesktopDisplay {
         let display: SCDisplay
         let bounds: CGRect
         let mirrored: Bool
+        let canvasWidth: Int
+        let canvasHeight: Int
     }
     enum Failure: LocalizedError {
         case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable, samplingClockTooSlow, refreshInvariantUnavailable
@@ -63,6 +65,7 @@ final class DuoDesktopDisplay {
     private var observedOffline: Set<CGDirectDisplayID> = []
     private var temporary: VirtualDisplay?
     private var preparedVirtualMode: CGDisplayMode?
+    private var selectedPhysicalMode: CGDisplayMode?
     private var pendingMirror = false
     private var capturedID: CGDirectDisplayID = 0
     private var originalMainID: CGDirectDisplayID = 0
@@ -161,6 +164,20 @@ final class DuoDesktopDisplay {
     nonisolated static func initialPhysicalSamplingFPS(requested: Int, refreshHz: Double) -> Int {
         samplingCeiling(refreshHz: refreshHz).map { min(requested, $0) } ?? requested
     }
+
+    /// Reuse the current matching mode without a display write. Otherwise prefer the smallest
+    /// matching pixel canvas, and the lower logical width for duplicate HiDPI modes.
+    private static func physicalMode(_ modes: [CGDisplayMode], wanted: DuoDesktopResolution,
+                                     current: CGDisplayMode, fps: Int) -> CGDisplayMode? {
+        let matching = modes.filter {
+            wanted.acceptsDisplayMode(width: $0.pixelWidth, height: $0.pixelHeight)
+                && permitsPhysicalMode(currentHz: current.refreshRate, candidateHz: $0.refreshRate, fps: fps)
+        }
+        return matching.first { sameMode($0, current) } ?? matching.min {
+            let left = $0.pixelWidth * $0.pixelHeight, right = $1.pixelWidth * $1.pixelHeight
+            return left == right ? $0.width < $1.width : left < right
+        }
+    }
     /// No public guarantee has been established that creating a mirror set keeps every physical
     /// clock unchanged throughout the transaction. Preserve the future path, but fail before
     /// creating or attaching its virtual display until a compliant mechanism is demonstrated.
@@ -188,8 +205,9 @@ final class DuoDesktopDisplay {
             guard let virtualDesktopClockFPS,
                   abs(mode.refreshRate - Double(virtualDesktopClockFPS)) < 0.5 else { return false }
             #if DUO_DISPLAY_RESTORE_TESTING
-            if testVirtualSampling { return resolution.accepts(width: mode.pixelWidth, height: mode.pixelHeight) }
+            if testVirtualSampling { return resolution.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight) }
             #endif
+            guard let preparedVirtualMode, Self.sameRestoredMode(mode, preparedVirtualMode) else { return false }
             switch layout {
             case .mirrored:
                 guard CGDisplayMirrorsDisplay(originalMainID) == capturedID else { return false }
@@ -205,9 +223,10 @@ final class DuoDesktopDisplay {
             }
         } else {
             guard let original = originals.first(where: { $0.id == originalMainID }),
+                  let selectedPhysicalMode, Self.sameRestoredMode(mode, selectedPhysicalMode),
                   mode.refreshRate == original.mode.refreshRate else { return false }
         }
-        return resolution.accepts(width: mode.pixelWidth, height: mode.pixelHeight)
+        return resolution.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight)
     }
 
     /// WindowServer can itself choose a different physical clock while changing a mirror graph.
@@ -224,7 +243,12 @@ final class DuoDesktopDisplay {
         let id = try await prepareGraphics(wanted, fps: fps)
         do {
             let display = try await findDisplay(id)
-            return Prepared(display: display, bounds: CGDisplayBounds(id), mirrored: temporary != nil && layout == .mirrored)
+            guard activeModeMatches, let mode = CGDisplayCopyDisplayMode(id),
+                  wanted.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight) else { throw Failure.modeRejected }
+            let width = mode.pixelWidth, height = mode.pixelHeight
+            guard wanted.accepts(width: width, height: height) else { throw Failure.modeRejected }
+            return Prepared(display: display, bounds: CGDisplayBounds(id), mirrored: temporary != nil && layout == .mirrored,
+                            canvasWidth: width, canvasHeight: height)
         } catch {
             _ = restore()
             throw error
@@ -287,12 +311,7 @@ final class DuoDesktopDisplay {
             let physicalFPS = Self.initialPhysicalSamplingFPS(requested: fps, refreshHz: home.mode.refreshRate)
             let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
             let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
-            let matchingModes = modes.filter {
-                wanted.accepts(width: $0.pixelWidth, height: $0.pixelHeight)
-                    && Self.permitsPhysicalMode(currentHz: home.mode.refreshRate, candidateHz: $0.refreshRate, fps: physicalFPS)
-            }
-            let native = matchingModes.first { Self.sameMode($0, home.mode) }
-                ?? matchingModes.min { $0.width < $1.width }
+            let native = Self.physicalMode(modes, wanted: wanted, current: home.mode, fps: physicalFPS)
             if let native {
                 if !Self.sameMode(native, home.mode) {
                     // Quartz may adjust every display in a mirror set when one mode changes.
@@ -318,6 +337,7 @@ final class DuoDesktopDisplay {
                     }
                 }
                 capturedID = main
+                selectedPhysicalMode = native
             } else {
                 guard Self.virtualMirrorTimingSafetyVerified else { throw Failure.refreshInvariantUnavailable }
                 try persistRecovery(recoveryRecord)
@@ -336,7 +356,7 @@ final class DuoDesktopDisplay {
                 // Do not select a virtual mode in a separate display transaction. If macOS
                 // remembers a mirror relationship, that selection can also alter other screens.
                 guard let mode = await display.waitForRequestedMode(),
-                      wanted.accepts(width: mode.pixelWidth, height: mode.pixelHeight) else {
+                      wanted.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight) else {
                     throw Failure.modeRejected
                 }
                 preparedVirtualMode = mode
@@ -363,7 +383,9 @@ final class DuoDesktopDisplay {
             requestedFPS = temporary == nil ? physicalFPS : fps
             guard pendingMirror || activeModeMatches else { throw Failure.modeRejected }
             let kind = temporary == nil ? "physical mode" : layout == .mirrored ? "mirrored HiDPI mode" : "independent native primary"
-            print("Duo desktop: \(wanted.width)×\(wanted.height) native; canvas \(wanted.encodedWidth)×\(wanted.encodedHeight) pixels; \(pendingMirror ? "awaiting desktop attachment" : kind)")
+            let current = CGDisplayCopyDisplayMode(capturedID)
+            let canvas = current.map { "\($0.pixelWidth)×\($0.pixelHeight)" } ?? "unknown"
+            print("Duo desktop: at least \(wanted.width)×\(wanted.height) native; canvas \(canvas) pixels; \(pendingMirror ? "awaiting desktop attachment" : kind)")
             return capturedID
         } catch {
             _ = restore()
@@ -478,6 +500,7 @@ final class DuoDesktopDisplay {
             originals = []; originalIdentityCounts.removeAll(); observedOffline.removeAll()
             capturedID = 0; originalMainID = 0; originalSystemMainID = 0; primaryOrigins = [:]
             resolution = nil; requestedFPS = nil; virtualDesktopClockFPS = nil; preparedVirtualMode = nil
+            selectedPhysicalMode = nil
             return finishRecovery()
         }
         var success = true
@@ -516,6 +539,7 @@ final class DuoDesktopDisplay {
         temporary?.destroy()
         temporary = nil
         preparedVirtualMode = nil
+        selectedPhysicalMode = nil
         pendingMirror = false
         if !live.isEmpty {
             do {
@@ -924,6 +948,7 @@ final class DuoDesktopDisplay {
         }
         desktop.originals = original
         desktop.originalMainID = id; desktop.originalSystemMainID = id; desktop.capturedID = id
+        desktop.selectedPhysicalMode = main.mode
         desktop.resolution = native; desktop.requestedFPS = 120
         desktop.virtualDesktopClockFPS = ceiling
         desktop.testVirtualSampling = true
@@ -969,7 +994,7 @@ final class DuoDesktopDisplay {
         let candidates = [(2007, 1427), (987, 765), (1871, 1043), (777, 555)]
         guard let size = candidates.first(where: { pair in
             let wanted = DuoDesktopResolution(width: pair.0, height: pair.1)
-            return !modes.contains { wanted.accepts(width: $0.pixelWidth, height: $0.pixelHeight) }
+            return !modes.contains { wanted.acceptsDisplayMode(width: $0.pixelWidth, height: $0.pixelHeight) }
         }) else { return nil }
         let wanted = DuoDesktopResolution(width: size.0, height: size.1)
         var rejectedWithoutMutation = true

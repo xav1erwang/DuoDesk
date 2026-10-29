@@ -1550,6 +1550,7 @@ package final class StreamCoordinator {
                 title = "Test Pattern"; kind = .testPattern
             } else {
                 let d: SCDisplay
+                let nativeCanvas: (width: Int, height: Int)?
                 if let native = desktopResolution {
                     do {
                         let prepared = try await duoDesktop.prepare(native, fps: fps)
@@ -1569,6 +1570,7 @@ package final class StreamCoordinator {
                             judgeLinks(LinkJudge.Quality(bitrate: bitrate, fps: fps, captureScale: Double(captureScale)))
                         }
                         d = prepared.display
+                        nativeCanvas = (prepared.canvasWidth, prepared.canvasHeight)
                     } catch {
                         _ = duoDesktop.restore()
                         active = .none; broadcastList()
@@ -1580,6 +1582,7 @@ package final class StreamCoordinator {
                 } else {
                     guard let display = catalog.display else { active = .none; broadcastList(); return }
                     d = display
+                    nativeCanvas = nil
                 }
                 // Sill's own windows (Settings, Log, the pairing window with its code) never go out
                 // in a Desktop stream. Fixed here at pipeline start: a running SCStream is never
@@ -1607,10 +1610,10 @@ package final class StreamCoordinator {
                 } else {
                     filter = SCContentFilter(display: d, excludingWindows: [])
                 }
-                if let native = desktopResolution {
-                    // Exact native canvas on hardware AND software encoders; network and quality
-                    // settings never shrink a Duo desktop behind the client's back.
-                    width = native.encodedWidth; height = native.encodedHeight
+                if let nativeCanvas {
+                    // Retain the full selected, even-sized physical/virtual mode.
+                    // Quality and network settings never shrink the native desktop.
+                    width = nativeCanvas.width; height = nativeCanvas.height
                 } else {
                     width = evenPixels(CGFloat(d.width) * captureScale); height = evenPixels(CGFloat(d.height) * captureScale)
                 }

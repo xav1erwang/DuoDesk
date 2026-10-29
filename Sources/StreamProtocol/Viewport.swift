@@ -1,7 +1,7 @@
 import Foundation
 
 /// Duo's upper display in native pixels. HEVC/NV12 dimensions round UP to even pixels; never down.
-/// This also specifies the Mac desktop's aspect ratio, independently of its physical panel.
+/// A larger desktop is permitted when it has the same aspect and retains every source pixel.
 public struct DuoDesktopResolution: Codable, Hashable, Sendable {
     public var width: Int
     public var height: Int
@@ -9,8 +9,18 @@ public struct DuoDesktopResolution: Codable, Hashable, Sendable {
     public var isValid: Bool { (320...8192).contains(width) && (240...8192).contains(height) }
     public var encodedWidth: Int { isValid ? (width + 1) & ~1 : 0 }
     public var encodedHeight: Int { isValid ? (height + 1) & ~1 : 0 }
+    /// A physical display mode must have the native aspect (or the already aligned canvas aspect)
+    /// and at least the Duo's native pixels. Require an even mode so capture does not rescale an
+    /// odd source merely to satisfy the encoder. Keep dimensions bounded before multiplying.
+    public func acceptsDisplayMode(width: Int, height: Int) -> Bool {
+        guard isValid, (encodedWidth...8192).contains(width), (encodedHeight...8192).contains(height),
+              width.isMultiple(of: 2), height.isMultiple(of: 2) else { return false }
+        return width * self.height == height * self.width || width * encodedHeight == height * encodedWidth
+    }
+
+    /// Video retains the chosen even display mode's pixels; the native minimum was aligned upward.
     public func accepts(width: Int, height: Int) -> Bool {
-        isValid && width == encodedWidth && height == encodedHeight
+        acceptsDisplayMode(width: width, height: height)
     }
 }
 

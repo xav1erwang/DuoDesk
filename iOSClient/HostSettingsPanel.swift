@@ -375,7 +375,9 @@ struct HostSettingsPanel: View {
             RowDivider()
             AdaptiveRow(title: "分辨率", since: client.settings.pendingSince(.captureScale)) {
                 if let native = client.nativeDesktopResolution {
-                    Text("Duo 原生 · \(native.encodedWidth)×\(native.encodedHeight)")
+                    let width = client.hasNativeDesktopVideo ? Int(client.videoSize.width) : native.encodedWidth
+                    let height = client.hasNativeDesktopVideo ? Int(client.videoSize.height) : native.encodedHeight
+                    Text("Duo 原生及以上 · \(String(width))×\(String(height))")
                         .font(.callout.monospacedDigit())
                 } else {
                     Picker("分辨率", selection: binding(shown.captureScale) { HostSettingsChange(captureScale: $0) }) {
