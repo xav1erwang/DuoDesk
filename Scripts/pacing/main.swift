@@ -199,6 +199,13 @@ if plain {
 }
 params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
 let doorName = home ? "Home" : "Remote"
+#if PACING_VIDEO_PERMIT
+// This isolated harness bypasses Door, so supply its own in-memory trust permit. It never reads
+// user identities and is only used by the loopback fake-frame listener below.
+let harnessTrust = TrustBox()
+let harnessFingerprint = Data([1, 2, 3])
+harnessTrust.update { $0.paired[harnessFingerprint] = "harness"; $0.remoteAccess = true }
+#endif
 let door = try NWListener(using: params)
 door.stateUpdateHandler = { state in
     if case .ready = state { print("\(doorName) door listening on port \(door.port!.rawValue) (\(plain ? "TCP" : "TLS 1.3"), loopback)") }
@@ -223,7 +230,15 @@ door.newConnectionHandler = { c in
                 #if PACING_SERVE_BEFORE_HOME_PAIRING
                 server.serve(c, route: route)
                 #else
+                #if PACING_VIDEO_PERMIT
+                guard let videoPermit = harnessTrust.videoPermit(fingerprint: harnessFingerprint, observed: harnessTrust.snapshot,
+                                                                  allowed: { $0.remoteAccess && $0.paired[harnessFingerprint] != nil }) else {
+                    c.cancel(); return
+                }
+                server.serve(c, route: route, hello: nil, videoPermit: videoPermit)
+                #else
                 server.serve(c, route: route, hello: nil)
+                #endif
                 #endif
                 print("Remote client connected: harness through Tailscale (\(c.endpoint))")
             }

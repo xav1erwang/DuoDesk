@@ -126,7 +126,7 @@ func frame(_ brightness: Int) throws -> CVPixelBuffer {
             throw Failure.invalid("first decode")
         }
 
-        if CommandLine.arguments.contains("--trust-revocation-only") {
+        if CommandLine.arguments.contains("--trust-revocation-only") || CommandLine.arguments.contains("--trust-regrant-only") {
             // A trust removal is published before the queued goodbye. Hold the real TCP network queue,
             // queue a frame, revoke its in-memory key, and ensure the frame is not handed to Network.
             guard case .tls(let home) = loop.server.homeMode, let fingerprint = route.fingerprint,
@@ -150,6 +150,9 @@ func frame(_ brightness: Int) throws -> CVPixelBuffer {
                 throw Failure.invalid("revocation frame not queued")
             }
             home.trust.update { $0.paired.removeValue(forKey: fingerprint) }
+            if CommandLine.arguments.contains("--trust-regrant-only") {
+                home.trust.update { $0.paired[fingerprint] = pairedName }
+            }
             hold.signal(); holding = false
             let afterRevocation = loop.server.queue.sync { (loop.server.testTouchBarSends, client.touchBarRefreshWanted,
                                                             client.touchBarSurface == first, client.inflight, client.pendingBytes,
@@ -162,7 +165,7 @@ func frame(_ brightness: Int) throws -> CVPixelBuffer {
             home.trust.update { $0.paired[fingerprint] = pairedName }
             loop.server.setTouchBarSubscription(first, for: connection)
             loop.server.queue.sync { }
-            print("PASS: queued frame withheld after paired trust was removed")
+            print("PASS: queued frame withheld after paired trust was removed, even if restored before drain")
             return
         }
 

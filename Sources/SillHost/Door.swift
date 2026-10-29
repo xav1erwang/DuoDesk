@@ -452,6 +452,21 @@ final class Door {
         if name != nil { forgive(p.source) }
         if kind == .remote, name == nil { c.cancel(); return }    // atReady admits only a paired key here
         let origin = p.origin ?? .loopback
+        let doorKind = kind
+        // The permit observes the same snapshot that admitted this session. Its validity is
+        // permanently revoked by removal or by a policy change that closes this route, even if
+        // the setting is restored before a queued video frame reaches the network queue.
+        guard let videoPermit = trust.videoPermit(fingerprint: fp, observed: t, allowed: { snapshot in
+            let policy = DoorPolicy.Trust(hasKey: true, paired: snapshot.paired[fp] != nil,
+                                          requirePairing: snapshot.requirePairing,
+                                          remoteAccess: snapshot.remoteAccess,
+                                          internetAccess: snapshot.internetAccess,
+                                          pairingOpen: snapshot.pairingOpen,
+                                          remotePairingOpen: snapshot.remotePairingOpen)
+            return (doorKind == .home || snapshot.remoteAccess)
+                && DoorPolicy.admitsBeforeStart(doorKind, origin: origin, internetAccess: snapshot.internetAccess)
+                && DoorPolicy.trusts(doorKind, alpn: RemoteTLS.sessionALPN, policy)
+        }) else { c.cancel(); return }
         let transport = quicLease(c, fingerprint: fp, wasPaired: name != nil)
         // Home: the iPhone or iPad behind the cable, read once, as the session is admitted.
         let cable = kind == .home ? cableDevice(of: c).flatMap { $0.serial }.map(CableLink.deviceID) : nil
@@ -473,11 +488,11 @@ final class Door {
             case .remote:
                 guard let paired = snapshot.paired[fp] else { c.cancel(); return }
                 let label = OriginPolicy.label(origin, interface: p.interface, serviceName: p.interface.flatMap { snapshot.serviceNames[$0] }) ?? "by address"
-                server.serve(c, route: .remote(origin: origin, label: label, fingerprint: fp, name: paired), hello: hello, transport: transport,
+                server.serve(c, route: .remote(origin: origin, label: label, fingerprint: fp, name: paired), hello: hello, transport: transport, videoPermit: videoPermit,
                              admitted: { print("Remote client connected: \(paired) \(label) (\(endpoint))") })
             case .home:
                 let peer = ClientRoute.Peer(fingerprint: fp, name: snapshot.paired[fp], cableDevice: cable)
-                server.serve(c, route: .home(origin, peer: peer), hello: hello, transport: transport, admitted: { print("Client connected: \(endpoint)") })
+                server.serve(c, route: .home(origin, peer: peer), hello: hello, transport: transport, videoPermit: videoPermit, admitted: { print("Client connected: \(endpoint)") })
             }
         }
     }

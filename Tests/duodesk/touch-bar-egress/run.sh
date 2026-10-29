@@ -3,10 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 if [[ -f Local/developer-env.sh ]]; then source Local/developer-env.sh; fi
-[[ $# -le 2 ]] || { echo "usage: $0 [NEW_OUTPUT_DIRECTORY] [--trust-revocation-only]" >&2; exit 64; }
+[[ $# -le 2 ]] || { echo "usage: $0 [NEW_OUTPUT_DIRECTORY] [--trust-revocation-only|--trust-regrant-only]" >&2; exit 64; }
 if [[ $# -ge 1 ]]; then out="$1"; mkdir "$out"; else out="$PWD/.build/duodesk-touch-bar-egress"; mkdir -p "$out"; fi
 mode="${2:-}"
-[[ -z "$mode" || "$mode" == "--trust-revocation-only" ]] || { echo "unknown mode" >&2; exit 64; }
+[[ -z "$mode" || "$mode" == "--trust-revocation-only" || "$mode" == "--trust-regrant-only" ]] || { echo "unknown mode" >&2; exit 64; }
 python3 - "$out/LoopbackTouchBar.swift" "$mode" <<'PY'
 from pathlib import Path
 import sys
@@ -14,7 +14,7 @@ source = Path('Tests/duodesk/own-window-capture/LoopbackVideo.swift').read_text(
 needle = 'case .frame: decoder.enqueue(payload, isKeyframe: header.isKeyframe)\n                default: break'
 assert source.count(needle) == 1
 source = source.replace(needle, 'case .frame: decoder.enqueue(payload, isKeyframe: header.isKeyframe)\n                case .touchBarFrame: TouchBarObserver.shared.receive(payload)\n                default: break')
-if sys.argv[2] == '--trust-revocation-only':
+if sys.argv[2] in ('--trust-revocation-only', '--trust-regrant-only'):
     replacements = {
         'RemoteTLS.quicOptions(identity: device.tls': 'RemoteTLS.options(identity: device.tls',
         'RemoteTLS.quicParameters(options: options)': 'RemoteTLS.parameters(tls: options, dialing: true)',

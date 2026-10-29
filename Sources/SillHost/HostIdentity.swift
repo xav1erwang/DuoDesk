@@ -308,6 +308,9 @@ enum RequirePairingValue {
 /// What both doors' verify blocks and admission read on the network queue: immutable, replaced
 /// whole under a lock on every change. Nothing that reads it ever waits on the main actor.
 struct TrustSnapshot: Sendable {
+    /// Monotonically changes with each published update. It also fences session admission against
+    /// a policy change between the door's snapshot and registration of its video permit.
+    fileprivate var revision: UInt64 = 0
     /// Paired fingerprints → display names ("iPad (iPad14,1)").
     var paired: [Data: String] = [:]
     /// A pairing window is open: the home door takes its proofs.
@@ -327,6 +330,28 @@ struct TrustSnapshot: Sendable {
 final class TrustBox: @unchecked Sendable {
     private let lock = NSLock()
     private var value = TrustSnapshot()
+    private struct VideoPermitRecord {
+        let fingerprint: Data
+        let allows: (TrustSnapshot) -> Bool
+        var valid: Bool
+    }
+    private var videoPermits: [UUID: VideoPermitRecord] = [:]
+
+    /// One TLS session's desktop-video admission. An invalidated permit cannot become valid
+    /// again when a key or setting is restored; reconnecting creates a fresh permit instead.
+    final class VideoPermit: @unchecked Sendable {
+        private weak var box: TrustBox?
+        private let id: UUID
+        fileprivate init(box: TrustBox, id: UUID) { self.box = box; self.id = id }
+        func belongs(to box: TrustBox) -> Bool { self.box === box }
+        @discardableResult func admit(_ action: () -> Void) -> Bool {
+            admit(when: { _ in true }, action)
+        }
+        @discardableResult func admit(when allowed: (TrustSnapshot) -> Bool, _ action: () -> Void) -> Bool {
+            box?.admitVideo(id, allowed: allowed, action) ?? false
+        }
+        deinit { box?.releaseVideoPermit(id) }
+    }
 
     var snapshot: TrustSnapshot {
         lock.lock(); defer { lock.unlock() }
@@ -343,7 +368,41 @@ final class TrustBox: @unchecked Sendable {
         return true
     }
 
+    /// The predicate is pure and must never reenter this box. A changed snapshot during door
+    /// admission makes that connection retry instead of silently inheriting an obsolete policy.
+    func videoPermit(fingerprint: Data, observed: TrustSnapshot,
+                     allowed: @escaping (TrustSnapshot) -> Bool) -> VideoPermit? {
+        lock.lock(); defer { lock.unlock() }
+        guard value.revision == observed.revision, allowed(value) else { return nil }
+        let id = UUID()
+        videoPermits[id] = VideoPermitRecord(fingerprint: fingerprint, allows: allowed, valid: true)
+        return VideoPermit(box: self, id: id)
+    }
+
+    private func admitVideo(_ id: UUID, allowed: (TrustSnapshot) -> Bool, _ action: () -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard videoPermits[id]?.valid == true, allowed(value) else { return false }
+        // The action only hands data to Network; it must not wait or reenter this box.
+        action()
+        return true
+    }
+
+    private func releaseVideoPermit(_ id: UUID) {
+        lock.lock(); videoPermits.removeValue(forKey: id); lock.unlock()
+    }
+
     func update(_ change: (inout TrustSnapshot) -> Void) {
-        lock.lock(); change(&value); lock.unlock()
+        lock.lock(); defer { lock.unlock() }
+        let previous = value
+        change(&value)
+        value.revision = previous.revision &+ 1
+        for id in videoPermits.keys {
+            guard var permit = videoPermits[id], permit.valid else { continue }
+            let removed = previous.paired[permit.fingerprint] != nil && value.paired[permit.fingerprint] == nil
+            if removed || !permit.allows(value) {
+                permit.valid = false
+                videoPermits[id] = permit
+            }
+        }
     }
 }

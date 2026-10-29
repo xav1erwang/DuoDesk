@@ -64,13 +64,15 @@ final class StreamServer {
     private final class Client {
         let connection: NWConnection
         var transport: TransportLease?
+        /// Present for a TLS session admitted by Door; plain home sessions have no trust list.
+        var videoPermit: TrustBox.VideoPermit?
         var inflight = 0          // every message still unacknowledged (backpressure for delta drops)
         var inflightFrames = 0    // video frames only
         /// One independently decodable Touch Bar packet may be in the connection at a time.
         var touchBarSurface: UUID?
         var touchBarInputPermit: TouchBarInputPermit?
         let touchBarConnectionPermit: TouchBarConnectionPermit
-        var touchBarClosing = false
+        var touchBarClosing = false // goodbye has begun; neither video lane can send more data
         var touchBarFrameInFlight = false
         var touchBarRefreshWanted = false
         var oldestUnackedFrameAt: TimeInterval?   // last time a frame was drained, or queued from 0 (dead-peer detection)
@@ -162,6 +164,9 @@ final class StreamServer {
     private(set) var testTouchBarSends = 0 // network queue; never compiled into the product
     private(set) var testTouchBarDrains = 0
     private(set) var testTouchBarEligible = 0
+    #endif
+    #if DUO_DESKTOP_TRUST_TESTING
+    private(set) var testDesktopVideoSends = 0 // network queue; only in the isolated fixture
     #endif
     private var clients: [ObjectIdentifier: Client] = [:]
     private var lastParameterSets: Data?
@@ -1052,12 +1057,14 @@ final class StreamServer {
     /// no link (its card names the route, "through Tailscale"); a home one's link is read at
     /// registration and then follows the path, as the plain door's does. On `queue`.
     func serve(_ connection: NWConnection, route: ClientRoute, hello: Hello?, transport: TransportLease? = nil,
+               videoPermit: TrustBox.VideoPermit? = nil,
                admitted: () -> Void = {}) {
         guard transport?.validate(connection.currentPath) != false else {
             connection.cancel(); transport?.ended(); return
         }
         let client = Client(connection)
         client.transport = transport
+        client.videoPermit = videoPermit
         client.route = route
         // As its route says: every session a Door admits is TLS (a remote one, or a home one with its
         // peer's key); a home route without a peer is a plain connection and keeps the plain door's
@@ -1573,11 +1580,12 @@ final class StreamServer {
         }
     }
 
-    /// Called on the network queue. The admitted action must not reenter the trust box or wait for
-    /// another queue; `NWConnection.send` only hands the data to Network and returns immediately.
+    /// Called on the network queue. The additional paired-only rule and the session's irreversible
+    /// permit are checked under the same trust lock. The action must not reenter the box or wait.
     private func admitTouchBar(_ client: Client, _ action: () -> Void) -> Bool {
-        guard !client.touchBarClosing, let trust = touchBarTrust else { return false }
-        return trust.performIf({ client.route.allowsTouchBar(trust: $0) }, action)
+        guard !client.touchBarClosing, let trust = touchBarTrust, let permit = client.videoPermit,
+              permit.belongs(to: trust) else { return false }
+        return permit.admit(when: { client.route.allowsTouchBar(trust: $0) }, action)
     }
 
     /// Client → host messages share the same framing. Small and rare, so read them one at a time.
@@ -1791,36 +1799,49 @@ final class StreamServer {
         var wantKeyframe = false
         defer { if wantKeyframe { onKeyframeNeeded?() } }
         for client in clients.values where client.connection.state == .ready {
-            if kind == .frame, client.route.isRemote {
-                if paceRemote(client, keyframe: keyframe, data: data) { wantKeyframe = true }
+            guard kind == .frame || kind == .parameterSets else {
+                send(data, to: client)
                 continue
             }
-            if kind == .frame {
-                // Its link only counts here (LinkJudge): what it sends and drops is as ever.
-                if client.needsKeyframe {
-                    guard keyframe, let ps = lastParameterSets else {
-                        Stats.shared.bump("net.waitKey")
-                        if !client.awaitingFirstKeyframe { client.withheldThisSecond += 1 }
-                        continue
-                    }
-                    if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client) }
-                    send(ps, to: client)
-                    client.needsKeyframe = false
-                    client.awaitingFirstKeyframe = false
-                } else if client.inflight > 2 && !keyframe {
-                    // Drop the delta. Every later delta references it, so this client now waits for
-                    // a keyframe (sending deltas anyway is what showed up as flicker on the iPad).
-                    Stats.shared.bump("net.dropped")
-                    client.withheldThisSecond += 1
-                    client.needsKeyframe = true
-                    wantKeyframe = true
-                    continue
-                }
-                Stats.shared.bump("net.sent")
-                client.sentThisSecond += 1
+            // A QUIC lease reads the same trust box, so validate it before taking the permit lock.
+            // The short handoff below must not reenter the trust box or wait for another queue.
+            guard !client.touchBarClosing, transportAllows(client) else { continue }
+            let deliver = {
+                if self.deliverVideo(kind: kind, keyframe: keyframe, data: data, to: client) { wantKeyframe = true }
             }
-            send(data, to: client, isFrame: kind == .frame)
+            if client.route.encrypted { _ = client.videoPermit?.admit(deliver) }
+            else { deliver() }
         }
+    }
+
+    /// Called inside a TLS video permit, or for an admitted plain home connection. All sends have
+    /// already passed the transport check and must not invoke the QUIC lease again under the lock.
+    private func deliverVideo(kind: StreamMessageKind, keyframe: Bool, data: Data, to client: Client) -> Bool {
+        if kind == .frame, client.route.isRemote {
+            return paceRemote(client, keyframe: keyframe, data: data)
+        }
+        if kind == .frame {
+            if client.needsKeyframe {
+                guard keyframe, let ps = lastParameterSets else {
+                    Stats.shared.bump("net.waitKey")
+                    if !client.awaitingFirstKeyframe { client.withheldThisSecond += 1 }
+                    return false
+                }
+                if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client, transportValidated: true) }
+                send(ps, to: client, transportValidated: true)
+                client.needsKeyframe = false
+                client.awaitingFirstKeyframe = false
+            } else if client.inflight > 2 && !keyframe {
+                Stats.shared.bump("net.dropped")
+                client.withheldThisSecond += 1
+                client.needsKeyframe = true
+                return true
+            }
+            Stats.shared.bump("net.sent")
+            client.sentThisSecond += 1
+        }
+        send(data, to: client, isFrame: kind == .frame, transportValidated: true)
+        return false
     }
 
     /// Remote clients' frames (home clients keep the rule above byte for byte). What is queued is
@@ -1870,8 +1891,8 @@ final class StreamServer {
                 client.keyframeWanted = true
                 return false
             }
-            if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client) }
-            send(ps, to: client)
+            if client.awaitingFirstKeyframe, let lastStreamReset { send(lastStreamReset, to: client, transportValidated: true) }
+            send(ps, to: client, transportValidated: true)
             client.needsKeyframe = false
             client.awaitingFirstKeyframe = false
         } else {
@@ -1891,7 +1912,7 @@ final class StreamServer {
         }
         Stats.shared.bump("net.sent")
         client.sentThisSecond += 1
-        send(data, to: client, isFrame: true, isKeyframe: keyframe)
+        send(data, to: client, isFrame: true, isKeyframe: keyframe, transportValidated: true)
         return false
     }
 
@@ -1965,6 +1986,9 @@ final class StreamServer {
         }
         if isFrame {
             client.inflightFrames += 1
+            #if DUO_DESKTOP_TRUST_TESTING
+            testDesktopVideoSends += 1
+            #endif
             if client.oldestUnackedFrameAt == nil { client.oldestUnackedFrameAt = now }
         }
         if isTouchBarFrame {

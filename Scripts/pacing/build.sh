@@ -21,7 +21,7 @@ git rev-parse --verify --quiet "$base^{commit}" > /dev/null || { echo "build.sh:
 # AskLimits; the harness never builds one (its own door serves every session). Since away from home
 # (PR #39) it judges each device's link (LinkJudge).
 host_files=(StreamServer EncodedVideoMailbox CableLink ClientLink DeviceGate Door DoorPolicy HostIdentity HostLog InterfaceSnapshot LinkJudge QUICDoorListener
-            OriginPolicy PairingWindow PointerControl PointerWatch RefusalSummary Stats)
+            OriginPolicy PairingWindow PointerControl PointerWatch RefusalSummary Stats TouchBarTouchGate)
 
 # put DEST: stdin to DEST, only if it differs.
 put() {
@@ -72,6 +72,9 @@ side() {
     fi
     if grep -qF 'func broadcastEncodedFrame(' "$pkg/Sources/Harness/StreamServer.swift"; then
         defines="${defines:+$defines, }.define(\"PACING_BOUNDED_INGRESS\")"
+    fi
+    if grep -qF 'func videoPermit(fingerprint:' "$pkg/Sources/Harness/HostIdentity.swift"; then
+        defines="${defines:+$defines, }.define(\"PACING_VIDEO_PERMIT\")"
     fi
     if [ -n "$defines" ]; then settings=", swiftSettings: [$defines]"; fi
     put "$pkg/Package.swift" <<SWIFT
