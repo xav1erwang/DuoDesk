@@ -183,7 +183,9 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
     private typealias MakeStream = @convention(c) (UnsafeMutableRawPointer?, Int32, DispatchQueue, FrameBlock) -> Unmanaged<CGDisplayStream>?
     private typealias StreamControl = @convention(c) (CGDisplayStream) -> CGError
     private typealias Invalidate = @convention(c) (UnsafeMutableRawPointer?) -> Void
-    private typealias PostMouse = @convention(c) (UnsafeMutableRawPointer?, UInt, CGPoint) -> Bool
+    // Historical declarations disagree about the result, and macOS 27's wrapper does not
+    // preserve the internal post's return value. Treat a returned call only as an attempt.
+    private typealias PostMouse = @convention(c) (UnsafeMutableRawPointer?, UInt, CGPoint) -> Void
     private struct API {
         let library: UnsafeMutableRawPointer
         let makeSimulator: MakeSimulator
@@ -249,7 +251,8 @@ private final class TouchBarDFRRuntime: TouchBarVirtualRuntime, @unchecked Senda
     func post(_ event: TouchBarVirtualMouseEvent) -> Bool {
         guard !stopping, !invalidated, CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(),
               let api, let postMouse = api.postMouse, let simulator else { return false }
-        return postMouse(Unmanaged.passUnretained(simulator).toOpaque(), event.type.rawValue, event.point)
+        postMouse(Unmanaged.passUnretained(simulator).toOpaque(), event.type.rawValue, event.point)
+        return true // The private call returned; this does not prove the system accepted the touch.
     }
 
     private func cleanup() {
