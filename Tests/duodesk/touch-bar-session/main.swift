@@ -66,6 +66,7 @@ final class HeldControls: @unchecked Sendable {
     var recording = false
     var input = true
     var paired = true
+    var onAuthorization: (() -> Void)?
 }
 @MainActor final class SyntheticTouchBarSource: TouchBarCaptureSource {
     var starts = 0, stops = 0
@@ -114,9 +115,18 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         let decoder = HardwareDecoderRouter(onFormat: { _, _ in }, onSample: { sample, _, permit in results.sample(sample, permit) },
                                              onFailure: { message, _ in results.failure(message) })
         let loop = try await LoopbackVideo.connect(decoder: decoder, encoder: encoder)
+        // Independent from the loopback transport's trust, so the input test can hold an
+        // admitted route while revoking its current authorization at an exact boundary.
+        let inputTrust = TrustBox()
         let session = TouchBarHostSession(server: loop.server, makeSource: { fake },
                                           recordingAllowed: { permission.recording }, inputAllowed: { permission.input },
-                                          authorized: { _ in permission.paired })
+                                          authorized: { _ in
+                                              let allowed = permission.paired
+                                              permission.onAuthorization?()
+                                              return allowed
+                                          }, authorizedInput: { route, action in
+                                              inputTrust.performIf({ route.allowsTouchBar(trust: $0) }, action)
+                                          })
         defer { session.stop(); TouchBarObserver.shared.set(frame: nil, status: nil); loop.close(); _ = decoder.clear(); _ = encoder.abandon() }
         try await waitFor("initial desktop reset") { loop.counters.resets > 0 }
         TouchBarObserver.shared.set(frame: { data in
@@ -133,6 +143,7 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         let route = loop.server.queue.sync { client.route }, connection = client.connection
         guard route.encrypted, route.pairedName != nil else { throw Failure.invalid("paired route") }
         guard let fingerprint = route.fingerprint else { throw Failure.invalid("paired fingerprint") }
+        inputTrust.update { $0.paired[fingerprint] = "synthetic peer" }
         if CommandLine.arguments.contains("--startup-timeout-only") {
             // A source can return from start but never produce a frame (or encoder creation can
             // wedge). The real coordinator must stop waiting and report unavailable to the peer.
@@ -208,6 +219,19 @@ func frame(_ luma: Int) throws -> TouchBarCapturedFrame {
         session.receive(begin, from: connection, route: route, permit: firstPermit)
         guard fake.posted.isEmpty else { throw Failure.invalid("current trust was not rechecked") }
         permission.paired = true
+        // The initial check succeeds, but revocation wins before the source can post input.
+        permission.onAuthorization = {
+            permission.onAuthorization = nil
+            inputTrust.update { $0.paired.removeValue(forKey: fingerprint) }
+        }
+        session.receive(begin, from: connection, route: route, permit: firstPermit)
+        guard fake.posted.isEmpty else { throw Failure.invalid("input posted after trust revocation") }
+        inputTrust.update { $0.paired[fingerprint] = "synthetic peer" }
+        print("PASS: input withheld when trust changes after the initial authorization")
+        if CommandLine.arguments.contains("--trust-input-only") {
+            print("SCOPE: injected input source and in-memory trust on paired loopback; no real Touch Bar or system input")
+            return
+        }
         let held = HeldTouches()
         let heldControls = HeldControls()
         loop.server.queue.sync {

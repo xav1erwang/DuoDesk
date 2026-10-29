@@ -335,7 +335,7 @@ package final class StreamCoordinator {
             }
         }
         // The test pattern is for test clients, not devices.
-        server = try StreamServer(advertise: !synthetic, home: home, testHooks: testHooks)
+        server = try StreamServer(advertise: !synthetic, home: home, testHooks: testHooks, touchBarTrust: remote?.trust)
         server.macName = macName                           // the update goodbye names this Mac (DeviceGate)
         TestHooks.reportIgnored(testHost: server.isTestHost)
         // A host that does not advertise, `--synthetic` in the CLI and in the app alike (as
@@ -600,10 +600,7 @@ package final class StreamCoordinator {
     }
 
     private static func touchBarRouteAuthorized(_ route: ClientRoute, trust: TrustSnapshot) -> Bool {
-        guard route.encrypted, route.pairedName != nil, let fingerprint = route.fingerprint else { return false }
-        guard trust.paired[fingerprint] != nil, !route.isRemote || trust.remoteAccess else { return false }
-        return DoorPolicy.admitsBeforeStart(route.isRemote ? .remote : .home,
-                                            origin: route.origin, internetAccess: trust.internetAccess)
+        route.allowsTouchBar(trust: trust)
     }
 
     private func touchBarSessionForRequest() -> TouchBarHostSession {
@@ -612,6 +609,9 @@ package final class StreamCoordinator {
             TouchBarReadOnlySource(driver: TouchBarScreenshotDriver())
         }, authorized: { [weak self] route in
             self?.touchBarAuthorized(route) ?? false
+        }, authorizedInput: { [weak self] route, action in
+            guard let self, !self.synthetic, !self.shuttingDown, let remote = self.remote else { return false }
+            return remote.trust.performIf({ route.allowsTouchBar(trust: $0) }, action)
         })
         touchBarSession = session
         return session

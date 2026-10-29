@@ -333,6 +333,16 @@ final class TrustBox: @unchecked Sendable {
         return value
     }
 
+    /// Serialize a short, nonblocking admission with trust updates. Once an update returns,
+    /// a later action cannot use the previous snapshot. The action must not reenter this box or
+    /// synchronously wait for the main actor or the network queue.
+    @discardableResult func performIf(_ allowed: (TrustSnapshot) -> Bool, _ action: () -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard allowed(value) else { return false }
+        action()
+        return true
+    }
+
     func update(_ change: (inout TrustSnapshot) -> Void) {
         lock.lock(); change(&value); lock.unlock()
     }

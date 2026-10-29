@@ -53,6 +53,7 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
     private let recordingAllowed: () -> Bool
     private let inputAllowed: () -> Bool
     private let authorized: (ClientRoute) -> Bool
+    private let authorizedInput: (ClientRoute, () -> Void) -> Bool
     private var subscribers: [ObjectIdentifier: NWConnection] = [:]
     private var source: (any TouchBarCaptureSource)?
     private var token: UUID?
@@ -75,10 +76,15 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
     init(server: StreamServer, makeSource: @escaping () -> (any TouchBarCaptureSource)? = { nil },
          recordingAllowed: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
          inputAllowed: @escaping () -> Bool = { AXIsProcessTrusted() },
-         authorized: @escaping (ClientRoute) -> Bool = { _ in false }) {
+         authorized: @escaping (ClientRoute) -> Bool = { _ in false },
+         authorizedInput: ((ClientRoute, () -> Void) -> Bool)? = nil) {
         self.server = server; self.makeSource = makeSource
         self.recordingAllowed = recordingAllowed; self.inputAllowed = inputAllowed
         self.authorized = authorized
+        self.authorizedInput = authorizedInput ?? { route, action in
+            guard authorized(route) else { return false }
+            action(); return true
+        }
         server.setTouchBarKeyframeNeeded { [weak self] token in
             Task { @MainActor [weak self] in self?.refresh(token) }
         }
@@ -149,9 +155,11 @@ private final class TouchBarCaptureIngress: @unchecked Sendable {
         guard surface.acceptsInput else { updateInputCapability(true); return }
         var failed = false
         permit.admit {
-            guard let accepted = touch.accept(event, from: id, surface: surface, subscribed: true,
-                                              paired: true, inputAllowed: true) else { return }
-            failed = !source.post(accepted)
+            _ = authorizedInput(route) {
+                guard let accepted = touch.accept(event, from: id, surface: surface, subscribed: true,
+                                                  paired: true, inputAllowed: true) else { return }
+                failed = !source.post(accepted)
+            }
         }
         if failed { stop() }
     }

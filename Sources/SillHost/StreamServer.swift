@@ -157,6 +157,12 @@ final class StreamServer {
     private let touchBarIngressLock = NSLock()
     private var touchBarIngress = EncodedVideoMailbox()
     private var touchBarToken: UUID? // network queue
+    private let touchBarTrust: TrustBox?
+    #if DUO_TOUCH_BAR_EGRESS_TESTING
+    private(set) var testTouchBarSends = 0 // network queue; never compiled into the product
+    private(set) var testTouchBarDrains = 0
+    private(set) var testTouchBarEligible = 0
+    #endif
     private var clients: [ObjectIdentifier: Client] = [:]
     private var lastParameterSets: Data?
     private var videoEpoch = VideoStreamEpoch()
@@ -449,7 +455,8 @@ final class StreamServer {
     /// for its test registration (SILL_TEST_SERVICE_TYPE, above). `home`: how the home door speaks.
     /// `testHooks`: false for Sill.app's own executable, which honours no TEST ONLY hook that bears
     /// on who gets in (docs/home-pairing-plan.md §4.3).
-    init(serviceType: String = "_sill._tcp", advertise: Bool = true, home: HomeDoorMode = .plain, testHooks: Bool = true) throws {
+    init(serviceType: String = "_sill._tcp", advertise: Bool = true, home: HomeDoorMode = .plain,
+         testHooks: Bool = true, touchBarTrust: TrustBox? = nil) throws {
         let queue = DispatchQueue(label: "sill.net", qos: .userInteractive)
         self.queue = queue
         let test = DoorPolicy.isTestHost(advertises: advertise, bundled: !testHooks)
@@ -470,7 +477,12 @@ final class StreamServer {
         (deviceFloor, testGoodbye) = Self.gateSettings(testHost: test)
         homeMode = home
         var door: Door?
-        if case .tls(let t) = home { door = Door(.home, queue: queue, identity: t.identity, trust: t.trust, testHost: test) }
+        if case .tls(let t) = home {
+            // Home and remote must use the same live trust box. A conflicting configuration
+            // fails closed for this optional lane rather than picking one account's snapshot.
+            self.touchBarTrust = touchBarTrust == nil || touchBarTrust === t.trust ? t.trust : nil
+            door = Door(.home, queue: queue, identity: t.identity, trust: t.trust, testHost: test)
+        } else { self.touchBarTrust = touchBarTrust }
         homeDoor = door
         // TEST ONLY: SILL_TEST_LOOPBACK, on a test host alone (anywhere else TestHooks says it is ignored).
         if test, Self.testLoopback { print("Test listener: loopback only (SILL_TEST_LOOPBACK); reach this host at 127.0.0.1.") }
@@ -1468,7 +1480,10 @@ final class StreamServer {
                 print("send: no client for \(connection.endpoint) (\(clients.count) known)")
                 return
             }
-            send(data, to: client)
+            if message.kind == .touchBarStatus {
+                guard transportAllows(client) else { return }
+                _ = admitTouchBar(client) { send(data, to: client, transportValidated: true) }
+            } else { send(data, to: client) }
         }
     }
 
@@ -1501,7 +1516,8 @@ final class StreamServer {
             // A delayed request for an older source cannot unsubscribe the current source.
             guard touchBarToken == token else { return }
             guard !client.touchBarClosing, client.route.encrypted, client.route.pairedName != nil,
-                  client.connection.state == .ready, transportAllows(client) else {
+                  client.connection.state == .ready, transportAllows(client),
+                  let trust = touchBarTrust, client.route.allowsTouchBar(trust: trust.snapshot) else {
                 client.touchBarSurface = nil; client.touchBarRefreshWanted = false
                 client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
                 return
@@ -1530,15 +1546,38 @@ final class StreamServer {
 
     private func drainTouchBarFrame(_ token: UUID) {
         let packet = touchBarIngressLock.withLock { touchBarIngress.take(token: token) }
+        #if DUO_TOUCH_BAR_EGRESS_TESTING
+        testTouchBarDrains += 1
+        #endif
         guard let packet, touchBarToken == token else { return }
         for client in clients.values where client.connection.state == .ready {
             guard client.touchBarSurface == token, client.route.encrypted, client.route.pairedName != nil else { continue }
-            guard !client.touchBarFrameInFlight, client.pendingBytes <= Self.touchBarBacklogLimit, client.inflight <= 1 else {
-                client.touchBarRefreshWanted = true
-                continue
+            #if DUO_TOUCH_BAR_EGRESS_TESTING
+            testTouchBarEligible += 1
+            #endif
+            // QUIC validates trust as part of its transport lease; TCP has no such lease. Check
+            // it for both and keep admission atomic with the short Network send. Validate the
+            // transport first because QUIC's lease itself reads the same TrustBox.
+            guard transportAllows(client) else { continue }
+            let admitted = admitTouchBar(client) {
+                guard !client.touchBarFrameInFlight, client.pendingBytes <= Self.touchBarBacklogLimit, client.inflight <= 1 else {
+                    client.touchBarRefreshWanted = true
+                    return
+                }
+                send(packet.data, to: client, isTouchBarFrame: true, transportValidated: true)
             }
-            send(packet.data, to: client, isTouchBarFrame: true)
+            if !admitted {
+                client.touchBarSurface = nil; client.touchBarRefreshWanted = false
+                client.touchBarInputPermit?.revoke(); client.touchBarInputPermit = nil
+            }
         }
+    }
+
+    /// Called on the network queue. The admitted action must not reenter the trust box or wait for
+    /// another queue; `NWConnection.send` only hands the data to Network and returns immediately.
+    private func admitTouchBar(_ client: Client, _ action: () -> Void) -> Bool {
+        guard !client.touchBarClosing, let trust = touchBarTrust else { return false }
+        return trust.performIf({ client.route.allowsTouchBar(trust: $0) }, action)
     }
 
     /// Client → host messages share the same framing. Small and rare, so read them one at a time.
@@ -1901,8 +1940,8 @@ final class StreamServer {
     private static let graceAfterConnect: TimeInterval = 8.0
 
     private func send(_ data: Data, to client: Client, isFrame: Bool = false, isKeyframe: Bool = false,
-                      isTouchBarFrame: Bool = false) {
-        guard transportAllows(client) else { return }
+                      isTouchBarFrame: Bool = false, transportValidated: Bool = false) {
+        guard transportValidated || transportAllows(client) else { return }
         let now = Date().timeIntervalSince1970
         let remote = client.route.isRemote
         if isFrame, let oldest = client.oldestUnackedFrameAt,
@@ -1928,7 +1967,12 @@ final class StreamServer {
             client.inflightFrames += 1
             if client.oldestUnackedFrameAt == nil { client.oldestUnackedFrameAt = now }
         }
-        if isTouchBarFrame { client.touchBarFrameInFlight = true }
+        if isTouchBarFrame {
+            client.touchBarFrameInFlight = true
+            #if DUO_TOUCH_BAR_EGRESS_TESTING
+            testTouchBarSends += 1
+            #endif
+        }
         client.connection.send(content: data, completion: .contentProcessed { [weak self, weak client] _ in
             guard let self, let client else { return }
             client.inflight -= 1
@@ -2017,5 +2061,14 @@ enum ClientRoute: Equatable {
         case .home(_, let peer): return peer != nil
         case .remote: return true
         }
+    }
+
+    /// The optional Touch Bar lane always requires a currently paired TLS peer, even when the
+    /// ordinary home door permits unpaired clients. Also honor the current remote access policy.
+    func allowsTouchBar(trust: TrustSnapshot) -> Bool {
+        guard encrypted, pairedName != nil, let fingerprint, trust.paired[fingerprint] != nil,
+              !isRemote || trust.remoteAccess else { return false }
+        return DoorPolicy.admitsBeforeStart(isRemote ? .remote : .home, origin: origin,
+                                            internetAccess: trust.internetAccess)
     }
 }

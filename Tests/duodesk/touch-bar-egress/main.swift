@@ -126,6 +126,46 @@ func frame(_ brightness: Int) throws -> CVPixelBuffer {
             throw Failure.invalid("first decode")
         }
 
+        if CommandLine.arguments.contains("--trust-revocation-only") {
+            // A trust removal is published before the queued goodbye. Hold the real TCP network queue,
+            // queue a frame, revoke its in-memory key, and ensure the frame is not handed to Network.
+            guard case .tls(let home) = loop.server.homeMode, let fingerprint = route.fingerprint,
+                  let pairedName = home.trust.snapshot.paired[fingerprint], let packet = results.state.last else {
+                throw Failure.invalid("paired trust fixture")
+            }
+            try await waitFor("frame slot before trust change") {
+                loop.server.queue.sync { !client.touchBarFrameInFlight && client.pendingBytes <= 128 * 1024 && client.inflight <= 1 }
+            }
+            let beforeRevocation = loop.server.queue.sync { (loop.server.testTouchBarSends, client.touchBarSurface == first,
+                                                             client.touchBarClosing, client.inflight, client.pendingBytes,
+                                                             loop.server.testTouchBarDrains, loop.server.testTouchBarEligible) }
+            let tcpLeaseAbsent = loop.server.queue.sync { client.transport == nil }
+            guard beforeRevocation.1 && !beforeRevocation.2 && tcpLeaseAbsent else { throw Failure.invalid("revocation TCP fixture not subscribed") }
+            let enteredRevocation = DispatchSemaphore(value: 0)
+            holding = true
+            loop.server.queue.async { enteredRevocation.signal(); hold.wait() }
+            guard await waitForSemaphore(enteredRevocation) else { throw Failure.timeout("trust revocation hold") }
+            loop.server.broadcastTouchBarFrame(packet.0, keyframe: true, parameters: packet.1, timestamp: 1, token: first)
+            guard loop.server.touchBarIngressLock.withLock({ loop.server.touchBarIngress.pending != nil }) else {
+                throw Failure.invalid("revocation frame not queued")
+            }
+            home.trust.update { $0.paired.removeValue(forKey: fingerprint) }
+            hold.signal(); holding = false
+            let afterRevocation = loop.server.queue.sync { (loop.server.testTouchBarSends, client.touchBarRefreshWanted,
+                                                            client.touchBarSurface == first, client.inflight, client.pendingBytes,
+                                                            client.connection.state == .ready, loop.server.touchBarToken == first,
+                                                            loop.server.testTouchBarDrains, loop.server.testTouchBarEligible,
+                                                            client.route.encrypted, client.route.pairedName != nil) }
+            let afterIngress = loop.server.touchBarIngressLock.withLock { (loop.server.touchBarIngress.scheduled, loop.server.touchBarIngress.pending != nil) }
+            print("REVOCATION FIXTURE: sends \(beforeRevocation.0)→\(afterRevocation.0), refresh=\(afterRevocation.1), subscribed=\(afterRevocation.2), inflight=\(beforeRevocation.3)→\(afterRevocation.3), bytes=\(beforeRevocation.4)→\(afterRevocation.4), ready=\(afterRevocation.5), token=\(afterRevocation.6), queued=\(afterIngress.0)/\(afterIngress.1), drains=\(beforeRevocation.5)→\(afterRevocation.7), eligible=\(beforeRevocation.6)→\(afterRevocation.8), encrypted=\(afterRevocation.9), paired=\(afterRevocation.10)")
+            guard afterRevocation.0 == beforeRevocation.0 else { throw Failure.invalid("frame sent after trust revocation") }
+            home.trust.update { $0.paired[fingerprint] = pairedName }
+            loop.server.setTouchBarSubscription(first, for: connection)
+            loop.server.queue.sync { }
+            print("PASS: queued frame withheld after paired trust was removed")
+            return
+        }
+
         let entered = DispatchSemaphore(value: 0)
         holding = true
         loop.server.queue.async { entered.signal(); hold.wait() }
