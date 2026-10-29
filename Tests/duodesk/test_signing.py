@@ -100,9 +100,11 @@ class SigningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
-            with patch.object(renew, "read_profile", return_value=self.profile), patch.object(renew.subprocess, "run") as run:
+            with patch.object(renew, "read_profile", return_value=self.profile), patch.object(renew.subprocess, "run") as run, \
+                 patch.object(renew, "export_refreshed_app", return_value=app) as export:
                 with self.assertRaisesRegex(RuntimeError, "fresh profile"):
                     renew.run(self.config)
+                export.assert_called_once()
                 self.assertEqual(run.call_count, 1)
                 self.assertEqual(run.call_args.args[0][0], "/usr/bin/xcodebuild")
 

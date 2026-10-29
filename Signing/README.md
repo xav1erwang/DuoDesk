@@ -29,6 +29,8 @@ python3 Signing/renew.py --enable-auto
 
 签名刷新由 Xcode 的 `-allowProvisioningUpdates` 完成。安装前工具检查应用、Team、设备、签名和到期时间。自动续签必须延长有效期；手动 `--force` 可以用有效期相同、且仍超过续签提前量的描述文件覆盖安装新代码，避免 Xcode 沿用已有描述文件时无法更新。任何模式都拒绝比已安装记录更早到期的描述文件。设备没有成功安装，也不会写入续签成功状态，下次检查会重试安装。最近一次成功安装的记录独立保存，失败不会覆盖它；缓存的构建或描述文件损坏时，续签会重新构建并再次校验。
 
+普通构建仍沿用临期或未延长的描述文件时，自动续签会再尝试 Xcode 的自动签名归档和调试导出。Apple 的[描述文件说明](https://developer.apple.com/help/account/provisioning-profiles/edit-download-or-delete-profiles/)解释了 Xcode 可能使用本地已有文件，[注册设备发布说明](https://developer.apple.com/documentation/xcode/distributing-your-app-to-registered-devices)介绍了自动签名导出。归档及 IPA 只暂存在 `Local/` 的私有临时目录，安装结束或失败后清理；不上传应用，也不删除 Xcode 缓存的描述文件。导出后仍须通过 Team、应用、设备、签名和有效期检查，且设备报告安装成功才更新成功记录。Xcode 可能继续返回旧文件或拒绝导出，此时保留原记录并在下次检查时重试。该路径目前仅用模拟命令验证，尚未在真实设备上验收。
+
 Mac 关机、休眠、未登录，手机不可连接、未信任、Developer Mode 关闭，或者 Apple 账户需要重新认证时，任务无法完成。手机需要通过 USB 或 Xcode 已配对的无线连接可达；远程桌面的公网连接不等于可进行开发安装。应用自身不能延长 iOS 签名有效期。
 
 查看 `Local/signing-status.json` 中最近一次成功安装、`Local/signing-error.json` 中最近一次失败，以及 `Local/signing-build.log` 和 `Local/renewal-error.log`。错误文件不会因后续成功自动删除，检查其时间即可判断是否为历史记录。日志仅在本地，可能包含设备或签名元数据，反馈问题前应删去个人信息。工具的失败分支和调度已做自动测试；尚未完成真实 Duo 的签名、覆盖安装及跨 7 天续签验收。

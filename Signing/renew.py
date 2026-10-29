@@ -111,6 +111,60 @@ def atomic_json(path, value):
             os.unlink(temporary)
 
 
+def export_refreshed_app(config, work, log):
+    """Ask Xcode to re-sign an archive for debugging when an ordinary build reused a stale profile.
+
+    This uses Xcode's automatic-signing export, never removes cached profiles and never uploads an
+    app. Everything exported remains in a private temporary directory until installation finishes.
+    A successful export still needs the same profile, app identity and signature checks as a build.
+    """
+    archive = work / "DUO.xcarchive"
+    output = work / "Export"
+    extracted = work / "Extracted"
+    options = work / "ExportOptions.plist"
+    options.write_bytes(plistlib.dumps({"method": "debugging", "destination": "export",
+                                        "signingStyle": "automatic", "teamID": config["team_id"]}))
+    command = build_command(config)
+    command[-1] = "archive"
+    index = command.index("-derivedDataPath")
+    command[index:index] = ["-archivePath", str(archive)]
+    with log.open("ab") as output_log:
+        subprocess.run(command, stdout=output_log, stderr=subprocess.STDOUT, check=True, timeout=1800)
+        subprocess.run(["/usr/bin/xcodebuild", "-exportArchive", "-archivePath", str(archive),
+                        "-exportPath", str(output), "-exportOptionsPlist", str(options),
+                        "-allowProvisioningUpdates"], stdout=output_log, stderr=subprocess.STDOUT,
+                       check=True, timeout=1800)
+    ipas = [path for path in output.glob("*.ipa") if path.is_file()]
+    if len(ipas) != 1:
+        raise ValueError("Xcode did not export exactly one device app.")
+    subprocess.run(["/usr/bin/ditto", "-x", "-k", str(ipas[0]), str(extracted)],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=180)
+    payload = extracted / "Payload"
+    apps = [path for path in payload.glob("*.app") if path.is_dir()]
+    if len(apps) != 1:
+        raise ValueError("The Xcode export does not contain exactly one app bundle.")
+    return apps[0]
+
+
+def install_verified_app(app, config, expiration, old_expiration, force, binding, log):
+    if expiration <= now() + dt.timedelta(hours=config.get("renew_before_hours", 48)):
+        raise RuntimeError("Xcode did not issue a sufficiently fresh profile; see Local/signing-build.log.")
+    if old_expiration is not None and (expiration < old_expiration or (not force and expiration == old_expiration)):
+        raise RuntimeError("The profile was not extended or would shorten the existing installation. The existing device app was left installed.")
+    info = plistlib.loads((app / "Info.plist").read_bytes())
+    if info.get("CFBundleIdentifier") != config["bundle_id"]:
+        raise ValueError("The built app identifier does not match the local config.")
+    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True, timeout=30)
+    with log.open("ab") as output:
+        subprocess.run(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device",
+                        config["device_id"], str(app)], stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
+    result = {"status": "installed", "binding": binding, "checked_at": now().isoformat(), "expires_at": expiration.isoformat()}
+    # Only advance successful-install state after the device reports success.
+    atomic_json(LOCAL / "signing-status.json", result)
+    print(json.dumps(result))
+    return result
+
+
 def run(config, force=False, status_only=False):
     app = LOCAL / "SignedBuild/Build/Products" / (config.get("configuration", "Debug") + "-iphoneos/Sill.app")
     binding = hashlib.sha256(json.dumps({key: config[key] for key in ("team_id", "device_id", "bundle_id")}, sort_keys=True).encode()).hexdigest()
@@ -147,22 +201,17 @@ def run(config, force=False, status_only=False):
         with log.open("ab") as output:
             subprocess.run(build_command(config), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=1800)
     expiration = profile_expiration(read_profile(app), config)
-    if expiration <= now() + dt.timedelta(hours=config.get("renew_before_hours", 48)):
-        raise RuntimeError("Xcode did not issue a sufficiently fresh profile; see Local/signing-build.log.")
-    if old_expiration is not None and (expiration < old_expiration or (not force and expiration == old_expiration)):
-        raise RuntimeError("The profile was not extended or would shorten the existing installation. The existing device app was left installed.")
-    info = plistlib.loads((app / "Info.plist").read_bytes())
-    if info.get("CFBundleIdentifier") != config["bundle_id"]:
-        raise ValueError("The built app identifier does not match the local config.")
-    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True, timeout=30)
-    with log.open("ab") as output:
-        subprocess.run(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device",
-                        config["device_id"], str(app)], stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
-    result = {"status": "installed", "binding": binding, "checked_at": now().isoformat(), "expires_at": expiration.isoformat()}
-    # Only advance successful-install state after the device reports success.
-    atomic_json(LOCAL / "signing-status.json", result)
-    print(json.dumps(result))
-    return result
+    needs_refresh = renewal_due(expiration, now(), config.get("renew_before_hours", 48))
+    if old_expiration is not None and expiration <= old_expiration:
+        needs_refresh = True
+    if not force and needs_refresh:
+        # Xcode may keep a locally eligible profile on a regular build. Its automatic-signing
+        # export can update that profile without deleting the cache or changing another app.
+        with tempfile.TemporaryDirectory(prefix="duodesk-renew-export-", dir=LOCAL) as directory:
+            exported = export_refreshed_app(config, Path(directory), log)
+            refreshed = profile_expiration(read_profile(exported), config)
+            return install_verified_app(exported, config, refreshed, old_expiration, force, binding, log)
+    return install_verified_app(app, config, expiration, old_expiration, force, binding, log)
 
 
 def agent_plist(config_path):
