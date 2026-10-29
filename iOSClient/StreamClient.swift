@@ -516,8 +516,8 @@ final class StreamClient: ObservableObject {
     private let touchBarInbox = DuoTouchBarInbox()
     private var touchBarController: DuoTouchBarClient?
 
-    /// Created only when the keyboard is shown; it owns a separate hardware decoder and never
-    /// changes the desktop decoder's native-resolution requirement.
+    /// Inactive experimental code: the current Duo control deck does not instantiate it or
+    /// subscribe. Its decoder never changes the desktop's native requirement.
     @MainActor var touchBar: DuoTouchBarClient {
         if let touchBarController { return touchBarController }
         let controller = DuoTouchBarClient(inbox: touchBarInbox) { [weak self] kind, data in

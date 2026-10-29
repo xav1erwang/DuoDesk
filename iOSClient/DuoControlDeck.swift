@@ -15,15 +15,13 @@ struct DuoControlDeck: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let room = max(0, geometry.size.height - 138)
-            let keyHeight = mode == .combined ? min(220, max(200, room * 0.61)) : max(200, room)
+            // The compact toolbar and safe bottom inset leave the rest to the controls.
+            let room = max(0, geometry.size.height - 66 - (mode == .combined ? 6 : 0))
+            let combinedHeight = min(min(240, max(200, room * 0.62)), max(0, room - min(70, room * 0.3)))
+            let keyHeight = mode == .combined ? combinedHeight : room
             VStack(spacing: 6) {
                 toolbar
                 if mode.hasKeyboard {
-                    DuoTouchBarStrip(touchBar: client.touchBar, canBegin: { !client.inputPaused },
-                                     showsMockPreview: showsMockTouchBar)
-                        .frame(height: 44)
-                        .layoutPriority(1)
                     DuoKeyboardView(latched: $latched, capsLock: $capsLock,
                                     inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
                         .frame(height: keyHeight)
@@ -37,7 +35,7 @@ struct DuoControlDeck: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.top, 6)
+            .padding(.top, 4)
             .padding(.bottom, 22)
         }
         .clipped()
@@ -70,7 +68,7 @@ struct DuoControlDeck: View {
                             Image(systemName: symbol(item))
                         }
                         .font(.system(size: 12, weight: .semibold))
-                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .frame(maxWidth: .infinity, minHeight: 30)
                         .foregroundStyle(mode == item ? Color.white : Color(white: 0.22))
                         .background(mode == item ? Color(white: 0.20) : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 8))
@@ -81,7 +79,7 @@ struct DuoControlDeck: View {
                     .accessibilityIdentifier("duo.mode.\(item.rawValue)")
                 }
             }
-            .padding(3)
+            .padding(2)
             .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.5)))
             .frame(maxWidth: 300)
@@ -90,15 +88,7 @@ struct DuoControlDeck: View {
             deckButton("系统键盘", symbol: "keyboard.badge.ellipsis", action: showSystemKeyboard)
             deckButton("设置", symbol: "gearshape", action: showSettings)
         }
-        .frame(height: 44)
-    }
-
-    private var showsMockTouchBar: Bool {
-        #if DEBUG
-        client.mockDiscovery
-        #else
-        false
-        #endif
+        .frame(height: 34)
     }
 
     private var rateMenu: some View {
@@ -111,14 +101,14 @@ struct DuoControlDeck: View {
                 Text("120 FPS").tag(120)
             }
         } label: {
-            VStack(spacing: 1) {
+            HStack(spacing: 2) {
                 Text("\(DuoStreamPolicy.normalizedFPS(preferredFPS))")
-                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
                 Text("FPS")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 8, weight: .semibold))
             }
             .foregroundStyle(Color(white: 0.22))
-            .frame(width: 44, height: 44)
+            .frame(width: 40, height: 34)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("目标帧率")
@@ -130,9 +120,9 @@ struct DuoControlDeck: View {
     private func deckButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(Color(white: 0.25))
-                .frame(width: 44, height: 44)
+                .frame(width: 40, height: 34)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -173,76 +163,6 @@ struct DuoControlDeck: View {
         case .trackpad: return "hand.draw"
         case .combined: return "laptopcomputer"
         }
-    }
-}
-
-/// Displays only the real side-stream. Older Macs and hosts without a source show a clear status.
-private struct DuoTouchBarStrip: View {
-    @ObservedObject var touchBar: DuoTouchBarClient
-    let canBegin: () -> Bool
-    let showsMockPreview: Bool
-
-    var body: some View {
-        Group {
-            if showsMockPreview {
-                mockPreview
-            } else if let surface = touchBar.status.surface {
-                DuoTouchBarRemoteView(video: touchBar.video, surface: surface,
-                                      canBegin: canBegin, send: touchBar.send,
-                                      onAttach: touchBar.requestRefresh)
-            } else {
-                HStack(spacing: 7) {
-                    Image(systemName: "rectangle")
-                        .font(.system(size: 11, weight: .medium))
-                    Text("Touch Bar")
-                        .font(.system(size: 11, weight: .semibold))
-                    Spacer(minLength: 8)
-                    Text(touchBar.status.availability == .starting ? "正在连接" : "暂不可用")
-                        .font(.system(size: 11))
-                }
-                .foregroundStyle(Color.white.opacity(0.72))
-                .padding(.horizontal, 12)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("duo.touchbar.unavailable")
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            RoundedRectangle(cornerRadius: 9)
-                .fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.08)],
-                                     startPoint: .top, endPoint: .bottom))
-        }
-        .modifier(TouchBarPictureChrome(showingPicture: touchBar.status.surface != nil))
-        .onAppear { touchBar.setVisible(true) }
-        .onDisappear { touchBar.setVisible(false) }
-    }
-
-    @ViewBuilder private var mockPreview: some View {
-        #if DEBUG
-        HStack(spacing: 8) {
-            Text("模拟")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
-            Text("esc")
-                .font(.system(size: 12, weight: .medium))
-                .frame(minWidth: 28)
-            Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 20)
-            Spacer(minLength: 0)
-            ForEach(["sun.min", "sun.max", "speaker.slash", "speaker.wave.1", "speaker.wave.3", "backward.fill", "play.fill", "forward.fill"], id: \.self) { symbol in
-                Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(maxWidth: .infinity)
-            }
-        }
-        .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, 12)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Touch Bar 模拟示意，未连接 Mac，不能操作")
-        .accessibilityIdentifier("duo.touchbar.mock")
-        .allowsHitTesting(false)
-        #else
-        EmptyView()
-        #endif
     }
 }
 

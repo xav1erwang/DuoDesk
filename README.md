@@ -4,7 +4,7 @@
 
 桌面的比例和分辨率以 Duo 上半屏的原生像素为准：连接时切换 Mac 桌面，正常断开或退出后恢复。编码仅向上对齐偶数像素，不因网络或编码性能不足而自动降低分辨率。
 
-原生 iOS 客户端与 Mac 服务端基于 [Sill](https://github.com/Saffsanity/sill) 的 HEVC、TLS 配对和输入链路开发，使用 Apache-2.0 开源许可证。视频会话优先使用 QUIC，TCP 作为受相同身份校验保护的备用通道。采用强制硬件编解码；初版默认请求 60 FPS，也可选择 120 FPS。原生尺寸的编解码与局域网测试图已测到约 120 FPS，但真实桌面尚未证实稳定 120 FPS；真实 Duo 上的 60 FPS、中文输入与跨周期自动续签仍待验收。Touch Bar 已预留界面，真实画面与触摸输入尚未接通。
+原生 iOS 客户端与 Mac 服务端基于 [Sill](https://github.com/Saffsanity/sill) 的 HEVC、TLS 配对和输入链路开发，使用 Apache-2.0 开源许可证。视频会话优先使用 QUIC，TCP 作为受相同身份校验保护的备用通道。采用强制硬件编解码；初版默认请求 60 FPS，也可选择 120 FPS。原生尺寸的编解码与局域网测试图已测到约 120 FPS，但真实桌面尚未证实稳定 120 FPS；真实 Duo 上的 60 FPS、中文输入与跨周期自动续签仍待验收。
 
 - [当前开发状态与验收范围](docs/the development notes)
 - [开发、构建与连接](docs/DUO-DEVELOPMENT.md)
