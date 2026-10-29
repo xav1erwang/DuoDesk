@@ -8,6 +8,40 @@ import IOSurface
 /// Runs one ScreenCaptureKit stream (a window or a display) and hands out 420f pixel buffers.
 /// The coordinator stops and restarts it whenever the client picks a different source.
 final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
+    enum NativeGeometryFailure: LocalizedError {
+        case filter, frame
+        var errorDescription: String? {
+            "系统采集的桌面尺寸或缩放比例与原生目标不一致。"
+        }
+    }
+
+    /// The display mode's pixel canvas and SCK's source geometry must agree. Output dimensions
+    /// alone cannot establish this: SCK can rescale the source to the requested surface size.
+    struct NativeGeometry {
+        let width: Int
+        let height: Int
+        private static let pixelTolerance = 0.01
+        private static let scaleTolerance = 0.00001
+
+        private static func near(_ a: Double, _ b: Double, tolerance: Double) -> Bool {
+            a.isFinite && b.isFinite && abs(a - b) <= tolerance
+        }
+        func acceptsFilter(rect: CGRect, scale: Double) -> Bool {
+            width > 0 && height > 0 && scale.isFinite && scale > 0
+                && Self.near(Double(rect.width) * scale, Double(width), tolerance: Self.pixelTolerance)
+                && Self.near(Double(rect.height) * scale, Double(height), tolerance: Self.pixelTolerance)
+        }
+        func acceptsFrame(width actualWidth: Int, height actualHeight: Int, rect: CGRect,
+                          scale: Double, contentScale: Double, filterScale: Double) -> Bool {
+            actualWidth == width && actualHeight == height
+                && Self.near(scale, filterScale, tolerance: Self.scaleTolerance)
+                && Self.near(contentScale, 1, tolerance: Self.scaleTolerance)
+                && Self.near(Double(rect.minX) * scale, 0, tolerance: Self.pixelTolerance)
+                && Self.near(Double(rect.minY) * scale, 0, tolerance: Self.pixelTolerance)
+                && acceptsFilter(rect: rect, scale: scale)
+        }
+    }
+
     struct Stop: Sendable {
         let error: any Error
         fileprivate let generation: UUID
@@ -23,7 +57,17 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     // the token makes delayed work from a stopped or superseded stream harmless.
     private var pendingSample: CMSampleBuffer?
     private var pendingSampleToken: UUID?
+    private var nativeGeometry: (geometry: NativeGeometry, scale: Double)?
+    private var nativeGeometryRejected = false
     private let queue = DispatchQueue(label: "sill.capture", qos: .userInteractive)
+    #if DUO_CAPTURE_GEOMETRY_TESTING
+    /// An owned-window fixture can ask SCK to scale the content, to exercise the live frame gate.
+    var testDestinationRect: CGRect?
+    private var testNextContentScale: Double?
+    func overrideNextContentScaleForTesting(_ scale: Double) {
+        stateLock.withLock { testNextContentScale = scale }
+    }
+    #endif
     #if DUO_CAPTURE_DIAGNOSTICS
     // Set only before starting a test stream. Production builds never expose this switch.
     var diagnosticUseStrictTimer = false
@@ -48,13 +92,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// This hook is absent from production and must not capture anything outside its own fixture.
     var onDeliveredSample: ((CMSampleBuffer) -> Void)?
     static func diagnosticRect(_ value: Any) -> CGRect? {
-        if let rect = value as? CGRect { return rect }
-        if let wrapped = value as? NSValue { return wrapped.rectValue }
-        if let dictionary = value as? [String: Any] {
-            var rect = CGRect.zero
-            if CGRectMakeWithDictionaryRepresentation(dictionary as CFDictionary, &rect) { return rect }
-        }
-        return nil
+        captureRect(value)
     }
     #endif
     /// The stream ended on its own (window closed, permission revoked). Called on an SCK thread.
@@ -80,8 +118,14 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// `resampleCadence`: receive the faster source without SCK's extra limiter, then select real
     /// frames against a stable target clock. This never changes the source display's clock.
     func start(filter: SCContentFilter, width: Int, height: Int, fps: Int, showsCursor: Bool, sourceRect: CGRect? = nil,
-               nativeCadence: Bool = false, resampleCadence: Bool = false) async throws {
+               nativeCadence: Bool = false, resampleCadence: Bool = false,
+               requireNativeGeometry: Bool = false) async throws {
         precondition(!nativeCadence || !resampleCadence)
+        let geometry = requireNativeGeometry ? NativeGeometry(width: width, height: height) : nil
+        let filterScale = Double(filter.pointPixelScale)
+        if let geometry, !geometry.acceptsFilter(rect: filter.contentRect, scale: filterScale) {
+            throw NativeGeometryFailure.filter
+        }
         let config = SCStreamConfiguration()
         config.width = width
         config.height = height
@@ -95,6 +139,9 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             config.ignoreShadowsDisplay = true                 // the crop is the window's frame; its shadow would be clipped anyway
             config.backgroundColor = Self.black                  // deterministic black behind the rounded corners
         }
+        #if DUO_CAPTURE_GEOMETRY_TESTING
+        if let testDestinationRect { config.destinationRect = testDestinationRect }
+        #endif
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
@@ -107,13 +154,15 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             framePacer = resampleCadence ? CaptureFramePacer(fps: fps) : nil
             pendingSample = nil
             pendingSampleToken = nil
+            nativeGeometry = geometry.map { ($0, filterScale) }
+            nativeGeometryRejected = false
             framesSeen = 0
         }
         do {
             try await stream.startCapture()
             // A delegate error may have arrived while startCapture was suspended.
             let failure: (any Error)? = stateLock.withLock {
-                self.stream === stream ? nil : (startupFailure ?? CancellationError())
+                startupFailure ?? (self.stream === stream ? nil : CancellationError())
             }
             if let failure { throw failure }
         } catch {
@@ -123,6 +172,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
                     framePacer = nil
                     pendingSample = nil
                     pendingSampleToken = nil
+                    nativeGeometry = nil
+                    nativeGeometryRejected = false
                 }
             }
             try? await stream.stopCapture()
@@ -148,6 +199,8 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             framePacer = nil
             pendingSample = nil
             pendingSampleToken = nil
+            nativeGeometry = nil
+            nativeGeometryRejected = false
             return previous
         }
         if let previous { try? await previous.stopCapture() }
@@ -168,7 +221,27 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         else { Stats.shared.bump("cap.noStatus"); return }
         // .idle frames (nothing changed) are skipped, which is what we want.
         guard status == .complete else { Stats.shared.bump(status == .idle ? "cap.idle" : "cap.status\(statusRaw)"); return }
-        guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { Stats.shared.bump("cap.noPixels"); return }
+        guard let image = CMSampleBufferGetImageBuffer(sampleBuffer) else { Stats.shared.bump("cap.noPixels"); return }
+        let geometry = stateLock.withLock { self.stream === stream && !nativeGeometryRejected ? nativeGeometry : nil }
+        if let geometry {
+            let info = attachments.first!
+            let scale = (info[.scaleFactor] as? NSNumber)?.doubleValue
+            var contentScale = (info[.contentScale] as? NSNumber)?.doubleValue
+            #if DUO_CAPTURE_GEOMETRY_TESTING
+            if let injected = stateLock.withLock({ () -> Double? in
+                defer { testNextContentScale = nil }
+                return testNextContentScale
+            }) { contentScale = injected }
+            #endif
+            let rect = info[.contentRect].flatMap(Self.captureRect)
+            guard let scale, let contentScale, let rect,
+                  geometry.geometry.acceptsFrame(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image),
+                                                 rect: rect, scale: scale, contentScale: contentScale,
+                                                 filterScale: geometry.scale) else {
+                rejectNativeGeometry(stream)
+                return
+            }
+        }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         #if DUO_CAPTURE_DIAGNOSTICS
         if let onUnpacedSample, let image = CMSampleBufferGetImageBuffer(sampleBuffer),
@@ -181,7 +254,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         #endif
         let selection = stateLock.withLock { () -> Selection in
-            guard self.stream === stream else { return .ignored }
+            guard self.stream === stream, !nativeGeometryRejected else { return .ignored }
             if var pacer = framePacer {
                 let decision = pacer.consider(pts)
                 framePacer = pacer
@@ -249,11 +322,44 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         case emit(first: Bool, replaced: Bool)
     }
 
+    /// Capture attachments encode rectangles as dictionaries; accept NSValue as well for the
+    /// platform variants already exercised by the diagnostics. Invalid or missing data fails closed.
+    static func captureRect(_ value: Any) -> CGRect? {
+        if let rect = value as? CGRect { return rect }
+        if let wrapped = value as? NSValue,
+           String(cString: wrapped.objCType) == String(cString: NSValue(rect: .zero).objCType) {
+            return wrapped.rectValue
+        }
+        if let dictionary = value as? [String: Any] {
+            var rect = CGRect.zero
+            if CGRectMakeWithDictionaryRepresentation(dictionary as CFDictionary, &rect) { return rect }
+        }
+        return nil
+    }
+
+    /// Keep the live stream for stop(): it still needs a real SCK stop and output-queue drain.
+    /// At most one report escapes, and a held older sample is discarded before the callback.
+    private func rejectNativeGeometry(_ stream: SCStream) {
+        let stopped: Stop? = stateLock.withLock {
+            guard self.stream === stream, !nativeGeometryRejected else { return nil }
+            nativeGeometryRejected = true
+            startupFailure = NativeGeometryFailure.frame
+            framePacer = nil
+            pendingSample = nil
+            pendingSampleToken = nil
+            return Stop(error: NativeGeometryFailure.frame, generation: generation)
+        }
+        if let stopped {
+            print("Capture stopped: native desktop content was scaled or incomplete")
+            onStopped?(stopped)
+        }
+    }
+
     /// Runs on the same serial queue as SCK output. This delivers an actual changed sample even
     /// if the desktop becomes static before the next eligible capture callback.
     private func deliverPendingSample(_ token: UUID) {
         let pending = stateLock.withLock { () -> (CMSampleBuffer, Bool)? in
-            guard stream != nil, pendingSampleToken == token, let sample = pendingSample,
+            guard stream != nil, !nativeGeometryRejected, pendingSampleToken == token, let sample = pendingSample,
                   var pacer = framePacer else { return nil }
             pendingSample = nil
             pendingSampleToken = nil
@@ -298,10 +404,14 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let stopped: Stop? = stateLock.withLock {
             guard stream === self.stream else { return nil }
             self.stream = nil
-            startupFailure = error
             framePacer = nil
             pendingSample = nil
             pendingSampleToken = nil
+            nativeGeometry = nil
+            // A geometry rejection has already notified the owner. A subsequent system stop
+            // must not replace its failure or report the same stream a second time.
+            guard !nativeGeometryRejected else { return nil }
+            startupFailure = error
             return Stop(error: error, generation: generation)
         }
         print("Capture stream stopped (\(stopped == nil ? "replaced" : "current")): \(error) — \((error as NSError).userInfo)")

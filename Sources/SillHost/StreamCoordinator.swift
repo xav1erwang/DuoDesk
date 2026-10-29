@@ -1315,6 +1315,10 @@ package final class StreamCoordinator {
             return
         }
         print("Capture stopped: \(stopped.error.localizedDescription)")
+        if stopped.error is WindowCapture.NativeGeometryFailure {
+            server.goodbyeAll(Goodbye(reason: "duoResolution", message: stopped.error.localizedDescription,
+                                      reconnect: false), within: 0.1)
+        }
         await select(.none)
     }
 
@@ -1647,9 +1651,14 @@ package final class StreamCoordinator {
                 if virtualDisplay { stage.release() }   // nothing streams: never leave a window on the virtual display
                 active = .none
                 if desktopResolution != nil {
-                    let message = error is HEVCEncoder.EncoderError
-                        ? "Mac 无法启动硬件编码，请稍后重新连接。"
-                        : "Mac 无法启动原生桌面捕获，请检查屏幕录制权限后重连。"
+                    let message: String
+                    if error is HEVCEncoder.EncoderError {
+                        message = "Mac 无法启动硬件编码，请稍后重新连接。"
+                    } else if error is WindowCapture.NativeGeometryFailure {
+                        message = error.localizedDescription
+                    } else {
+                        message = "Mac 无法启动原生桌面捕获，请检查屏幕录制权限后重连。"
+                    }
                     server.goodbyeAll(Goodbye(reason: "duoStream", message: message, reconnect: false), within: 0.1)
                 }
             }
@@ -1687,7 +1696,8 @@ package final class StreamCoordinator {
                 let nativeDesktop = source == .desktop && desktopResolution != nil
                 try await capture.start(filter: filter, width: width, height: height, fps: fps, showsCursor: false, sourceRect: sourceRect,
                                         nativeCadence: nativeDesktop && duoDesktop.followsNativeCadence,
-                                        resampleCadence: nativeDesktop && duoDesktop.needsCadenceResampling)
+                                        resampleCadence: nativeDesktop && duoDesktop.needsCadenceResampling,
+                                        requireNativeGeometry: nativeDesktop)
             } catch {
                 await capture.stop()
                 capture.onFrame = nil
