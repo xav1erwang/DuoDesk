@@ -8,12 +8,12 @@ enum SettingsTab: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .general: "General"
-        case .devices: "Devices"
-        case .streaming: "Streaming"
-        case .virtualDisplay: "Virtual Display"
-        case .permissions: "Permissions"
-        case .remoteAccess: "Remote Access"
+        case .general: "常规"
+        case .devices: "设备"
+        case .streaming: "串流"
+        case .virtualDisplay: "虚拟显示器"
+        case .permissions: "权限"
+        case .remoteAccess: "远程访问"
         }
     }
 

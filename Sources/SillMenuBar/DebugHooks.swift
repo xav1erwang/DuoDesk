@@ -76,6 +76,8 @@ import StreamProtocol
 ///                                              status cards, glyphs and menu.txt to <dir>, then
 ///                                              exit (no Screen Recording needed: views render
 ///                                              offscreen; no identity is loaded, no listener)
+///     -SillRenderStreamingOnly YES              with -SillRenderPreviews, render just Streaming
+///                                              in light and dark; bare binary only
 ///
 /// These are the bare SillMenuBar binary's (defaults domain "SillMenuBar"; delete it after). Sill.app
 /// itself, an app bundle's executable, ignores every `-Sill…After` hook and `-requirePairing`, each
@@ -363,6 +365,16 @@ enum DebugHooks {
         let out = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let appearances: [(String, NSAppearance.Name)] = [("light", .aqua), ("dark", .darkAqua)]
+
+        if !AppModel.bundled, UserDefaults.standard.bool(forKey: "SillRenderStreamingOnly") {
+            for (name, appearance) in appearances {
+                render(SettingsPane(tab: .streaming, model: model)
+                        .background(Color(nsColor: .windowBackgroundColor)),
+                       appearance: appearance, to: out.appendingPathComponent("pane-streaming-\(name).png"))
+            }
+            print("Streaming previews written to \(out.path)")
+            exit(0)
+        }
 
         // The Devices and Remote Access panes are drawn in each of their states below instead of
         // live (the model has no host here, so they would only ever show "off" and nothing paired).

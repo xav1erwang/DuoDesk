@@ -83,26 +83,25 @@ enum MenuBuilder {
         }
         menu.append(.separator)
 
-        menu.append(MenuEntry(kind: .item, title: "Virtual Display", subtitle: p.virtualDisplayNote,
+        menu.append(MenuEntry(kind: .item, title: "虚拟显示器", subtitle: p.virtualDisplayNote,
                               checked: config.virtualDisplay, action: .setVirtualDisplay(!config.virtualDisplay)))
-        menu.append(MenuEntry(kind: .item, title: "Frame Rate", children: [60, 120].map { fps in
-            MenuEntry(kind: .item, title: "Up to \(fps) fps", checked: config.maxFPS == fps, action: .setMaxFPS(fps))
+        menu.append(MenuEntry(kind: .item, title: "帧率上限", children: [60, 120].map { fps in
+            MenuEntry(kind: .item, title: "最高 \(fps) FPS", checked: config.maxFPS == fps, action: .setMaxFPS(fps))
         }))
         var quality = QualityPreset.allCases.map { preset in
-            MenuEntry(kind: .item, title: preset.title, checked: config.bitrate == preset.rawValue, action: .setBitrate(preset.rawValue))
+            MenuEntry(kind: .item, title: String(localized: DuoQualityLabels.title(forBitrate: preset.rawValue)), checked: config.bitrate == preset.rawValue, action: .setBitrate(preset.rawValue))
         }
         if QualityPreset(rawValue: config.bitrate) == nil {
-            quality.append(MenuEntry(kind: .item, title: QualityPreset.title(forBitrate: config.bitrate), checked: true, enabled: false))
+            quality.append(MenuEntry(kind: .item, title: String(localized: DuoQualityLabels.title(forBitrate: config.bitrate)), checked: true, enabled: false))
         }
         // The home quality, as ever; while every connected device is away, the subtitle says which
         // quality runs instead (the away one is set in Settings › Streaming, never here).
-        let qualityNote = p.away
-            ? "Away from home now: \(QualityPreset.shortTitle(bitrate: config.awayBitrate, captureScale: Double(config.awayCaptureScale)))"
-            : "Per 60 fps; a 120 fps stream gets twice as much"
-        menu.append(MenuEntry(kind: .item, title: "Quality", subtitle: qualityNote, children: quality))
-        menu.append(MenuEntry(kind: .item, title: "Resolution", children: [
+        let awayName = String(localized: DuoQualityLabels.name(forBitrate: config.awayBitrate))
+        let qualityNote = p.away ? "当前远程画质：\(awayName)" : "码率以 60 FPS 为基准"
+        menu.append(MenuEntry(kind: .item, title: "画质", subtitle: qualityNote, children: quality))
+        menu.append(MenuEntry(kind: .item, title: "常规画面分辨率", subtitle: "Duo 原生桌面不受此选项影响", children: [
             MenuEntry(kind: .item, title: "Retina", checked: config.captureScale >= 1.5, action: .setCaptureScale(2)),
-            MenuEntry(kind: .item, title: "Standard", subtitle: "A quarter of the pixels; much lighter to encode",
+            MenuEntry(kind: .item, title: "标准", subtitle: "像素更少，编码负担更低",
                       checked: config.captureScale < 1.5, action: .setCaptureScale(1)),
         ]))
         menu.append(.separator)

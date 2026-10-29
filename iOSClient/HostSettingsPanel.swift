@@ -363,10 +363,10 @@ struct HostSettingsPanel: View {
         Rows {
             AdaptiveRow(title: "画质", since: client.settings.pendingSince(.bitrate)) {
                 Picker("画质", selection: binding(shown.bitrate) { HostSettingsChange(bitrate: $0) }) {
-                    ForEach(QualityPreset.allCases) { Text($0.title).tag($0.rawValue) }
+                    ForEach(QualityPreset.allCases) { Text(DuoQualityLabels.title(forBitrate: $0.rawValue)).tag($0.rawValue) }
                     if QualityPreset(rawValue: shown.bitrate) == nil {
                         // Set by hand on the Mac: shown, never offered (the Mac's menu does the same).
-                        Text(QualityPreset.title(forBitrate: shown.bitrate)).tag(shown.bitrate)
+                        Text(DuoQualityLabels.title(forBitrate: shown.bitrate)).tag(shown.bitrate)
                     }
                 }
                 .pickerStyle(.menu)

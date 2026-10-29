@@ -267,53 +267,51 @@ private struct StreamingPane: View {
     var body: some View {
         Form {
             Section {
-                Picker("Frame rate limit", selection: $settings.config.maxFPS) {
-                    Text("60 fps").tag(60)
-                    Text("120 fps").tag(120)
+                Picker("帧率上限", selection: $settings.config.maxFPS) {
+                    Text("60 FPS").tag(60)
+                    Text("120 FPS").tag(120)
                 }
                 .pickerStyle(.segmented)
-                Picker("Quality", selection: $settings.config.bitrate) {
-                    ForEach(QualityPreset.allCases) { Text($0.title).tag($0.rawValue) }
+                Picker("画质", selection: $settings.config.bitrate) {
+                    ForEach(QualityPreset.allCases) { Text(DuoQualityLabels.title(forBitrate: $0.rawValue)).tag($0.rawValue) }
                     if QualityPreset(rawValue: settings.config.bitrate) == nil {
-                        Text(QualityPreset.title(forBitrate: settings.config.bitrate)).tag(settings.config.bitrate)
+                        Text(DuoQualityLabels.title(forBitrate: settings.config.bitrate)).tag(settings.config.bitrate)
                     }
                 }
-                Picker("Resolution", selection: $settings.config.captureScale) {
+                Picker("常规画面分辨率", selection: $settings.config.captureScale) {
                     Text("Retina").tag(CGFloat(2))
-                    Text("Standard").tag(CGFloat(1))
+                    Text("标准").tag(CGFloat(1))
                 }
             } footer: {
-                Footnote("Each device asks for its own screen’s rate, up to this limit. Quality is per 60 fps; a 120 fps stream gets twice as much. \(QualityPreset.fastLinkNote) Changes apply at once: the current stream restarts for a moment.")
+                Footnote("设备请求的帧率不会超过此上限；实际帧率还取决于桌面更新和连接。码率以 60 FPS 为基准，120 FPS 时加倍。超清和极致需要 USB 或高速 Wi-Fi。更改后画面可能短暂停顿。Duo 原生桌面保持原生尺寸并使用硬件编码，不受常规画面分辨率选项影响。")
             }
             // Away from home (docs/remote-bundle-plan.md §5): its own quality, which a device away
             // sets too; the menu's Quality and Resolution stay the home ones.
             Section {
-                Picker("Quality", selection: $settings.config.awayBitrate) {
-                    ForEach(QualityPreset.allCases) { Text($0.title).tag($0.rawValue) }
+                Picker("画质", selection: $settings.config.awayBitrate) {
+                    ForEach(QualityPreset.allCases) { Text(DuoQualityLabels.title(forBitrate: $0.rawValue)).tag($0.rawValue) }
                     if QualityPreset(rawValue: settings.config.awayBitrate) == nil {
-                        Text(QualityPreset.title(forBitrate: settings.config.awayBitrate)).tag(settings.config.awayBitrate)
+                        Text(DuoQualityLabels.title(forBitrate: settings.config.awayBitrate)).tag(settings.config.awayBitrate)
                     }
                 }
-                Picker("Resolution", selection: $settings.config.awayCaptureScale) {
+                Picker("常规画面分辨率", selection: $settings.config.awayCaptureScale) {
                     Text("Retina").tag(CGFloat(2))
-                    Text("Standard").tag(CGFloat(1))
+                    Text("标准").tag(CGFloat(1))
                 }
             } header: {
-                Text("Away from home")
+                Text("远程连接")
             } footer: {
-                Footnote("DUO你电脑 streams at these while every connected device is away from home, through a VPN or over the internet, so a slow connection never starts at your home quality. A device away from home changes these, and never your Quality and Resolution above."
-                         + (model.coordinator?.status.snapshot.away == true ? " Streaming at these now." : ""))
+                Footnote("当所有已连接设备都通过公网或 VPN 远程连接时，使用这里的设置；远程设备更改的是这一组设置。"
+                         + (model.coordinator?.status.snapshot.away == true ? " 当前正在使用远程设置。" : ""))
             }
             Section {
-                Toggle("Prioritize encoding speed", isOn: $settings.config.prioritizeSpeed)
+                Toggle("优先编码速度", isOn: $settings.config.prioritizeSpeed)
             } footer: {
-                Footnote("Lower latency when the Mac is busy, at a softer picture.")
+                Footnote("Mac 繁忙时可降低延迟，画面可能略柔和。")
             }
             if let snapshot = model.coordinator?.status.snapshot, snapshot.softwareEncoder {
                 Section {
-                    Label(snapshot.hardwareEncoderStuck
-                          ? "The hardware encoder is stuck, so streams use the software encoder: up to 60 fps at Standard resolution. Restarting the Mac fixes this."
-                          : "The hardware encoder is busy or not answering, so streams use the software encoder: up to 60 fps at Standard resolution. DUO你电脑 switches back by itself once it keeps up again.",
+                    Label("当前为软件编码测试状态；Duo 原生桌面需要硬件编码，不能以此状态验收。",
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                 }
