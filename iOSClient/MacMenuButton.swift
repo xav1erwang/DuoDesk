@@ -44,7 +44,7 @@ struct MacMenuButton: View {
                     .font(.system(size: iconSize))
                     .foregroundStyle(open ? Palette.accent : Palette.text)
                     .frame(height: iconBox)
-                Text("Menus")
+                Text("菜单")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(open ? Palette.accent : Palette.barLabel)
             }
@@ -114,7 +114,7 @@ struct MacMenuTrigger: UIViewRepresentable {
                 if isOpen { onOpen() } else { onClose() }
             }
         }
-        button.accessibilityLabel = "\(client.menus.app ?? "Mac") menus"
+        button.accessibilityLabel = "\(client.menus.app ?? "Mac") 菜单"
         let top = client.menus.top
         guard context.coordinator.built != top else { return }
         context.coordinator.built = top

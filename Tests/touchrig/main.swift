@@ -394,6 +394,26 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         self.runner = runner
         let tc = CGPoint(x: root.trackpad.bounds.midX, y: root.trackpad.bounds.midY + 60)
         let oc = CGPoint(x: root.overlay.bounds.midX, y: root.overlay.bounds.midY + 60)
+        if ProcessInfo.processInfo.environment["RIG_FOCUS"] == "pointer-release" {
+            let p = CGPoint(x: tc.x + 6, y: tc.y)
+            let cases: [(String, [Step])] = [
+                ("tap", Gesture.tap(1, at: tc)),
+                ("tiny stationary tap", [.begin([tc]), .move([CGPoint(x: tc.x + 1, y: tc.y)]), .end([0])]),
+                ("short move 3", Gesture.swipe(1, at: tc, dx: 3, dy: 0, frames: 3)),
+                ("short move 8", Gesture.swipe(1, at: tc, dx: 8, dy: 0, frames: 4)),
+                ("move then return", [.begin([tc]), .move([p]), .move([tc]), .end([0])]),
+                ("slow short move", Gesture.swipe(1, at: tc, dx: 8, dy: 0, frames: 40)),
+                ("normal move", Gesture.swipe(1, at: tc, dx: 120, dy: 30, frames: 15)),
+                ("hold drag", Gesture.swipe(1, at: tc, dx: 60, dy: 30, frames: 10, hold: 36)),
+                ("right tap", Gesture.tap(2, at: tc)),
+                ("two finger scroll", Gesture.swipe(2, at: tc, dx: 0, dy: 90, frames: 10)),
+                ("cancel", [.begin([tc]), .move([p]), .cancel]),
+                ("tap after move", Gesture.swipe(1, at: tc, dx: 8, dy: 0, frames: 4) + [.wait(30)] + Gesture.tap(1, at: tc))
+            ]
+            for (title, steps) in cases { runner.add("TRACKPAD \(title)", root.trackpad, steps) }
+            runner.start { print("RIG done"); exit(0) }
+            return
+        }
         for (title, steps) in scenarios(tc) { runner.add("TRACKPAD \(title)", root.trackpad, steps) }
         for (title, steps) in scenarios(oc) { runner.add("OVERLAY \(title)", root.overlay, steps) }
         runner.start { print("RIG done"); exit(0) }

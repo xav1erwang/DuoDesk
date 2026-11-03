@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
@@ -23,6 +23,14 @@ spec.loader.exec_module(renew)
 class SigningTests(unittest.TestCase):
     def setUp(self):
         self.config = {"team_id": "TESTTEAM01", "device_id": "00000000-0000000000000000", "bundle_id": "com.example.duodesk"}
+        self.source_id = "a" * 64
+        self.source_root = Path("/tmp/duodesk-approved-source")
+        for stub in (patch.object(renew, "capture_snapshot", return_value=(self.source_id, self.source_root)),
+                     patch.object(renew, "validate_snapshot", return_value=self.source_root),
+                     patch.object(renew, "profile_cache_directories", return_value=[]),
+                     patch.object(renew, "build_dir_for_source", side_effect=lambda _: renew.LOCAL / "SignedBuild")):
+            stub.start()
+            self.addCleanup(stub.stop)
         self.time = dt.datetime(2026, 10, 25, tzinfo=dt.timezone.utc)
         self.profile = {"Entitlements": {"application-identifier": "TESTTEAM01.com.example.duodesk"},
                         "TeamIdentifier": ["TESTTEAM01"], "ProvisionedDevices": [self.config["device_id"]],
@@ -69,8 +77,8 @@ class SigningTests(unittest.TestCase):
     def test_schedule_is_opt_in_with_argument_paths(self):
         path = Path("/tmp/project with spaces/config.json")
         agent = renew.agent_plist(path)
-        self.assertEqual(agent["StartInterval"], 21600)
-        self.assertEqual(agent["ProgramArguments"][-1], str(path.resolve()))
+        self.assertEqual(agent["StartInterval"], 60)
+        self.assertEqual(agent["ProgramArguments"][-2:], [str(path.resolve()), "--monitor"])
         self.assertNotIn("/bin/sh", agent["ProgramArguments"])
 
     def test_schedule_preserves_selected_xcode_without_other_environment(self):
@@ -85,14 +93,16 @@ class SigningTests(unittest.TestCase):
             app.mkdir(parents=True)
             (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
             with patch.object(renew, "read_profile", return_value=self.profile), patch.object(renew.subprocess, "run") as run:
-                run.side_effect = [None, subprocess.CalledProcessError(1, ["devicectl"])]
+                run.side_effect = [None, None, subprocess.CalledProcessError(1, ["devicectl"])]
                 with self.assertRaises(subprocess.CalledProcessError):
                     renew.run(self.config)
                 self.assertFalse((Path(directory) / "signing-status.json").exists())
+                self.assertEqual(json.loads((Path(directory) / "signing-pending.json").read_text())["source_id"], self.source_id)
                 run.side_effect = None
                 renew.run(self.config)
                 state = json.loads((Path(directory) / "signing-status.json").read_text())
                 self.assertEqual(state["status"], "installed")
+                self.assertFalse((Path(directory) / "signing-pending.json").exists())
                 self.assertEqual(run.call_args.args[0][1:4], ["devicectl", "device", "install"])
 
     def test_unextended_profile_never_reinstalled(self):
@@ -112,7 +122,7 @@ class SigningTests(unittest.TestCase):
         binding = hashlib.sha256(json.dumps({key: self.config[key] for key in ("team_id", "device_id", "bundle_id")},
                                             sort_keys=True).encode()).hexdigest()
         return {"status": "installed", "binding": binding, "checked_at": self.time.isoformat(),
-                "expires_at": expiration.isoformat()}
+                "expires_at": expiration.isoformat(), "source_id": self.source_id}
 
     def test_cli_failure_preserves_last_successful_install(self):
         # Execute the actual command in an isolated copy with a fake Xcode failure. No signing,
@@ -122,6 +132,7 @@ class SigningTests(unittest.TestCase):
             signing.mkdir(); local.mkdir()
             script = signing / "renew.py"
             shutil.copyfile(Path(renew.__file__), script)
+            shutil.copyfile(Path(renew.__file__).with_name("source_snapshot.py"), signing / "source_snapshot.py")
             (local / "signing.json").write_text(json.dumps(self.config))
             app = local / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
@@ -133,12 +144,46 @@ class SigningTests(unittest.TestCase):
             failure = subprocess.CalledProcessError(1, ["xcodebuild"])
             with patch.object(sys, "argv", [str(script)]), \
                  patch.object(subprocess, "check_output", return_value=plistlib.dumps(profile)), \
-                 patch.object(subprocess, "run", side_effect=failure), redirect_stderr(StringIO()):
+                 patch("source_snapshot.validate_snapshot", return_value=self.source_root), \
+                 patch.object(subprocess, "run", side_effect=failure) as run, redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit) as exit_code:
                     runpy.run_path(str(script), run_name="__main__")
             self.assertEqual(exit_code.exception.code, 1)
+            self.assertEqual(run.call_args.args[0][0], "/usr/bin/xcodebuild")
             self.assertEqual(json.loads((local / "signing-status.json").read_text()), old)
             self.assertEqual(json.loads((local / "signing-error.json").read_text())["status"], "failed")
+
+    def test_manual_renewal_reports_busy_without_claiming_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            signing = Path(directory) / "Signing"
+            signing.mkdir()
+            script = signing / "renew.py"
+            shutil.copyfile(Path(renew.__file__), script)
+            shutil.copyfile(Path(renew.__file__).with_name("source_snapshot.py"), signing / "source_snapshot.py")
+            with patch.object(sys, "argv", [str(script), "--renew-now"]), \
+                 patch.object(renew.fcntl, "flock", side_effect=BlockingIOError()), redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit) as exit_code:
+                    runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(exit_code.exception.code, 75)
+            self.assertFalse((Path(directory) / "Local/signing-status.json").exists())
+
+    def test_manual_renewal_reports_disconnected_phone_without_claiming_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); signing = root / "Signing"; local = root / "Local"
+            signing.mkdir(); local.mkdir()
+            script = signing / "renew.py"
+            shutil.copyfile(Path(renew.__file__), script)
+            shutil.copyfile(Path(renew.__file__).with_name("source_snapshot.py"), signing / "source_snapshot.py")
+            (local / "signing.json").write_text(json.dumps(self.config))
+            response = subprocess.CompletedProcess([], 0, stdout=json.dumps({"result": {"devices": []}}), stderr="")
+            output = StringIO()
+            with patch.object(sys, "argv", [str(script), "--renew-now"]), \
+                 patch.object(subprocess, "run", return_value=response), redirect_stdout(output):
+                with self.assertRaises(SystemExit) as exit_code:
+                    runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(exit_code.exception.code, 75)
+            self.assertEqual(json.loads(output.getvalue())["status"], "waiting_for_device")
+            self.assertFalse((local / "signing-status.json").exists())
 
     def test_force_refuses_a_fresh_but_older_profile(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
@@ -177,6 +222,23 @@ class SigningTests(unittest.TestCase):
                 self.assertEqual(run.call_args_list[0].args[0][0], "/usr/bin/xcodebuild")
                 self.assertEqual(run.call_args_list[-1].args[0][1:4], ["devicectl", "device", "install"])
 
+    def test_daily_attempt_does_not_call_an_unchanged_profile_a_renewal(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
+            app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
+            app.mkdir(parents=True)
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            expiration = self.time + dt.timedelta(days=6)
+            state = self.install_record(expiration)
+            (Path(directory) / "signing-status.json").write_text(json.dumps(state))
+            profile = dict(self.profile, ExpirationDate=expiration)
+            with patch.object(renew, "read_profile", return_value=profile), patch.object(renew.subprocess, "run") as run, \
+                 patch.object(renew, "export_refreshed_app", return_value=app) as export:
+                with self.assertRaisesRegex(RuntimeError, "not extended"):
+                    renew.run(self.config, renew_now=True)
+                export.assert_called_once()
+                self.assertFalse(any(call.args[0][1:4] == ["devicectl", "device", "install"] for call in run.call_args_list))
+                self.assertEqual(json.loads((Path(directory) / "signing-status.json").read_text()), state)
+
     def test_status_does_not_depend_on_an_invalid_cached_build(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
@@ -186,17 +248,19 @@ class SigningTests(unittest.TestCase):
                 self.assertEqual(renew.run(self.config, status_only=True)["status"], "valid")
                 read.assert_not_called()
 
-    def test_due_renewal_rebuilds_an_invalid_cached_profile(self):
+    def test_due_renewal_rebuilds_from_approved_source(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
             (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
             (Path(directory) / "signing-status.json").write_text(json.dumps(self.install_record(self.time + dt.timedelta(hours=24))))
-            with patch.object(renew, "read_profile", side_effect=[ValueError("invalid cached profile"), self.profile]), \
+            with patch.object(renew, "read_profile", return_value=self.profile) as read, \
                  patch.object(renew.subprocess, "run") as run:
                 result = renew.run(self.config)
                 self.assertEqual(result["status"], "installed")
                 self.assertEqual(run.call_args_list[0].args[0][0], "/usr/bin/xcodebuild")
+                self.assertIn(str(self.source_root / "iOSClient/Sill.xcodeproj"), run.call_args_list[0].args[0])
+                read.assert_called_once_with(app)
                 self.assertEqual(run.call_args_list[-1].args[0][1:4], ["devicectl", "device", "install"])
 
 

@@ -3,5 +3,6 @@
   "device_id": "YOUR_IPHONE_DUO_DEVICE_ID",
   "bundle_id": "com.yourname.duodesk",
   "configuration": "Debug",
-  "renew_before_hours": 48
+  "renew_before_hours": 48,
+  "renew_interval_hours": 24
 }

@@ -1146,6 +1146,16 @@ final class StreamServer {
         queue.asyncAfter(deadline: .now() + within) { connection.cancel() }
     }
 
+    /// Terminal stream failures must close the connections after their error message. Merely
+    /// broadcasting a goodbye revokes each video lane but leaves the sockets registered, so a
+    /// client can remain connected forever without being able to receive a later stream.
+    func goodbyeAndCloseAll(_ goodbye: Goodbye, within: TimeInterval = 0.25) {
+        queue.async { [self] in
+            let connections = clients.values.map(\.connection)
+            for connection in connections { self.goodbye(goodbye, to: connection, within: within) }
+        }
+    }
+
     /// Every admitted client, home and remote, gets `goodbye` (the app's Quit and the signal path:
     /// "quit"); returns once each message was handed to the network or after `within`. Call from
     /// any thread but the network queue.

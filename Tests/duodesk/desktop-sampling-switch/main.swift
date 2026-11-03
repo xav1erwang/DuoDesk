@@ -18,6 +18,36 @@ import Foundation
                 fatalError("physical sampling target mismatch")
             }
         }
+        let virtualPlans: [(Bool, Double, Int, Double, Int)] = [
+            (true, 170, 120, 170, 120), (true, 170, 60, 170, 60),
+            (true, 59.94, 120, 59.94, 60), (true, 120, 120, 120, 120),
+            (false, 60, 120, 120, 120)
+        ]
+        for (mirrored, physical, requested, expectedClock, expectedSampling) in virtualPlans {
+            guard let plan = DuoDesktopDisplay.candidateVirtualClock(mirrored: mirrored, physicalHz: physical,
+                                                                      requestedFPS: requested),
+                  plan.refreshHz == expectedClock, plan.samplingFPS == expectedSampling else {
+                fatalError("candidate virtual clock or sampling target mismatch")
+            }
+        }
+        for invalid in [0.0, -1.0, Double.nan, Double.infinity, 1001.0] {
+            guard DuoDesktopDisplay.candidateVirtualClock(mirrored: true, physicalHz: invalid, requestedFPS: 120) == nil else {
+                fatalError("unknown physical clock must not choose mirror timing")
+            }
+        }
+        guard DuoDesktopDisplay.candidateVirtualClock(mirrored: true, physicalHz: 170, requestedFPS: 241) == nil else {
+            fatalError("invalid sampling request must not choose mirror timing")
+        }
+        for fps in [60, 120] {
+            guard let plan = DuoDesktopDisplay.extendedVirtualClock(physicalHz: 170, requestedFPS: fps),
+                  plan.refreshHz == Double(fps), plan.samplingFPS == fps else {
+                fatalError("an independent extension uses its own requested clock")
+            }
+        }
+        guard DuoDesktopDisplay.extendedVirtualClock(physicalHz: .nan, requestedFPS: 120) == nil else {
+            fatalError("an extension needs a known original physical clock")
+        }
+        print("PASS: candidate mirror clock follows physical timing while sampling remains independent")
         guard DuoDesktopDisplay.permitsPhysicalMode(currentHz: 60, candidateHz: 60, fps: 60),
               !DuoDesktopDisplay.permitsPhysicalMode(currentHz: 60, candidateHz: 120, fps: 60) else {
             fatalError("physical mode must keep its original clock")
@@ -52,7 +82,7 @@ import Foundation
         guard let safety = await DuoDesktopDisplay.inspectRefreshSafetyForTesting(), safety.count == 4 else {
             fatalError("read-only refresh-safety fixture could not inspect the current main display")
         }
-        let safetyLabels = ["unverified virtual mirror rejected before any mutation",
+        let safetyLabels = ["mirror writes intercepted and independent-primary path remains disabled",
                             "independent physical display detected", "physical mirror master detected",
                             "physical mirror follower detected"]
         for (passed, label) in zip(safety, safetyLabels) {
@@ -62,12 +92,27 @@ import Foundation
         guard let mirror = DuoDesktopDisplay.inspectPinnedMirrorForTesting(), mirror.count == 4 else {
             fatalError("read-only pinned-mirror fixture could not inspect the current mode")
         }
-        let mirrorLabels = ["candidate rejects changed or mismatched topology", "candidate stages all modes in one transaction",
+        let mirrorLabels = ["mirror accepts only a uniform rebase and rejects changed topology", "mirror restores source and unrelated origins without writing unrelated modes",
                             "candidate stops staging at the first failure", "invalid mirror identifiers cause no operations"]
         for (passed, label) in zip(mirror, mirrorLabels) {
             guard passed else { fatalError(label) }
             print("PASS: \(label)")
         }
+        guard let extensionWrites = DuoDesktopDisplay.inspectExtendedModeWritesForTesting(), extensionWrites.count == 4 else {
+            fatalError("read-only extended display fixture could not inspect the current mode")
+        }
+        let extensionLabels = ["extension mode operation targets the new display only",
+                               "extension mode operation rejects an original display",
+                               "extension mode operation rejects a null display",
+                               "extension mode operation propagates failure"]
+        for (passed, label) in zip(extensionWrites, extensionLabels) {
+            guard passed else { fatalError(label) }
+            print("PASS: \(label)")
+        }
+        guard DuoDesktopDisplay.inspectExtendedRestoreForTesting() else {
+            fatalError("extension cleanup must not configure a physical display")
+        }
+        print("PASS: extension cleanup makes no physical display configuration")
         print("DESKTOP SAMPLING SWITCH PASS; source clock and virtual topology were simulated; no display configuration or capture")
     }
 }

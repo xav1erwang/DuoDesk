@@ -179,10 +179,10 @@ extension BarMetrics {
     /// clear the fold, the strip's width so that it ends short of it (nil: as before), the Settings
     /// panel no wider than the room past it. Unchanged anywhere else.
     func clearing(_ fold: FoldInfo, width: CGFloat) -> (bar: BarMetrics, stripWidth: CGFloat?) {
-        // Menus, Aa, Keyboard, Desktop and Settings: Menus counted whether or not it shows, so the
+        // Menus, Aa, Keyboard, Desktop, clean image and Settings: Menus is always counted, so the
         // bar never moves when the Mac's menus come and go.
         let book = DuoPosture.bookBar(width: width, fold: fold, padding: padding, gap: gap, buttonWidth: buttonWidth,
-                                      compactButtonWidth: BarMetrics.compact.buttonWidth, buttons: 5,
+                                      compactButtonWidth: BarMetrics.compact.buttonWidth, buttons: 6,
                                       panelWidth: settingsWidth)
         guard book.stripWidth != nil else { return (self, nil) }
         let bar = BarMetrics(height: height, padding: padding, gap: book.gap,

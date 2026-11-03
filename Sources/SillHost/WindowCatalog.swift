@@ -17,7 +17,23 @@ import StreamProtocol
 final class WindowCatalog {
     private(set) var windows: [SCWindow] = []
     private(set) var infos: [WindowInfo] = []
-    private(set) var display: SCDisplay?
+    private var captureDisplays: [SCDisplay] = []
+    private(set) var displayInfos: [RemoteDisplayInfo] = []
+    var selectedDisplayID: CGDirectDisplayID?
+    var preserveDisplayLayout = false
+    var displayPreviewsWanted = false { didSet { if displayPreviewsWanted { resendAllThumbnails() } } }
+    var onDisplaysChanged: (() -> Void)?
+    var onDisplayThumbnail: ((UInt32, Data) -> Void)?
+    var effectiveDisplayID: CGDirectDisplayID {
+        selectedDisplayID ?? displayInfos.first(where: \.isMain)?.id ?? CGMainDisplayID()
+    }
+    var display: SCDisplay? {
+        let id = effectiveDisplayID
+        let mirror = CGDisplayMirrorsDisplay(id)
+        return captureDisplays.first { $0.displayID == id }
+            ?? captureDisplays.first { mirror != 0 && $0.displayID == mirror }
+    }
+    private var displayNames: [CGDirectDisplayID: String] = [:]
     private(set) var installedApps: [AppInfo] = []
     /// This process as ScreenCaptureKit lists it, from the last look: the Desktop stream leaves it
     /// out, so Sill's own windows (the pairing code above all) never reach a device. Nil when it
@@ -77,11 +93,6 @@ final class WindowCatalog {
     /// The window being streamed, if the coordinator tells us. Its thumbnail refreshes every pass
     /// because its contents are the ones changing. Nil is fine: it is then treated like any other.
     var activeWindowID: UInt32?
-
-    /// `--virtual-display`: the Desktop source must capture the Mac's real main display, never the
-    /// virtual one. `SCShareableContent.displays` order is not guaranteed once a second display
-    /// exists, so pick by ID. Off by default: the default path keeps `displays.first`.
-    var preferMainDisplay = false
 
     /// `--virtual-display`: the window the coordinator has moved onto the virtual display. Set right
     /// after a successful placement, cleared on release. If ScreenCaptureKit stops treating it as
@@ -264,6 +275,7 @@ final class WindowCatalog {
             if Task.isCancelled { break }
             onPolled?()
             if thumbnailsWanted { await refreshThumbnails() }
+            if displayPreviewsWanted { await refreshDisplayThumbnails() }
             if Task.isCancelled { break }
             if passOwed { continue }
             let nap = Task { _ = try? await Task.sleep(for: Self.pollInterval) }
@@ -301,9 +313,8 @@ final class WindowCatalog {
         if let own = content.applications.first(where: { $0.processID == Self.ownPID }) {
             ownApplication = own
         }
-        display = preferMainDisplay
-            ? (content.displays.first { $0.displayID == CGMainDisplayID() } ?? content.displays.first)
-            : content.displays.first
+        captureDisplays = content.displays
+        refreshDisplayInventory()
         var visible = content.windows.filter { w in
             guard let app = w.owningApplication, !app.applicationName.isEmpty else { return false }
             return w.windowLayer == 0                                  // drops widgets, wallpaper, backstop
@@ -330,6 +341,59 @@ final class WindowCatalog {
         if newInfos != infos {
             infos = newInfos
             onWindowsChanged?(newInfos)
+        }
+    }
+
+    /// Read physical desktops independently of ScreenCaptureKit's unspecified display order.
+    /// Keep the original arrangement while our temporary mirror changes the reported coordinates.
+    func refreshDisplayInventory() {
+        for screen in NSScreen.screens {
+            if let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value {
+                displayNames[id] = screen.localizedName
+            }
+        }
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success else { return }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return }
+        let previous = Dictionary(uniqueKeysWithValues: displayInfos.map { ($0.id, $0) })
+        let next = ids.prefix(Int(count)).compactMap { id -> RemoteDisplayInfo? in
+            // Both the mirror and extension belong to this app, not to the chooser's desktops.
+            guard !(CGDisplayVendorNumber(id) == 0x4455 && [0x4F01, 0x4F45].contains(CGDisplayModelNumber(id))),
+                  let mode = CGDisplayCopyDisplayMode(id) else { return nil }
+            if preserveDisplayLayout, let saved = previous[id] { return saved }
+            let frame = CGDisplayBounds(id)
+            let info = RemoteDisplayInfo(id: id, name: displayNames[id] ?? "显示器 \(id)", isMain: id == CGMainDisplayID(),
+                                         x: frame.minX, y: frame.minY, width: frame.width, height: frame.height,
+                                         pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight)
+            return info.isValid ? info : nil
+        }.sorted { $0.id < $1.id }
+        if let selectedDisplayID, !next.contains(where: { $0.id == selectedDisplayID }) { self.selectedDisplayID = nil }
+        if next != displayInfos { displayInfos = next; onDisplaysChanged?() }
+    }
+
+    private func refreshDisplayThumbnails() async {
+        // Apply the same host-window exclusion as the full stream, including before the menu
+        // app has appeared in an on-screen content inventory.
+        if Bundle.main.bundleURL.pathExtension.lowercased() == "app", ownApplication == nil {
+            guard await resolveOwnApplication() != nil else { return }
+        }
+        for info in displayInfos {
+            guard displayPreviewsWanted, !Task.isCancelled else { return }
+            let mirror = CGDisplayMirrorsDisplay(info.id)
+            guard let source = captureDisplays.first(where: { $0.displayID == info.id || (mirror != 0 && $0.displayID == mirror) }) else { continue }
+            let config = SCStreamConfiguration()
+            let scale = min(480 / max(1, source.frame.width), 300 / max(1, source.frame.height))
+            config.width = max(2, Int(source.frame.width * scale))
+            config.height = max(2, Int(source.frame.height * scale))
+            config.showsCursor = false
+            let filter: SCContentFilter
+            if let ownApplication {
+                filter = SCContentFilter(display: source, excludingApplications: [ownApplication], exceptingWindows: [])
+            } else { filter = SCContentFilter(display: source, excludingWindows: []) }
+            guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config),
+                  let jpeg = Self.jpeg(image, quality: 0.65) else { continue }
+            if displayPreviewsWanted { onDisplayThumbnail?(info.id, jpeg) }
         }
     }
 

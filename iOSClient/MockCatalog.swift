@@ -79,6 +79,13 @@ enum MockCatalog {
                 print("-SillVideoSize \(raw): not WxH")
             }
         }
+        #if DEBUG && targetEnvironment(simulator)
+        if UserDefaults.standard.bool(forKey: "DuoPreviewMirrorUnavailable") {
+            client.debugPreviewRecoverableMirrorFailure()
+        } else if UserDefaults.standard.bool(forKey: "DuoPreviewExtendedDesktop") {
+            client.debugPreviewExtendedDesktop()
+        }
+        #endif
 
         var icons: [String: UIImage] = [:]
         for app in mockWindows.map({ ($0.bundleID, $0.appName) }) + mockApps.map({ ($0.bundleID, $0.name) }) {

@@ -7,5 +7,5 @@
 here="$(cd "$(dirname "$0")" && pwd)"
 source "$here/../common.sh"
 if [ "${1:-}" = "--mutants" ]; then run_mutants python3 "$here/mutants.py"; exit; fi
-swiftc -O iOSClient/AwayCopy.swift Sources/StreamProtocol/HostSettings.swift "$here/main.swift" -o "$out/check"
+swiftc -O iOSClient/AwayCopy.swift Sources/StreamProtocol/HostSettings.swift Sources/StreamProtocol/DuoQualityLabels.swift "$here/main.swift" -o "$out/check"
 "$out/check"

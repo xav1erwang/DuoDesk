@@ -7,7 +7,7 @@ if [[ -f Local/developer-env.sh ]]; then source Local/developer-env.sh; fi
 out="$PWD/.build/duodesk-touch-bar-contract"
 mkdir -p "$out"
 swiftc -emit-library -emit-module -module-name StreamProtocol \
-  Sources/StreamProtocol/StreamMessage.swift Sources/StreamProtocol/Switcher.swift \
+  Sources/StreamProtocol/StreamMessage.swift Sources/StreamProtocol/Display.swift Sources/StreamProtocol/Switcher.swift \
   Sources/StreamProtocol/TouchBar.swift Sources/StreamProtocol/VideoDecodeBacklog.swift -emit-module-path "$out/StreamProtocol.swiftmodule" \
   -o "$out/libStreamProtocol.dylib"
 swiftc -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \

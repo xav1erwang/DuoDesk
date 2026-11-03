@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import AppKit
 import SillHostCore
 
@@ -29,11 +30,11 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         self.settings = settings
         scrollView = NSTextView.scrollableTextView()
         textView = scrollView.documentView as! NSTextView   // scrollableTextView() always makes one
-        statsBox = NSButton(checkboxWithTitle: "Show per-second stats", target: nil, action: nil)
+        statsBox = NSButton(checkboxWithTitle: "显示每秒统计", target: nil, action: nil)
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 520),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: true)
-        window.title = "Sill Log"
+        window.title = "日志"
         window.isReleasedWhenClosed = false
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.minSize = NSSize(width: 480, height: 240)
@@ -52,8 +53,8 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         statsBox.target = self
         statsBox.action = #selector(toggleStats(_:))
         statsBox.state = settings.logShowsStats ? .on : .off
-        let clear = NSButton(title: "Clear", target: self, action: #selector(clear(_:)))
-        let reveal = NSButton(title: "Reveal Log File", target: self, action: #selector(revealFile(_:)))
+        let clear = NSButton(title: "清空显示", target: self, action: #selector(clear(_:)))
+        let reveal = NSButton(title: "在访达中显示日志文件", target: self, action: #selector(revealFile(_:)))
         reveal.isEnabled = HostLog.shared.fileURL != nil
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)

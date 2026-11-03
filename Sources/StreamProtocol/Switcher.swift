@@ -4,7 +4,7 @@ import Foundation
 public enum StreamSource: Codable, Hashable {
     case none
     case window(UInt32)   // CGWindowID, stable for the life of the window
-    case desktop          // the Mac's main display
+    case desktop          // the one physical display selected for this stream
 }
 
 /// One on-screen Mac window, as the client sees it. WindowList order is stable: first seen first.
@@ -64,13 +64,42 @@ public struct WindowList: Codable {
     /// by ordinary hosts; diagnostics must require exactly true before sending dry-run input.
     public var inputDryRun: Bool?
 
+    /// True only when this host can honor an extended-desktop request without mirroring a
+    /// physical display. Missing on older hosts; clients must treat nil as unsupported.
+    public var extendedDesktop: Bool?
+    /// The host validates a mirror request at the client's full render-canvas size rather than
+    /// silently substituting a smaller desktop. Missing on older hosts.
+    public var renderedNativeDesktop: Bool?
+    /// Native mirrors can change between the Duo upper panel and full panel during one session.
+    /// Older hosts omit this, so clients keep their established mirror size on those hosts.
+    public var resizableMirror: Bool?
+    /// A native-mirror failure that leaves the sole capable client connected so it can select an
+    /// extension. Missing in ordinary catalogs and on older hosts.
+    public var desktopIssue: DuoDesktopIssue?
+    /// nil on hosts without display selection. IDs never share the window-thumbnail namespace.
+    public var displays: [RemoteDisplayInfo]?
+    public var selectedDisplayID: UInt32?
+    /// Capture the selected physical display at its existing pixel size. The phone fits that
+    /// picture into its viewport; selecting a display never changes the Mac's primary or layout.
+    public var existingDisplayCapture: Bool?
+
     public init(macName: String, windows: [WindowInfo], active: StreamSource, launchID: String? = nil,
                 hostVersion: String? = nil, protocol: Int? = nil, gestures: Int? = nil, clipboard: Int? = nil,
-                inputDryRun: Bool? = nil) {
+                inputDryRun: Bool? = nil, extendedDesktop: Bool? = nil, desktopIssue: DuoDesktopIssue? = nil,
+                renderedNativeDesktop: Bool? = nil, resizableMirror: Bool? = nil,
+                displays: [RemoteDisplayInfo]? = nil, selectedDisplayID: UInt32? = nil,
+                existingDisplayCapture: Bool? = nil) {
         self.macName = macName; self.windows = windows; self.active = active; self.launchID = launchID
         self.hostVersion = hostVersion; self.protocol = `protocol`; self.gestures = gestures
         self.clipboard = clipboard
         self.inputDryRun = inputDryRun
+        self.extendedDesktop = extendedDesktop
+        self.desktopIssue = desktopIssue
+        self.renderedNativeDesktop = renderedNativeDesktop
+        self.resizableMirror = resizableMirror
+        self.displays = displays
+        self.selectedDisplayID = selectedDisplayID
+        self.existingDisplayCapture = existingDisplayCapture
     }
 }
 
@@ -85,6 +114,21 @@ public struct WindowCommand: Codable {
     public var id: UInt32
     public var action: Action
     public init(id: UInt32, action: Action) { self.id = id; self.action = action }
+}
+
+/// A recoverable native-mirror failure. The connection is still live; this is never a video frame
+/// or an assertion that a lower-resolution desktop is acceptable.
+public struct DuoDesktopIssue: Codable, Hashable, Sendable {
+    public var resolution: DuoDesktopResolution
+    public var message: String
+    /// The current full physical display, when it has at least the requested pixels. Its aspect
+    /// can differ from the Duo panel; selecting it preserves the Mac mode and can leave borders.
+    public var physicalFallback: DuoDesktopResolution?
+    public init(resolution: DuoDesktopResolution, message: String, physicalFallback: DuoDesktopResolution? = nil) {
+        self.resolution = resolution
+        self.message = message
+        self.physicalFallback = physicalFallback
+    }
 }
 
 /// JSON payloads. Everything here is small and infrequent; frames never go through JSON.

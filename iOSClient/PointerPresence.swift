@@ -331,6 +331,24 @@ struct PadCursor: Equatable {
     private(set) var cursor = CGPoint(x: 0.5, y: 0.5)
     private(set) var reseedsSeen = 0
 
+    /// Convert touch points to frame fractions. When a frame size is provided, equal finger travel
+    /// on each axis moves the cursor the same distance on the displayed picture. Without a valid
+    /// frame, retain the caller's existing vertical span.
+    static func motion(dx: CGFloat, dy: CGFloat, padWidth: CGFloat, verticalSpan: CGFloat,
+                       frameSize: CGSize?) -> CGPoint? {
+        guard dx.isFinite, dy.isFinite, padWidth.isFinite, padWidth > 0,
+              verticalSpan.isFinite, verticalSpan > 0 else { return nil }
+        var ySpan = verticalSpan
+        if let frame = frameSize, frame.width.isFinite, frame.height.isFinite,
+           frame.width > 0, frame.height > 0 {
+            let proportional = padWidth * (frame.height / frame.width)
+            if proportional.isFinite && proportional > 0 { ySpan = proportional }
+        }
+        let x = dx / padWidth, y = dy / ySpan
+        guard x.isFinite, y.isFinite else { return nil }
+        return CGPoint(x: x, y: y)
+    }
+
     /// A stroke's first finger, or the pad joining a window: from the anchor when there is one.
     mutating func adopt(anchor: CGPoint?, reseeds: Int) {
         if let anchor { cursor = Self.clamped(anchor) }

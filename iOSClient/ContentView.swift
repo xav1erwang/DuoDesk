@@ -11,6 +11,7 @@ struct ContentView: View {
 
     var body: some View {
         root.onAppear { statsReporter.attach(to: client) }
+            .sheet(isPresented: $client.displayPickerPresented) { DisplayPicker(client: client) }
     }
 
     @ViewBuilder private var root: some View {
@@ -42,6 +43,10 @@ struct ContentView: View {
         .background(WindowSessionObserver(client: client))
         .onAppear {
             #if DEBUG
+            if UserDefaults.standard.bool(forKey: "DuoDisplaySelectionChecks") {
+                client.runDisplaySelectionChecks()
+                return
+            }
             SecondWindow.openFromLaunchArgument()   // -SillSecondWindow 1
             #endif
             client.startBrowsing()
@@ -1130,7 +1135,7 @@ struct ConnectScreen: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Opens the App Store.")
+            .accessibilityHint("打开 App Store。")
         }
 
         ForEach(client.macs) { mac in
@@ -1157,7 +1162,7 @@ struct ConnectScreen: View {
         }
 
         if client.showsNearbyHint {
-            Text("Your Mac has to be on the same Wi\u{2011}Fi network as this \(device), or have Direct Wireless Connection turned on in DUO你电脑. Away from home, add it once with a code from your Mac.")
+            Text("Mac 需与这台 \(device) 连接同一 Wi-Fi 网络，或在 DUO你电脑中开启无线直连。在外使用时，请先用 Mac 上的配对码添加。")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1166,7 +1171,7 @@ struct ConnectScreen: View {
             // status line says (a disconnect's message stays there), at the button's height so
             // nothing moves.
             if client.searchingNearby {
-                Text("Also looking nearby")
+                Text("正在搜索附近设备")
                     .font(.system(size: 15))
                     .foregroundStyle(Palette.muted)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -1175,9 +1180,9 @@ struct ConnectScreen: View {
                 Button(action: {
                     client.searchNearby()
                     // The button leaves from under VoiceOver's cursor: say what it started.
-                    AccessibilityNotification.Announcement("Also looking nearby").post()
+                    AccessibilityNotification.Announcement("正在搜索附近设备").post()
                 }) {
-                    Text("Search Nearby")
+                    Text("搜索附近设备")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Palette.accent)
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -1185,7 +1190,7 @@ struct ConnectScreen: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint("Also looks for a Mac with Direct Wireless Connection turned on, without a Wi\u{2011}Fi network.")
+                .accessibilityHint("无需 Wi-Fi 网络，也可搜索已开启无线直连的 Mac。")
             }
         }
 
@@ -1215,12 +1220,12 @@ struct ConnectScreen: View {
     @ViewBuilder private func menu(for mac: FoundMac) -> some View {
         if let id = mac.macID {
             if mac.route == .remote {
-                Button { client.connect(to: mac) } label: { Label("Connect", systemImage: "globe") }
+                Button { client.connect(to: mac) } label: { Label("连接", systemImage: "globe") }
             } else if mac.route == .network {
-                Button { client.connectRemotely(id) } label: { Label("Connect Remotely", systemImage: "globe") }
+                Button { client.connectRemotely(id) } label: { Label("远程连接", systemImage: "globe") }
             }
             let name = client.savedMac(id) != nil ? client.displayName(id) : mac.name
-            Button(role: .destructive) { client.forget(id) } label: { Label("Forget \(name)", systemImage: "trash") }
+            Button(role: .destructive) { client.forget(id) } label: { Label("移除 \(name)", systemImage: "trash") }
         }
     }
 
@@ -1292,15 +1297,15 @@ struct ConnectScreen: View {
     }
 
     private var downloadLink: some View {
-        footerLink("Get it at \(SillLinks.siteName)", to: SillLinks.download)
+        footerLink("前往 \(SillLinks.siteName) 获取", to: SillLinks.download)
     }
 
     /// Support, then the privacy policy, on one line.
     private var supportAndPrivacy: some View {
         HStack(spacing: 0) {
-            footerLink("Support", to: SillLinks.support)
+            footerLink("支持", to: SillLinks.support)
             linkSeparator
-            footerLink("Privacy Policy", to: SillLinks.privacy)
+            footerLink("隐私政策", to: SillLinks.privacy)
         }
     }
 

@@ -108,39 +108,39 @@ enum MenuBuilder {
 
         // How DUO你电脑 runs on this Mac, not the picture: devices reach it over peer-to-peer Wi-Fi too.
         // Here as well as in Settings because it is situational (on in a café, off at home).
-        menu.append(MenuEntry(kind: .item, title: "Direct Wireless Connection",
-                              subtitle: "No shared network needed; Wi\u{2011}Fi streams can stutter",
+        menu.append(MenuEntry(kind: .item, title: "无线直连",
+                              subtitle: "无需接入同一网络；Wi-Fi 串流可能卡顿",
                               checked: config.directWireless, action: .setDirectWireless(!config.directWireless)))
         // Opens the pane rather than toggling: turning it on is worth reading what it does, and the
         // internet switch stays one deliberate step deeper, never in the menu.
         if let note = p.remoteAccessNote {
-            menu.append(MenuEntry(kind: .item, title: "Remote Access…", subtitle: note, action: .showSettingsTab(.remoteAccess)))
+            menu.append(MenuEntry(kind: .item, title: "远程访问…", subtitle: note, action: .showSettingsTab(.remoteAccess)))
         }
         var loginNote: String?
-        if !login.available { loginNote = "Available when DUO你电脑 runs from its app bundle" }
+        if !login.available { loginNote = "从应用程序包运行时可用" }
         else if let error = login.error { loginNote = error }
-        else if login.needsApproval { loginNote = "Approve DUO你电脑 in System Settings › Login Items" }
-        menu.append(MenuEntry(kind: .item, title: "Launch at Login", subtitle: loginNote, checked: login.on,
+        else if login.needsApproval { loginNote = "请在系统设置的登录项中允许 DUO你电脑" }
+        menu.append(MenuEntry(kind: .item, title: "登录时启动", subtitle: loginNote, checked: login.on,
                               enabled: login.available, action: .toggleLaunchAtLogin))
-        menu.append(MenuEntry(kind: .item, title: "Permissions", children: [
+        menu.append(MenuEntry(kind: .item, title: "权限", children: [
             permissions.screenRecording
-                ? MenuEntry(kind: .item, title: "Screen Recording: Allowed", enabled: false)
-                : MenuEntry(kind: .item, title: "Screen Recording: Not Allowed…", action: .allowScreenRecording),
+                ? MenuEntry(kind: .item, title: "屏幕录制：已允许", enabled: false)
+                : MenuEntry(kind: .item, title: "屏幕录制：未允许…", action: .allowScreenRecording),
             permissions.accessibility
-                ? MenuEntry(kind: .item, title: "Accessibility: Allowed", enabled: false)
-                : MenuEntry(kind: .item, title: "Accessibility: Not Allowed…", action: .allowAccessibility),
+                ? MenuEntry(kind: .item, title: "辅助功能：已允许", enabled: false)
+                : MenuEntry(kind: .item, title: "辅助功能：未允许…", action: .allowAccessibility),
             .separator,
-            MenuEntry(kind: .item, title: "Open Privacy & Security…", action: .openPrivacy),
+            MenuEntry(kind: .item, title: "打开隐私与安全性…", action: .openPrivacy),
         ]))
         menu.append(.separator)
 
         if p.remoteAccessNote != nil {
-            menu.append(MenuEntry(kind: .item, title: "Pair iPhone or iPad…", enabled: p.canPair, action: .showPairing))
+            menu.append(MenuEntry(kind: .item, title: "配对 iPhone 或 iPad…", enabled: p.canPair, action: .showPairing))
         }
-        menu.append(MenuEntry(kind: .item, title: "Show Log…", action: .showLog))
-        menu.append(MenuEntry(kind: .item, title: "Settings…", key: ",", action: .showSettings))
+        menu.append(MenuEntry(kind: .item, title: "显示日志…", action: .showLog))
+        menu.append(MenuEntry(kind: .item, title: "设置…", key: ",", action: .showSettings))
         menu.append(.separator)
-        menu.append(MenuEntry(kind: .item, title: "Quit DUO你电脑", key: "q", action: .quit))
+        menu.append(MenuEntry(kind: .item, title: "退出 DUO你电脑", key: "q", action: .quit))
         return menu
     }
 
@@ -203,7 +203,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private static let attentionImage: NSImage? = {
         let config = NSImage.SymbolConfiguration(paletteColors: [.systemOrange])
-        let image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Needs attention")?
+        let image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "需要关注")?
             .withSymbolConfiguration(config)
         image?.isTemplate = false
         return image

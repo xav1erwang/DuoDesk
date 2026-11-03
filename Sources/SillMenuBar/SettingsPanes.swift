@@ -91,13 +91,13 @@ private struct GeneralPane: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Launch at login", isOn: Binding(get: { model.loginItem.isOn }, set: { model.loginItem.set($0) }))
+                Toggle("登录时启动", isOn: Binding(get: { model.loginItem.isOn }, set: { model.loginItem.set($0) }))
                     .disabled(!model.loginItem.available)
                 if !model.loginItem.available {
-                    Footnote("Available when DUO你电脑 runs from its app bundle.")
+                    Footnote("从应用程序包运行 DUO你电脑 时可用。")
                 } else if model.loginItem.needsApproval {
-                    LabeledContent("Waiting for your approval") {
-                        Button("Approve in System Settings…") { model.loginItem.openSystemSettings() }
+                    LabeledContent("等待系统设置确认") {
+                        Button("打开系统设置…") { model.loginItem.openSystemSettings() }
                     }
                 }
                 if let error = model.loginItem.error {
@@ -105,26 +105,26 @@ private struct GeneralPane: View {
                 }
             }
             Section {
-                LabeledContent("Running from") {
+                LabeledContent("运行位置") {
                     Text(Bundle.main.bundlePath)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                 }
                 if !Self.runsFromApplications {
-                    Label("The login item and the permissions follow this copy of DUO你电脑. Keep one copy, in Applications.",
+                    Label("登录项和权限与此应用副本绑定。请在“应用程序”中保留一个副本。",
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                 }
             }
             Section {
-                LabeledContent("Visible on your network as") { Text(networkName) }
+                LabeledContent("网络中显示为") { Text(networkName) }
             } footer: {
                 HStack(spacing: 4) {
-                    Text("This is the Mac’s name.")
+                    Text("这是此 Mac 的名称。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Button("Change It in Sharing Settings…") {
+                    Button("在共享设置中更改…") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension") {
                             NSWorkspace.shared.open(url)
                         }
@@ -138,9 +138,9 @@ private struct GeneralPane: View {
             // restarting the stream (the listener is replaced); enabled in test pattern mode too,
             // where it is saved and changes only the listener.
             Section {
-                Toggle("Direct wireless connection", isOn: $settings.config.directWireless)
+                Toggle("无线直连", isOn: $settings.config.directWireless)
             } footer: {
-                Footnote("Lets your iPhone and iPad connect when they’re near this Mac, even without a shared Wi\u{2011}Fi network, the way AirDrop does. While it’s on, this Mac’s Wi\u{2011}Fi keeps stepping away from your network, so streaming over Wi\u{2011}Fi can stutter. Anyone nearby with DUO你电脑 can find this Mac; only devices you paired can connect, unless Require pairing is off.")
+                Footnote("附近的 iPhone 和 iPad 无需接入同一 Wi-Fi 即可连接，方式类似隔空投送。开启后 Wi-Fi 串流可能卡顿。附近的 DUO你电脑 可以发现此 Mac；开启配对要求时只有已配对设备可以连接。")
             }
             // The clipboard both ways (HostClipboard): at once, no restart. Each device has its own
             // switch too. macOS's answer is read with the permissions (once a second while this pane
@@ -157,8 +157,8 @@ private struct GeneralPane: View {
             }
             Section {
                 HStack {
-                    Button("Show Log…") { model.showLog?() }
-                    Button("Reveal Log File") {
+                    Button("显示日志…") { model.showLog?() }
+                    Button("在访达中显示日志文件") {
                         if let url = HostLog.shared.fileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                     }
                     .disabled(HostLog.shared.fileURL == nil)
@@ -166,9 +166,9 @@ private struct GeneralPane: View {
             }
             Section {
                 // A way out when the status item is hidden (a crowded menu bar, the notch).
-                Button("Quit DUO你电脑") { NSApp.terminate(nil) }
+                Button("退出 DUO你电脑") { NSApp.terminate(nil) }
             } footer: {
-                Footnote("DUO你电脑 \(AppModel.version) (\(AppModel.build)). Free and open source.")
+                Footnote("DUO你电脑 \(AppModel.version)（\(AppModel.build)），基于 Apache-2.0 许可的 Sill 开发。")
             }
         }
     }
@@ -177,10 +177,10 @@ private struct GeneralPane: View {
         let snapshot = model.coordinator?.status.snapshot ?? HostStatusSnapshot()
         switch snapshot.network {
         case .advertising(let name): return "“\(name)”"
-        case .notAdvertised: return "Not advertised (test pattern mode)"
-        case .failed: return "Not visible (the listener failed)"
-        case .waiting: return "Not yet (waiting for the network)"
-        case .starting, .registering: return "Registering…"
+        case .notAdvertised: return "未广播（测试图模式）"
+        case .failed: return "不可见（监听失败）"
+        case .waiting: return "等待网络"
+        case .starting, .registering: return "正在注册…"
         }
     }
 }
@@ -198,21 +198,23 @@ struct ClipboardSection: View {
 
     var body: some View {
         Section {
-            Toggle("Share clipboard with devices", isOn: $shareClipboard)
-            if shareClipboard, let warning = ClipboardPolicy.Copy.macAccessWarning(access) {
+            Toggle("与设备共享剪贴板", isOn: $shareClipboard)
+            if shareClipboard, access != .allowed {
                 VStack(alignment: .leading, spacing: 6) {
-                    Warning(warning)
-                    if let hint = ClipboardPolicy.Copy.macAccessHint(access) {
-                        Text(hint)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Button(ClipboardPolicy.Copy.macAccessButton, action: allow)
+                    Warning(access == .denied
+                            ? "macOS 不允许应用读取剪贴板，此 Mac 复制的内容不会发往设备。"
+                            : "macOS 会在读取剪贴板前询问，此 Mac 复制的内容暂时不会发往设备。")
+                    Text(access == .notAsked
+                         ? "在系统设置中允许“从其他 App 粘贴”；设备发来的文本仍可接收。"
+                         : "请在“隐私与安全性”中将“从其他 App 粘贴”设为允许；设备发来的文本仍可接收。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("在系统设置中允许…", action: allow)
                 }
             }
         } footer: {
-            Footnote(ClipboardPolicy.Copy.macFootnote)
+            Footnote("在此 Mac 上复制的文字可粘贴到已连接的 iPhone 或 iPad；设备发来的文字会写入 Mac 剪贴板。密码管理器标记为隐藏的内容会留在此 Mac。")
         }
     }
 }
@@ -234,13 +236,13 @@ struct UpdatesSection: View {
 
     var body: some View {
         Section {
-            Toggle("Check for updates automatically", isOn: $automatic)
+            Toggle("自动检查更新", isOn: $automatic)
             LabeledContent {
                 HStack(spacing: 8) {
                     if let url = pane.releasePage {
-                        Button("Open Release Page…") { actions.openRelease(url) }
+                        Button("打开发行页面…") { actions.openRelease(url) }
                     }
-                    Button("Check Now") { actions.checkNow() }
+                    Button("立即检查") { actions.checkNow() }
                         .disabled(!pane.canCheck)
                 }
             } label: {
@@ -331,17 +333,17 @@ private struct VirtualDisplayPane: View {
         let snapshot = model.coordinator?.status.snapshot ?? HostStatusSnapshot()
         Form {
             Section {
-                Toggle("Stream from a virtual display", isOn: $settings.config.virtualDisplay)
+                Toggle("从虚拟显示器串流", isOn: $settings.config.virtualDisplay)
             } footer: {
-                Footnote("DUO你电脑 moves the window you pick onto an invisible display made for your device, so it keeps updating when other windows cover it and text is drawn at your device’s scale. The window leaves this screen while it streams and comes back when you stop streaming or quit DUO你电脑.")
+                Footnote("将所选窗口移到为设备创建的虚拟显示器，窗口被遮挡时仍可更新，并按设备比例绘制文字。停止串流或退出 DUO你电脑 后，窗口会返回原处。")
             }
             Section {
-                LabeledContent("Status") {
+                LabeledContent("状态") {
                     HStack(spacing: 8) {
                         Text(statusText(snapshot))
                             .multilineTextAlignment(.trailing)
                         if canRetry(snapshot) {
-                            Button("Try Again") {
+                            Button("重试") {
                                 retrying = true
                                 Task { @MainActor in
                                     await model.coordinator?.retryVirtualDisplay()
@@ -353,12 +355,12 @@ private struct VirtualDisplayPane: View {
                     }
                 }
                 if settings.config.virtualDisplay, let failure = snapshot.lastStageFailure {
-                    LabeledContent("Last window") {
-                        Text("Streamed where it is: \(failure)").multilineTextAlignment(.trailing)
+                    LabeledContent("上一个窗口") {
+                        Text("已在原位置串流：\(failure)").multilineTextAlignment(.trailing)
                     }
                 }
             } footer: {
-                Footnote("Uses a private macOS interface (CGVirtualDisplay). If a macOS update breaks it, DUO你电脑 streams the window where it is.")
+                Footnote("使用 macOS 的 CGVirtualDisplay 接口。如果系统更新导致接口不可用，将在窗口原位置串流。")
             }
         }
     }
@@ -366,13 +368,13 @@ private struct VirtualDisplayPane: View {
     private func statusText(_ s: HostStatusSnapshot) -> String {
         let sr = model.permissions.screenRecording, ax = model.permissions.accessibility
         if s.virtualDisplayAPIMissing, let problem = s.virtualDisplayProblem {
-            return "Not available on this version of macOS: \(problem)"
+            return "此 macOS 版本不可用：\(problem)"
         }
-        if !sr && !ax { return "Needs Screen Recording and Accessibility" }
-        if !ax { return "Needs Accessibility" }
-        if !sr { return "Needs Screen Recording" }
-        if let problem = s.virtualDisplayProblem { return "Off for this session: \(problem)" }
-        return "Available"
+        if !sr && !ax { return "需要屏幕录制和辅助功能权限" }
+        if !ax { return "需要辅助功能权限" }
+        if !sr { return "需要屏幕录制权限" }
+        if let problem = s.virtualDisplayProblem { return "本次会话已关闭：\(problem)" }
+        return "可用"
     }
 
     /// A run-level disable (the system removed the display too often) can be retried; a missing
@@ -392,39 +394,39 @@ private struct PermissionsPane: View {
         let network = model.coordinator?.status.snapshot.network
         Form {
             Section {
-                PermissionRow(id: "screen-recording", title: "Screen Recording", allowed: permissions.screenRecording,
-                              explanation: "Allows your iPhone Duo to view the complete Mac desktop.",
-                              button: model.settings.askedScreenRecording ? "Open System Settings…" : "Allow…") {
+                PermissionRow(id: "screen-recording", title: "屏幕录制", allowed: permissions.screenRecording,
+                              explanation: "允许 iPhone Duo 查看完整的 Mac 桌面。",
+                              button: model.settings.askedScreenRecording ? "打开系统设置…" : "允许…") {
                     permissions.requestScreenRecording()
                 }
-                PermissionRow(id: "accessibility", title: "Accessibility", allowed: permissions.accessibility,
-                              explanation: "Allows your iPhone Duo to click, scroll and type on this Mac.",
-                              button: model.settings.askedAccessibility ? "Open System Settings…" : "Allow…") {
+                PermissionRow(id: "accessibility", title: "辅助功能", allowed: permissions.accessibility,
+                              explanation: "允许 iPhone Duo 在此 Mac 上点击、滚动和输入。",
+                              button: model.settings.askedAccessibility ? "打开系统设置…" : "允许…") {
                     permissions.requestAccessibility()
                 }
             } footer: {
-                Footnote("Enable both permissions for DUO你电脑 Mac in System Settings.")
+                Footnote("请在系统设置中为 DUO你电脑 Mac 开启这两项权限。")
             }
             if permissions.relaunchSuggested, !permissions.screenRecording {
                 Section {
-                    LabeledContent("Screen Recording starts working once DUO你电脑 opens again.") {
-                        Button(permissions.canRelaunch ? "Relaunch DUO你电脑" : "Quit DUO你电脑") { permissions.relaunch() }
+                    LabeledContent("重新打开 DUO你电脑 后，屏幕录制权限才会生效。") {
+                        Button(permissions.canRelaunch ? "重新打开 DUO你电脑" : "退出 DUO你电脑") { permissions.relaunch() }
                     }
                 }
             }
             if Self.networkNeedsHelp(network) {
                 Section {
                     LabeledContent {
-                        Button("Open Local Network…") { permissions.openPrivacyPane("Privacy_LocalNetwork") }
+                        Button("打开本地网络设置…") { permissions.openPrivacyPane("Privacy_LocalNetwork") }
                     } label: {
-                        Text("Local Network")
-                        Text("If your iPhone or iPad can’t find this Mac, allow DUO你电脑 in Privacy & Security › Local Network.")
+                        Text("本地网络")
+                        Text("如果 iPhone 或 iPad 找不到此 Mac，请在“隐私与安全性 › 本地网络”中允许 DUO你电脑。")
                     }
                 }
             }
             if permissions.allGranted {
                 Section {
-                    Label("You’re all set. Open DUO你电脑 on your iPhone or iPad.", systemImage: "checkmark.seal.fill")
+                    Label("已准备就绪，请在 iPhone 或 iPad 上打开 DUO你电脑。", systemImage: "checkmark.seal.fill")
                 }
             }
         }
@@ -452,7 +454,7 @@ private struct PermissionRow: View {
                 Text(title)
                 Spacer()
                 if allowed {
-                    Label("Allowed", systemImage: "checkmark.circle.fill")
+                    Label("已允许", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 } else {
                     HStack(spacing: 6) {

@@ -33,7 +33,7 @@ class ExportRefresh(unittest.TestCase):
         binding = hashlib.sha256(json.dumps({k: self.config[k] for k in ("team_id", "device_id", "bundle_id")},
                                             sort_keys=True).encode()).hexdigest()
         self.state = {"status": "installed", "binding": binding, "checked_at": self.current.isoformat(),
-                      "expires_at": self.old_expiry.isoformat()}
+                      "expires_at": self.old_expiry.isoformat(), "source_id": "a" * 64}
         (self.local / "signing-status.json").write_text(json.dumps(self.state))
         self.calls = []
         self.export_expiry = self.new_expiry
@@ -71,6 +71,9 @@ class ExportRefresh(unittest.TestCase):
 
     def run_renewal(self):
         with patch.object(renew, "LOCAL", self.local), patch.object(renew, "now", return_value=self.current), \
+             patch.object(renew, "validate_snapshot", return_value=Path("/tmp/duodesk-approved-source")), \
+             patch.object(renew, "profile_cache_directories", return_value=[]), \
+             patch.object(renew, "build_dir_for_source", return_value=self.local / "SignedBuild"), \
              patch.object(renew, "read_profile", side_effect=self.profile), patch.object(renew.subprocess, "run", side_effect=self.command):
             return renew.run(self.config)
 
@@ -99,6 +102,7 @@ class ExportRefresh(unittest.TestCase):
             self.run_renewal()
         self.assertFalse(any(args[0] == "/usr/bin/xcrun" for args in self.calls))
         self.assertEqual(json.loads((self.local / "signing-status.json").read_text()), self.state)
+        self.assertFalse((self.local / "signing-pending.json").exists())
 
     def test_export_for_another_device_never_installs(self):
         self.export_wrong_device = True
@@ -119,6 +123,7 @@ class ExportRefresh(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_renewal()
         self.assertEqual(json.loads((self.local / "signing-status.json").read_text()), self.state)
+        self.assertEqual(json.loads((self.local / "signing-pending.json").read_text())["source_id"], self.state["source_id"])
         self.assertFalse(any(p.name.startswith("duodesk-renew-export-") for p in self.local.iterdir()))
 
 

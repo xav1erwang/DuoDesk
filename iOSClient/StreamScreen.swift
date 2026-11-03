@@ -1,6 +1,7 @@
 // Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import SwiftUI
 import Combine
+import AVFAudio
 import StreamProtocol
 
 // MARK: - Palette
@@ -110,6 +111,11 @@ struct StreamScreen: View {
     @State private var latched: KeyModifiers = []
     /// The bar's Keyboard button drives the overlay's first responder through this.
     @State private var overlay = InputOverlayProxy()
+    /// Session-local; entering and leaving keeps the established native desktop unchanged.
+    @State private var cleanImageMode = false
+    @State private var cleanImageChoices = false
+    @State private var extendedDisplayAlert = false
+    @State private var extendedDisplayMessage = ""
     /// The Aa control's text scale, device points per Mac point; nil means the Mac window has never
     /// been asked to fit (the control shows 1× for it). Up here, like `latched`, so it survives
     /// rotation and both layouts share it.
@@ -237,6 +243,9 @@ struct StreamScreen: View {
             let offersLarger = DuoLayout.phoneArrangement && posture.hinge == .unknown
                 && PhonePortraitLayout.offersLargerPicture(screen: geo.size)
             ZStack {
+                if cleanImageMode {
+                    CleanImageView(client: client, onPanelSize: { panelSize = $0 }, exit: endCleanImage)
+                } else {
                 Group {
                     switch duo {
                     case .innerLandscape:
@@ -297,6 +306,7 @@ struct StreamScreen: View {
                     PairingOverlay(client: client, scannerMode: scannerOverride ?? CodeScanner.currentMode,
                                    close: { withAnimation(.easeOut(duration: 0.2)) { pairingOverlay = false } })
                 }
+                }
             }
             .coordinateSpace(.named(TourSpace.name))
             .onPreferenceChange(TourTargetsKey.self) { tourTargets = $0 }
@@ -316,13 +326,26 @@ struct StreamScreen: View {
             .duoFold(posture, size: geo.size, screen: "stream screen")
             .onChange(of: client.nativeDisplayMetrics, initial: true) { _, _ in
                 client.updateDuoNativeResolution(innerDisplay: posture.onInnerDisplay,
-                                                frame: geo.frame(in: .global), fold: posture.fold)
+                                                frame: geo.frame(in: .global), fold: posture.fold,
+                                                fillDisplay: cleanImageMode)
             }
             .onChange(of: posture) { _, now in
                 client.updateDuoNativeResolution(innerDisplay: now.onInnerDisplay,
-                                                frame: geo.frame(in: .global), fold: now.fold)
+                                                frame: geo.frame(in: .global), fold: now.fold,
+                                                fillDisplay: cleanImageMode)
             }
-            .duoStatusBar(posture, size: geo.size)
+            .onChange(of: cleanImageMode) { _, fill in
+                client.updateDuoNativeResolution(innerDisplay: posture.onInnerDisplay,
+                                                frame: geo.frame(in: .global), fold: posture.fold,
+                                                fillDisplay: fill)
+            }
+            .onChange(of: geo.size) { _, _ in
+                client.updateDuoNativeResolution(innerDisplay: posture.onInnerDisplay,
+                                                frame: geo.frame(in: .global), fold: posture.fold,
+                                                fillDisplay: cleanImageMode)
+            }
+            .statusBarHidden(cleanImageMode || DuoPosture.hidesStatusBar(posture.pose(geo.size)))
+            .persistentSystemOverlays(cleanImageMode ? .hidden : .automatic)
             .environment(\.largerPictureOffered, offersLarger)
             #if DEBUG
             // The console's line for the gates: what Larger Picture's rule made of the switch and of
@@ -346,6 +369,26 @@ struct StreamScreen: View {
             // An outside link while streaming: the panel and the keyboard go first, as for Pair This iPad….
             if link != nil { openLinkOverlay() }
         }
+        .confirmationDialog("纯净图像", isPresented: $cleanImageChoices, titleVisibility: .visible) {
+            Button("扩展") { beginCleanImage(extended: true) }
+            Button("镜像") { beginCleanImage(extended: false) }
+        } message: {
+            Text("扩展会在 Mac 上新增显示器；镜像显示现有 Mac 桌面。")
+        }
+        .alert("扩展显示器不可用", isPresented: $extendedDisplayAlert) {
+            Button("好", role: .cancel) { client.clearExtendedDesktopError() }
+        } message: {
+            Text(extendedDisplayMessage)
+        }
+        .onChange(of: client.extendedDesktopError) { _, message in
+            guard let message else { return }
+            endCleanImage()
+            extendedDisplayMessage = message
+            extendedDisplayAlert = true
+        }
+        .onChange(of: client.nativeDesktopIssue) { _, issue in
+            if issue != nil, cleanImageMode, !client.extendedDesktopRequested { endCleanImage() }
+        }
         .onChange(of: scenePhase) { _, phase in
             // A gesture cut short by a scene change never ends: put the transient UI away.
             if phase != .active { scaleOpen = false; windowMenu = nil }
@@ -354,7 +397,7 @@ struct StreamScreen: View {
         // panel away. (Opening the panel closes them, the drawer and the keyboard.)
         .onChange(of: scaleOpen) { _, open in if open { setSettings(false) } }
         .onChange(of: windowMenu) { _, menu in if menu != nil { setSettings(false) } }
-        .ignoresSafeArea(edges: .bottom)
+        .ignoresSafeArea(edges: cleanImageMode ? .all : .bottom)
         .onAppear {
             // A fresh connection starts on the Desktop (the client asks for it as soon as the host
             // reports nothing streaming), so the drawer stays closed until the user opens it.
@@ -422,12 +465,47 @@ struct StreamScreen: View {
         }
     }
 
+    private func chooseCleanImage() {
+        guard !cleanImageMode else { return }
+        cleanImageChoices = true
+    }
+
+    private func beginCleanImage(extended: Bool) {
+        guard !cleanImageMode else { return }
+        if extended && !client.beginExtendedDesktop() {
+            extendedDisplayMessage = client.hostExtendedDesktop
+                ? "请展开 Duo 并等待连接和屏幕尺寸稳定后重试。"
+                : "当前 Mac 服务端不支持扩展显示器，镜像仍可使用。"
+            extendedDisplayAlert = true
+            return
+        }
+        if !extended {
+            let needsRetry = client.nativeDesktopIssue != nil
+            client.setMirrorFullscreen(true)
+            if needsRetry { client.retryNativeDesktop() }
+        }
+        setSettings(false, restoreKeyboard: false)
+        drawerOpen = false
+        windowMenu = nil
+        scaleOpen = false
+        latched = []
+        overlay.setKeyboard(shown: false)
+        cleanImageMode = true
+    }
+
+    private func endCleanImage() {
+        guard cleanImageMode else { return }
+        client.setMirrorFullscreen(false)
+        client.endExtendedDesktop()
+        cleanImageMode = false
+    }
+
     // MARK: The link's line
 
     /// What the Mac's report says for the line now: nil while the link keeps up.
     private var linkReportLine: String? {
         let host = client.settings.host
-        return AwayCopy.streamLine(link: host?.link, away: host?.away, mac: client.macName.isEmpty ? "the Mac" : client.macName)
+        return AwayCopy.streamLine(link: host?.link, away: host?.away, mac: client.macName.isEmpty ? "Mac" : client.macName)
     }
 
     /// Nothing open over the stream: the Settings panel (which has the callout), the drawer, the
@@ -462,7 +540,13 @@ struct StreamScreen: View {
     }
 
     /// The line as it shows over the stream now, or nil.
-    private var shownLinkLine: String? { linkLine.visible ? linkLine.text : nil }
+    private var shownLinkLine: String? {
+        if linkLine.visible { return linkLine.text }
+        if client.usingPhysicalDesktopFallback && !client.extendedDesktopRequested {
+            return "正在使用 Mac 原始屏幕比例，画面可能留边。"
+        }
+        return nil
+    }
 
     // MARK: Viewport
 
@@ -486,7 +570,9 @@ struct StreamScreen: View {
                                          height: Double(panelSize.height),
                                          scale: textScale,
                                          fps: fps,
-                                         desktopResolution: client.nativeDesktopResolution))
+                                         desktopResolution: client.nativeDesktopResolution,
+                                         extendedDesktop: client.extendedDesktopRequested ? true : nil,
+                                         extendedRequestID: client.extendedRequestID))
         }
     }
 
@@ -1049,8 +1135,9 @@ struct StreamScreen: View {
                    textScale: $textScale, scaleOpen: $scaleOpen, windowMenu: $windowMenu,
                    settingsOpen: settingsOpen,
                    // Apps, Menus, Aa, Keyboard, Desktop, Settings, and the strip.
-                   menusFit: MacMenuButton.fits(width: width - 2 * bar.padding, buttons: 6, buttonWidth: bar.buttonWidth,
+                   menusFit: MacMenuButton.fits(width: width - 2 * bar.padding, buttons: 7, buttonWidth: bar.buttonWidth,
                                                 gap: bar.gap, thumbWidth: bar.thumbWidth),
+                   showCleanImage: chooseCleanImage,
                    toggleKeyboard: { overlay.toggleKeyboard() },
                    setSettings: { setSettings($0, restoreKeyboard: $1) },
                    menusOpened: menusOpened, menusClosed: menusClosed)
@@ -1063,7 +1150,7 @@ struct StreamScreen: View {
         PortraitStreamScreen(client: client, metrics: metrics, drawerOpen: $drawerOpen,
                              keyboardShown: $keyboardShown,
                              textScale: $textScale, scaleOpen: $scaleOpen, windowMenu: $windowMenu,
-                             latched: $latched, overlay: overlay,
+                             latched: $latched, overlay: overlay, showCleanImage: chooseCleanImage,
                              settingsOpen: settingsOpen,
                              setSettings: { setSettings($0, restoreKeyboard: $1) },
                              menusOpened: menusOpened, menusClosed: menusClosed,
@@ -1083,6 +1170,7 @@ struct StreamScreen: View {
 
             ZStack {
                 StreamView(client: client)
+                    .opacity(client.shouldHidePendingNativeVideo ? 0 : 1)
                 // Same frame as the video, so a touch maps straight onto the streamed frame.
                 InputOverlay(videoSize: client.videoSize,
                              send: { client.sendInput($0) },
@@ -1093,6 +1181,14 @@ struct StreamScreen: View {
                              latchedModifiers: latched,
                              onModifiersConsumed: { latched = [] },
                              sendGesture: { client.sendGesture($0, fingers: $1) })
+                if let issue = client.nativeDesktopIssue {
+                    Text(verbatim: issue)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                        .allowsHitTesting(false)
+                }
             }
             .background(Palette.panel)
             .overlay(alignment: .top) { LinkLineView(text: shownLinkLine) }
@@ -1244,6 +1340,7 @@ private struct TopBar: View {
     let settingsOpen: Bool
     /// Whether the bar holds the Menus button and still a whole thumbnail (`MacMenuButton.fits`).
     let menusFit: Bool
+    let showCleanImage: () -> Void
     let toggleKeyboard: () -> Void
     /// Opens or closes the Settings panel; the second argument says whether closing puts the
     /// keyboard back (see `StreamScreen.setSettings`).
@@ -1254,8 +1351,8 @@ private struct TopBar: View {
 
     var body: some View {
         HStack(spacing: metrics.gap) {
-            button(open: drawerOpen, symbol: "magnifyingglass", label: "Apps",
-                   accessibilityLabel: drawerOpen ? "Close the app list" : "Open the app list",
+            button(open: drawerOpen, symbol: "magnifyingglass", label: "应用",
+                   accessibilityLabel: drawerOpen ? "关闭应用列表" : "打开应用列表",
                    action: {
                        setSettings(false, false)
                        withAnimation(.easeOut(duration: 0.18)) { drawerOpen.toggle() }
@@ -1290,22 +1387,27 @@ private struct TopBar: View {
                              pointsPerStep: metrics.buttonHeight >= 60 ? 44 : 40)
                 .tourTarget(.textSize)
 
-            button(open: keyboardShown, symbol: "keyboard", label: "Keyboard",
-                   accessibilityLabel: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
+            button(open: keyboardShown, symbol: "keyboard", label: "键盘",
+                   accessibilityLabel: keyboardShown ? "隐藏键盘" : "显示键盘",
                    action: { setSettings(false, false); toggleKeyboard() })
                 .opacity(scaleOpen ? 0 : 1)
                 .allowsHitTesting(!scaleOpen)
                 .tourTarget(.keyboard)
 
-            button(open: client.active == .desktop, symbol: "desktopcomputer", label: "Desktop",
-                   accessibilityLabel: "Show the full Mac desktop",
+            button(open: client.active == .desktop, symbol: "desktopcomputer", label: "桌面",
+                   accessibilityLabel: "显示完整的 Mac 桌面",
                    action: { client.select(.desktop) })
                 .opacity(scaleOpen ? 0 : 1)
                 .allowsHitTesting(!scaleOpen)
 
+            button(open: false, symbol: "arrow.up.left.and.arrow.down.right", label: "纯净",
+                   accessibilityLabel: "进入纯净图像模式", action: showCleanImage)
+                .opacity(scaleOpen ? 0 : 1)
+                .allowsHitTesting(!scaleOpen)
+
             // Leave's old slot: Disconnect is the Settings panel's pinned last row now.
-            button(open: settingsOpen, symbol: "gearshape", label: "Settings",
-                   accessibilityLabel: settingsOpen ? "Close settings" : "Settings for \(client.macName.isEmpty ? "the Mac" : client.macName)",
+            button(open: settingsOpen, symbol: "gearshape", label: "设置",
+                   accessibilityLabel: settingsOpen ? "关闭设置" : "\(client.macName.isEmpty ? "Mac" : client.macName) 的设置",
                    action: { setSettings(!settingsOpen, true) })
                 .opacity(scaleOpen ? 0 : 1)
                 .allowsHitTesting(!scaleOpen)
@@ -1331,6 +1433,211 @@ private struct TopBar: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(open ? Palette.accent : Palette.barLabel)
             }
+        }
+    }
+}
+
+/// Displays only the video layer until the system output volume changes.
+private struct CleanImageView: View {
+    @ObservedObject var client: StreamClient
+    let onPanelSize: (CGSize) -> Void
+    let exit: () -> Void
+    @State private var showEntryNotice = true
+    @State private var showExit = false
+    @State private var volumeUnavailable = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black
+            GeometryReader { geometry in
+                #if DEBUG && targetEnvironment(simulator)
+                let preview = UserDefaults.standard.bool(forKey: "DuoPreviewCleanGeometry")
+                #else
+                let preview = false
+                #endif
+                let rotate = DuoCleanImageLayout.shouldRotate(panel: geometry.size, video: client.videoSize,
+                                                              nativeDesktop: client.nativeDesktopResolution != nil || preview)
+                Group {
+                    #if DEBUG && targetEnvironment(simulator)
+                    if preview {
+                        CleanImageGeometryPreview(videoSize: client.videoSize)
+                    } else {
+                        liveVideo
+                    }
+                    #else
+                    liveVideo
+                    #endif
+                }
+                .frame(width: rotate ? geometry.size.height : geometry.size.width,
+                       height: rotate ? geometry.size.width : geometry.size.height)
+                .rotationEffect(.degrees(rotate ? -90 : 0))
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+            }
+            .allowsHitTesting(false)
+
+            if showEntryNotice {
+                Text("已进入纯净图像\n调整音量后点按退出")
+                    .font(.system(size: 14, weight: .medium))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.top, 24)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("duo.clean.notice")
+            }
+
+            if showExit {
+                VStack(alignment: .trailing, spacing: 6) {
+                    Button(action: exit) {
+                        Label("退出纯净图像", systemImage: "arrow.down.right.and.arrow.up.left")
+                            .font(.system(size: 14, weight: .semibold))
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 44)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("duo.clean.exit")
+                    if volumeUnavailable {
+                        Text("音量监听不可用")
+                            .font(.caption)
+                            .padding(8)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                }
+                .padding(.top, 24)
+                .padding(.trailing, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(VolumeChangeObserver(changed: { showExit = true }, unavailable: {
+            volumeUnavailable = true
+            showExit = true
+        }).allowsHitTesting(false))
+        .onGeometryChange(for: CGSize.self, of: { $0.size }, action: onPanelSize)
+        .task {
+            do { try await Task.sleep(for: .seconds(2.5)) } catch { return }
+            showEntryNotice = false
+        }
+    }
+
+    private var liveVideo: some View {
+        StreamView(client: client, videoOnly: true, cursorInVideoOnly: client.extendedDesktopRequested)
+            .opacity(!client.shouldHidePendingNativeVideo && (client.nativeDesktopResolution == nil || client.hasNativeDesktopVideo) ? 1 : 0)
+    }
+}
+
+#if DEBUG && targetEnvironment(simulator)
+/// Explicit simulator-only placeholder; it never represents a captured or decoded Mac desktop.
+private struct CleanImageGeometryPreview: View {
+    let videoSize: CGSize
+
+    var body: some View {
+        ZStack {
+            Color.black
+            ZStack {
+                Color(white: 0.22)
+                Text("纯净模式布局测试图\n非真实桌面")
+                    .font(.system(size: 24, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+            }
+            .aspectRatio(videoSize.width > 0 && videoSize.height > 0 ? videoSize : CGSize(width: 4, height: 3), contentMode: .fit)
+        }
+    }
+}
+#endif
+
+/// Observes the documented system output-volume value. It does not set volume or intercept keys.
+private struct VolumeChangeObserver: UIViewRepresentable {
+    let changed: () -> Void
+    let unavailable: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(changed: changed, unavailable: unavailable) }
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        context.coordinator.start()
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.changed = changed
+        context.coordinator.unavailable = unavailable
+    }
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) { coordinator.stop() }
+
+    final class Coordinator {
+        var changed: () -> Void
+        var unavailable: () -> Void
+        private var observation: NSKeyValueObservation?
+        private var active = false
+        private var previousCategory: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
+        private var activatedSession = false
+        init(changed: @escaping () -> Void, unavailable: @escaping () -> Void) {
+            self.changed = changed
+            self.unavailable = unavailable
+        }
+
+        func start() {
+            guard !active else { return }
+            active = true
+            let session = AVAudioSession.sharedInstance()
+            previousCategory = (session.category, session.mode, session.categoryOptions)
+            do {
+                // Ambient mixes with other apps; this session plays and records no audio.
+                try session.setCategory(.ambient, mode: .default)
+                try session.setActive(true)
+                activatedSession = true
+            } catch {
+                if let previousCategory {
+                    try? session.setCategory(previousCategory.0, mode: previousCategory.1, options: previousCategory.2)
+                }
+                previousCategory = nil
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.active else { return }
+                    self.unavailable()
+                }
+                return
+            }
+            #if DEBUG
+            print("clean image: observing system output volume")
+            #endif
+            observation = session.observe(\.outputVolume, options: [.old, .new]) { [weak self] _, change in
+                guard let before = change.oldValue, let after = change.newValue, before != after else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.active else { return }
+                    #if DEBUG
+                    print("clean image: system volume changed")
+                    #endif
+                    self.changed()
+                }
+            }
+            #if DEBUG && targetEnvironment(simulator)
+            // The simulator cannot exercise system output-volume observation. This opt-in
+            // preview checks only the UI after a volume change; it does not test a device button.
+            if UserDefaults.standard.bool(forKey: "DuoPreviewCleanVolumeChange") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+                    guard let self, self.active else { return }
+                    self.changed()
+                }
+            }
+            #endif
+        }
+
+        func stop() {
+            active = false
+            observation?.invalidate()
+            observation = nil
+            if activatedSession {
+                let session = AVAudioSession.sharedInstance()
+                try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                if let previousCategory {
+                    try? session.setCategory(previousCategory.0, mode: previousCategory.1, options: previousCategory.2)
+                }
+            }
+            previousCategory = nil
+            activatedSession = false
         }
     }
 }
@@ -1473,7 +1780,7 @@ struct TextScaleControl: View {
         )
         .onDisappear { open = false }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Text size")
+        .accessibilityLabel("文字大小")
         .accessibilityValue("\(Self.label(scale ?? 1.0)) times")
         .accessibilityAdjustableAction { direction in
             let i = Self.steps.firstIndex(of: scale ?? 1.0) ?? 2
@@ -1981,14 +2288,14 @@ struct AppDrawer: View {
                 .font(.system(size: 18))
                 .foregroundStyle(Palette.muted)
             TextField("", text: $search,
-                      prompt: Text("Search apps on \(client.macName)").foregroundColor(Palette.muted))
+                      prompt: Text("搜索 \(client.macName) 上的应用").foregroundColor(Palette.muted))
                 .font(.system(size: 15))
                 .foregroundStyle(Palette.text)
                 .textFieldStyle(.plain)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .submitLabel(.search)
-                .accessibilityLabel("Search apps on this Mac")
+                .accessibilityLabel("搜索这台 Mac 上的应用")
                 .focused($searchFocused)
         }
         .frame(height: 48)

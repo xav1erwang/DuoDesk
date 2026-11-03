@@ -236,9 +236,9 @@ final class StreamClient: ObservableObject {
 
     /// The connect screen's idle status lines: only these follow the nearby search and Local Network
     /// access (updateDiscovery); any other status (a disconnect, a failure) stays as it was set.
-    static let lookingOnNetwork = "Looking for Macs on this network"
-    static let lookingNearby = "Looking for Macs on this network and nearby"
-    static let allowLocalNetwork = "To find your Mac, allow Local Network for Sill in Settings."
+    static let lookingOnNetwork = "正在查找本地网络中的 Mac"
+    static let lookingNearby = "正在查找本地网络和附近的 Mac"
+    static let allowLocalNetwork = "请在系统设置中允许 DUO你电脑 访问本地网络，以便查找 Mac。"
 
     // Switcher catalog, as the host sends it. Published on main.
     @Published var macName = ""
@@ -260,6 +260,7 @@ final class StreamClient: ObservableObject {
     /// waits out a closed window stands down if this moved meanwhile: the user chose something,
     /// and the host cannot tell that request from a Desktop tap, so it could replace the choice.
     private var choicesSent = 0
+    private var lastRequestedSource: StreamSource?
     @Published var active: StreamSource = .none {
         didSet {
             // The pointer sprite shows nothing while nothing streams.
@@ -334,39 +335,430 @@ final class StreamClient: ObservableObject {
     /// Pixel size of the frames the host is sending, from the HEVC parameter sets. Input positions
     /// are fractions of this, so the overlay needs it to letterbox touches the way the layer does.
     @Published var videoSize: CGSize = .zero
+    @Published private(set) var remoteDisplays: [RemoteDisplayInfo] = []
+    @Published private(set) var displayThumbnails: [UInt32: UIImage] = [:]
+    @Published private(set) var selectedDisplayID: UInt32?
+    @Published private(set) var awaitingDisplaySelection = false
+    @Published var displayPickerPresented = false {
+        didSet {
+            if connected { send(.displayPreviewRequest, payload: Wire.encode(displayPickerPresented)) }
+        }
+    }
+    private var displayCatalogReceived = false
+    private var pendingDisplaySelection: UInt32?
+    private var hostExistingDisplayCapture = false
+
+    /// Multi-display streams retain the chosen Mac panel's native pixels and aspect. Folding
+    /// changes the phone's presentation, never the Mac's primary display or arrangement.
+    private var expectedDesktopVideoResolution: DuoDesktopResolution? {
+        if hostExistingDisplayCapture, !extendedDesktopRequested,
+           let display = remoteDisplays.first(where: { $0.id == selectedDisplayID }) {
+            return DuoDesktopResolution(width: display.pixelWidth, height: display.pixelHeight)
+        }
+        return nativeDesktopResolution
+    }
+
+    func showDisplayPicker() {
+        guard !remoteDisplays.isEmpty else { return }
+        displayPickerPresented = true
+    }
+
+    func chooseDisplay(_ id: UInt32) {
+        guard remoteDisplays.contains(where: { $0.id == id }) else { return }
+        let changed = selectedDisplayID != id || awaitingDisplaySelection || extendedDesktopRequested || usingPhysicalDesktopFallback
+        selectedDisplayID = id
+        awaitingDisplaySelection = false
+        displayPickerPresented = false
+        guard changed else { return }
+        pendingDisplaySelection = id
+        endExtendedDesktop(resumePaths: false)
+        physicalDesktopFallback = nil
+        usingPhysicalDesktopFallback = false
+        nativeDesktopIssue = nil
+        recomputeNativeDesktopResolution()
+        displayView.requireNativeResolution(expectedDesktopVideoResolution)
+        // Invalidate the old picture's input before requesting a different desktop.
+        displayView.clear()
+        resetPointer()
+        nativeViewportSent = false
+        pendingNativeActions.removeAll { $0.automatic }
+        if let viewport = lastViewport { sendViewport(viewport) }
+        request(.desktop)
+    }
+
+    private func receiveDisplays(_ list: WindowList) {
+        guard let displays = list.displays else { return }
+        let valid = Array(displays.filter(\.isValid).prefix(32))
+        guard Set(valid.map(\.id)).count == valid.count else { return }
+        let first = !displayCatalogReceived
+        displayCatalogReceived = true
+        hostExistingDisplayCapture = list.existingDisplayCapture == true
+        remoteDisplays = valid
+        displayThumbnails = displayThumbnails.filter { key, _ in valid.contains(where: { $0.id == key }) }
+        if first || (selectedDisplayID != nil && !valid.contains(where: { $0.id == selectedDisplayID })) {
+            pendingDisplaySelection = nil
+            if valid.count > 1 {
+                selectedDisplayID = nil
+                awaitingDisplaySelection = true
+                displayPickerPresented = true
+            } else {
+                selectedDisplayID = valid.first?.id
+                awaitingDisplaySelection = false
+            }
+        } else if !awaitingDisplaySelection, let id = list.selectedDisplayID, valid.contains(where: { $0.id == id }) {
+            if pendingDisplaySelection == nil || (pendingDisplaySelection == id && list.active == .desktop) {
+                selectedDisplayID = id
+                pendingDisplaySelection = nil
+            }
+        }
+        displayView.requireNativeResolution(expectedDesktopVideoResolution)
+    }
     @Published var nativeDisplayMetrics: DuoNativeDisplayMetrics? = nil
+    #if DEBUG
+    /// Isolated simulator state regression; never connects or posts Mac input.
+    func runDisplaySelectionChecks() {
+        let main = RemoteDisplayInfo(id: 5, name: "Main", isMain: true, x: 0, y: 0,
+                                     width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160)
+        let side = RemoteDisplayInfo(id: 3, name: "Side", isMain: false, x: -1920, y: 0,
+                                     width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160)
+        func list(_ source: StreamSource, _ id: UInt32, displays: [RemoteDisplayInfo]? = nil) -> WindowList {
+            WindowList(macName: "Display state fixture", windows: [], active: source,
+                       displays: displays ?? [side, main], selectedDisplayID: id, existingDisplayCapture: true)
+        }
+        receiveDisplays(list(.none, 5))
+        precondition(awaitingDisplaySelection && displayPickerPresented && !hasNativeDesktopVideo)
+        chooseDisplay(5)
+        precondition(!awaitingDisplaySelection && pendingDisplaySelection == 5 && !hasNativeDesktopVideo)
+        receiveDisplays(list(.none, 5))
+        precondition(pendingDisplaySelection == 5, "an idle catalog must not enable input")
+        receiveDisplays(list(.desktop, 3))
+        precondition(selectedDisplayID == 5 && pendingDisplaySelection == 5, "stale acknowledgement replaced a choice")
+        receiveDisplays(list(.desktop, 5))
+        precondition(pendingDisplaySelection == nil)
+        chooseDisplay(5)
+        precondition(pendingDisplaySelection == nil, "unchanged selection must not wait for a restart")
+        extendedDesktopRequested = true
+        extendedRequestID = UUID()
+        chooseDisplay(5)
+        precondition(!extendedDesktopRequested && extendedRequestID == nil && pendingDisplaySelection == 5)
+        receiveDisplays(list(.desktop, 5))
+        chooseDisplay(3)
+        receiveDisplays(list(.desktop, 5))
+        precondition(selectedDisplayID == 3 && pendingDisplaySelection == 3 && !hasNativeDesktopVideo)
+        receiveDisplays(list(.desktop, 3))
+        precondition(pendingDisplaySelection == nil && selectedDisplayID == 3)
+        precondition(expectedDesktopVideoResolution == .init(width: 3840, height: 2160))
+        setNativeDesktopResolution(.init(width: 2007, height: 1427))
+        precondition(expectedDesktopVideoResolution == .init(width: 3840, height: 2160), "folding must retain the captured display's native canvas")
+        setNativeDesktopResolution(.init(width: 2853, height: 2007))
+        precondition(expectedDesktopVideoResolution == .init(width: 3840, height: 2160), "unfolding must not request a different physical display mode")
+        chooseDisplay(5)
+        receiveDisplays(list(.none, 3, displays: [side]))
+        precondition(!awaitingDisplaySelection && selectedDisplayID == 3 && pendingDisplaySelection == nil)
+        tearDown(status: "state checks complete", restartSearch: false)
+        precondition(remoteDisplays.isEmpty && selectedDisplayID == nil && pendingDisplaySelection == nil && !displayPickerPresented)
+        receiveDisplays(list(.none, 5, displays: [main]))
+        precondition(!awaitingDisplaySelection && !displayPickerPresented && selectedDisplayID == 5)
+        print("PASS: 15 production client display-selection states; stale acknowledgements, extension exit, unchanged choice, fold canvas, disconnect and input gating")
+        exit(0)
+    }
+    #endif
     @Published private(set) var nativeDesktopResolution: DuoDesktopResolution? = {
-        guard let data = UserDefaults.standard.data(forKey: "duodesk.nativeUpperDisplay"),
-              let value = try? JSONDecoder().decode(DuoDesktopResolution.self, from: data), value.isValid else { return nil }
-        return value
+        DuoStreamPolicy.cachedUpperDisplay(in: .standard, rendered: false)
     }()
+    /// Unknown until this connection's first catalog. Older hosts omit the new capability.
+    @Published private(set) var hostRenderedNativeDesktop: Bool? = nil
+    @Published private(set) var hostResizableMirror = false
+    @Published private(set) var nativeInnerDisplay: Bool? = nil
+    private struct NativeSizingContext {
+        var innerDisplay: Bool
+        var frame: CGRect
+        var fold: CGRect?
+        var fillDisplay: Bool
+    }
+    private var nativeSizingContext: NativeSizingContext?
+    private var nativeViewportSent = false
+    private enum PendingNativeAction {
+        case source(StreamSource)
+        case launch(String)
+    }
+    private var pendingNativeActions: [(action: PendingNativeAction, automatic: Bool)] = []
+    /// An extension is requested only after this connection's host explicitly advertises it.
+    @Published private(set) var hostExtendedDesktop = false
+    @Published private(set) var extendedDesktopRequested = false
+    @Published private(set) var extendedDesktopError: String?
+    @Published private(set) var nativeDesktopIssue: String?
+    @Published private(set) var usingPhysicalDesktopFallback = false
+    private var physicalDesktopFallback: (upper: DuoDesktopResolution, physical: DuoDesktopResolution)?
+    private(set) var extendedRequestID: UUID?
+    private var upperDesktopBeforeExtension: DuoDesktopResolution?
+
+    func beginExtendedDesktop() -> Bool {
+        guard nativeViewportIsReady, let upper = nativeDesktopResolution,
+              let full = DuoExtendedDesktopPolicy.request(hostAdvertised: hostExtendedDesktop, connected: connected,
+                                                           alreadyExtended: extendedDesktopRequested,
+                                                           pathMoving: moving != nil, connectionDead: sessionDead, upper: upper,
+                                                           metrics: nativeDisplayMetrics) else { return false }
+        upperDesktopBeforeExtension = upper
+        extendedDesktopError = nil
+        nativeDesktopIssue = nil
+        extendedRequestID = UUID()
+        extendedDesktopRequested = true
+        resetPointer()
+        // A mode change matters even if the dimensions happen to be identical. Do not rely on
+        // SwiftUI's next geometry/change callback to tell the host about the new request.
+        nativeViewportSent = false
+        setNativeDesktopResolution(full)
+        if let viewport = lastViewport { sendViewport(viewport) }
+        return true
+    }
+
+    func endExtendedDesktop(resumePaths: Bool = true) {
+        guard extendedDesktopRequested else { return }
+        extendedDesktopRequested = false
+        extendedRequestID = nil
+        resetPointer()
+        let upper = upperDesktopBeforeExtension
+        upperDesktopBeforeExtension = nil
+        nativeViewportSent = false
+        setNativeDesktopResolution(upper)
+        // A path move can resend this cached viewport before SwiftUI measures the normal layout.
+        // Never let it carry an old extension request onto a new connection after exit.
+        lastViewport = DuoExtendedDesktopPolicy.mirrorViewport(lastViewport, upper: upper)
+        recomputeNativeDesktopResolution()
+        if resumePaths {
+            // Restore the host's mirror request now; the view may not have remeasured yet.
+            if let viewport = lastViewport { sendViewport(viewport) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.extendedDesktopRequested else { return }
+                self.moveToNetworkIfListed()
+                self.followBestPath()
+                self.moveHomeIfListed()
+            }
+        }
+    }
+
+    func clearExtendedDesktopError() { extendedDesktopError = nil }
+
+    /// An explicit mirror retry after a nonterminal mode refusal. The host sends a new issue if
+    /// the physical display still cannot safely match; it never falls back to a smaller image.
+    func retryNativeDesktop() {
+        guard connected else { return }
+        nativeDesktopIssue = nil
+        select(.desktop)
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// A simulator-only UI fixture. It does not advertise or create a real host display.
+    func debugPreviewExtendedDesktop() {
+        hostExtendedDesktop = true
+        hostRenderedNativeDesktop = false
+        nativeDisplayMetrics = DuoNativeDisplayMetrics(pixels: CGSize(width: 1878, height: 2670),
+                                                       windowSize: CGSize(width: 669, height: 951),
+                                                       renderPixels: CGSize(width: 2007, height: 2853))
+        nativeDesktopResolution = DuoDesktopResolution(width: 1878, height: 1335)
+    }
+    /// Layout-only fixture: the failure is simulated and no Mac or display is contacted.
+    func debugPreviewRecoverableMirrorFailure() {
+        debugPreviewExtendedDesktop()
+        active = .none
+        status = "模拟预览，未连接 Mac"
+        nativeDesktopIssue = "模拟预览，未连接 Mac。Mac 暂时无法在保持屏幕刷新率的情况下镜像。点按工具栏的对角箭头，选择“扩展”。"
+    }
+    #endif
+
+    private func extendedDesktopFailed(_ message: String?) {
+        guard extendedDesktopRequested else { return }
+        let safe = SafeText.label(message ?? "", limit: 200)
+        endExtendedDesktop()
+        extendedDesktopError = safe.isEmpty ? "Mac 无法建立扩展显示器，请重试。" : safe
+    }
     /// Legacy devices can send gestures without a native Duo picture. Once this device reports
     /// the Duo inner display, queued legacy gestures must not outlive that observation. Admission
     /// is serialized with revocation because the network queue may be busy when the hinge changes.
     private let legacyGesturePermit = VideoOutputPermit()
 
     var hasNativeDesktopVideo: Bool {
+        guard !awaitingDisplaySelection, pendingDisplaySelection == nil else { return false }
+        if hostRenderedNativeDesktop == true, !nativeViewportIsReady { return false }
         guard active == .desktop,
-              nativeDesktopResolution?.acceptsPaddedEncoded(width: Int(videoSize.width), height: Int(videoSize.height)) == true else { return false }
+              expectedDesktopVideoResolution?.acceptsPaddedEncoded(width: Int(videoSize.width), height: Int(videoSize.height)) == true else { return false }
         // A remembered size alone cannot authorize input while a new format/connection is
         // awaiting its first native image. The decoder generation fences the old picture out.
         return displayView.hasCurrentImage
     }
 
-    func updateDuoNativeResolution(innerDisplay: Bool, frame: CGRect, fold: CGRect?) {
-        if innerDisplay { legacyGesturePermit.invalidate() }
-        guard innerDisplay, let metrics = nativeDisplayMetrics,
-              DuoStreamPolicy.coherentInnerMetrics(metrics, frame: frame, fold: fold),
-              let resolution = DuoStreamPolicy.nativeUpperDisplay(width: metrics.pixels.width, height: metrics.pixels.height),
-              resolution != nativeDesktopResolution else { return }
-        displayView.requireNativeResolution(resolution)
-        nativeDesktopResolution = resolution
-        if let data = try? JSONEncoder().encode(resolution) {
-            UserDefaults.standard.set(data, forKey: "duodesk.nativeUpperDisplay")
+    /// A new host waits for the coherent Duo render canvas; a legacy host keeps the old request.
+    /// The cached physical-only value must never be mistaken for a measured render canvas.
+    private var nativeViewportIsReady: Bool {
+        guard let rendered = hostRenderedNativeDesktop else { return false }
+        if extendedDesktopRequested { return true }
+        guard let context = nativeSizingContext else { return false }
+        if rendered, hostResizableMirror, context.fillDisplay {
+            guard let full = fullMirrorResolution(context) else { return false }
+            return nativeDesktopResolution == full
         }
-        #if DEBUG
-        print("duo native: inner \(Int(metrics.pixels.width))×\(Int(metrics.pixels.height)) px; upper \(resolution.width)×\(resolution.height); encode \(resolution.encodedWidth)×\(resolution.encodedHeight)")
-        #endif
+        let measuredUpper = physicalDesktopFallback?.upper ?? nativeDesktopResolution
+        // Legacy hosts also need the physical Duo size before choosing their desktop. Without
+        // a scene or a remembered/measured inner size, an early pick starts an unsized capture.
+        if !rendered {
+            guard context.innerDisplay else { return true }
+            guard let resolution = measuredUpper else { return false }
+            if DuoStreamPolicy.cachedUpperDisplay(in: .standard, rendered: false) == resolution { return true }
+            guard let metrics = nativeDisplayMetrics,
+                  DuoStreamPolicy.coherentInnerMetrics(metrics, frame: context.frame, fold: context.fold) else { return false }
+            return DuoStreamPolicy.upperDisplay(metrics: metrics, renderedRequired: false) == resolution
+        }
+        if !context.innerDisplay {
+            guard let resolution = measuredUpper else { return true }
+            return DuoStreamPolicy.cachedUpperDisplay(in: .standard, rendered: true) == resolution
+        }
+        guard let metrics = nativeDisplayMetrics,
+              DuoStreamPolicy.coherentInnerMetrics(metrics, frame: context.frame, fold: context.fold),
+              let expected = DuoStreamPolicy.upperDisplay(metrics: metrics, renderedRequired: true) else { return false }
+        return measuredUpper == expected
+    }
+
+    /// The normal landscape stream also needs to hide an old frame while a strict size is pending.
+    var shouldHidePendingNativeVideo: Bool {
+        hostRenderedNativeDesktop == true && (nativeInnerDisplay == true || nativeDesktopResolution != nil)
+            && !hasNativeDesktopVideo
+    }
+
+    private func setNativeDesktopResolution(_ resolution: DuoDesktopResolution?) {
+        guard nativeDesktopResolution != resolution else { return }
+        nativeViewportSent = false
+        nativeDesktopResolution = resolution
+        displayView.requireNativeResolution(expectedDesktopVideoResolution)
+    }
+
+    private func recomputeNativeDesktopResolution() {
+        guard !extendedDesktopRequested, let context = nativeSizingContext else { return }
+        if hostRenderedNativeDesktop == true, hostResizableMirror, context.fillDisplay {
+            guard let full = fullMirrorResolution(context) else { return }
+            physicalDesktopFallback = nil
+            usingPhysicalDesktopFallback = false
+            setNativeDesktopResolution(full)
+            return
+        }
+        guard context.innerDisplay else {
+            if hostRenderedNativeDesktop == true, nativeDesktopResolution != nil,
+               let cached = DuoStreamPolicy.cachedUpperDisplay(in: .standard, rendered: true) {
+                if let fallback = physicalDesktopFallback, fallback.upper == cached { return }
+                physicalDesktopFallback = nil
+                usingPhysicalDesktopFallback = false
+                setNativeDesktopResolution(cached)
+            }
+            return
+        }
+        guard let metrics = nativeDisplayMetrics,
+              DuoStreamPolicy.coherentInnerMetrics(metrics, frame: context.frame, fold: context.fold),
+              let legacy = DuoStreamPolicy.upperDisplay(metrics: metrics, renderedRequired: false) else { return }
+        let rendered = DuoStreamPolicy.upperDisplay(metrics: metrics, renderedRequired: true)
+        if !context.fillDisplay {
+            if let data = try? JSONEncoder().encode(legacy),
+               UserDefaults.standard.data(forKey: DuoStreamPolicy.legacyUpperDisplayKey) != data {
+                UserDefaults.standard.set(data, forKey: DuoStreamPolicy.legacyUpperDisplayKey)
+            }
+            if let rendered, let data = try? JSONEncoder().encode(rendered),
+               UserDefaults.standard.data(forKey: DuoStreamPolicy.renderedUpperDisplayKey) != data {
+                UserDefaults.standard.set(data, forKey: DuoStreamPolicy.renderedUpperDisplayKey)
+            }
+        }
+        guard let selected = hostRenderedNativeDesktop == true ? rendered : legacy else { return }
+        if let fallback = physicalDesktopFallback, fallback.upper == selected { return }
+        physicalDesktopFallback = nil
+        usingPhysicalDesktopFallback = false
+        setNativeDesktopResolution(selected)
+    }
+
+    private func fullMirrorResolution(_ context: NativeSizingContext) -> DuoDesktopResolution? {
+        guard let metrics = nativeDisplayMetrics else { return nil }
+        if context.innerDisplay,
+           !DuoStreamPolicy.coherentInnerMetrics(metrics, frame: context.frame, fold: context.fold) { return nil }
+        return DuoStreamPolicy.extendedDisplay(metrics: metrics)
+    }
+
+    /// Send the mode change before SwiftUI remeasures. In particular, exit must clear full-screen
+    /// mirror intent before retiring an extension, so no intermediate full mirror is requested.
+    func setMirrorFullscreen(_ enabled: Bool) {
+        guard var context = nativeSizingContext else { return }
+        guard context.fillDisplay != enabled else { return }
+        context.fillDisplay = enabled
+        nativeSizingContext = context
+        nativeDesktopIssue = nil
+        reconcileNativeSizing()
+    }
+
+    func updateDuoNativeResolution(innerDisplay: Bool, frame: CGRect, fold: CGRect?, fillDisplay: Bool = false) {
+        if innerDisplay { legacyGesturePermit.invalidate() }
+        if nativeInnerDisplay != innerDisplay { nativeInnerDisplay = innerDisplay }
+        nativeSizingContext = NativeSizingContext(innerDisplay: innerDisplay, frame: frame, fold: fold, fillDisplay: fillDisplay)
+        reconcileNativeSizing()
+    }
+
+    private func reconcileNativeSizing() {
+        recomputeNativeDesktopResolution()
+        if !nativeViewportIsReady { nativeViewportSent = false }
+        if !nativeViewportSent, let viewport = lastViewport { sendViewport(viewport) }
+    }
+
+    /// Called by the viewport sender before the wire handoff. An unknown host or an unmeasured
+    /// strict Duo scene holds the message; the latest viewport is flushed once it is ready.
+    func nativeSizedViewport(_ viewport: Viewport) -> Viewport? {
+        guard connected, connection != nil, nativeViewportIsReady, !awaitingDisplaySelection else { return nil }
+        var result = viewport
+        result.displayID = selectedDisplayID
+        result.desktopResolution = nativeDesktopResolution
+        if hostRenderedNativeDesktop == true {
+            result.extendedDesktop = extendedDesktopRequested ? true : nil
+            result.extendedRequestID = extendedDesktopRequested ? extendedRequestID : nil
+            result.preservePhysicalMode = physicalDesktopFallback != nil && !extendedDesktopRequested ? true : nil
+        }
+        return result
+    }
+
+    func nativeViewportWasSent() {
+        nativeViewportSent = true
+        flushPendingNativeActions()
+    }
+
+    private var nativeActionMustWait: Bool {
+        connection != nil && (awaitingDisplaySelection || hostRenderedNativeDesktop == nil || !nativeViewportSent || !nativeViewportIsReady)
+    }
+
+    private func flushPendingNativeActions() {
+        guard !awaitingDisplaySelection, hostRenderedNativeDesktop != nil, nativeViewportSent, nativeViewportIsReady else { return }
+        let actions = pendingNativeActions
+        pendingNativeActions.removeAll()
+        for pending in actions {
+            switch pending.action {
+            case .source(let source): sendRequestedSource(source)
+            case .launch(let bundleID): sendLaunchRequest(bundleID: bundleID)
+            }
+        }
+    }
+
+    private func resetNativeSizingNegotiation() {
+        if extendedDesktopRequested { endExtendedDesktop(resumePaths: false) }
+        physicalDesktopFallback = nil
+        usingPhysicalDesktopFallback = false
+        lastRequestedSource = nil
+        // When the same stream view remains mounted, its scene geometry is still useful but its
+        // pixels must be measured again; UIKit may not deliver another layout after reconnecting.
+        let attached = nativeSizingContext != nil && displayView.window != nil
+        hostRenderedNativeDesktop = nil
+        hostResizableMirror = false
+        if !attached {
+            nativeInnerDisplay = nil
+            nativeSizingContext = nil
+        }
+        nativeDisplayMetrics = nil
+        nativeViewportSent = false
+        pendingNativeActions.removeAll()
+        forgetViewport()
+        setNativeDesktopResolution(DuoStreamPolicy.cachedUpperDisplay(in: .standard, rendered: false))
+        if attached { displayView.refreshNativeDisplaySize() }
     }
     // The pointer sprite (docs/pointer-visibility-plan.md §7.3; the rules are PointerPresence.swift's).
     // One sprite in the display view shows the Mac's pointer while the Mac, or another device, moved it
@@ -494,7 +886,7 @@ final class StreamClient: ObservableObject {
     /// view that would sit black until the next keyframe, up to 4 s later. Main thread.
     private(set) lazy var displayView: HEVCDisplayView = {
         let view = HEVCDisplayView(frame: .zero)
-        view.requireNativeResolution(nativeDesktopResolution)
+        view.requireNativeResolution(expectedDesktopVideoResolution)
         view.onVideoSize = { [weak self] size in self?.videoSize = size }
         view.onDecoderFailure = { [weak self] message in
             self?.disconnect()
@@ -502,8 +894,9 @@ final class StreamClient: ObservableObject {
         }
         view.onNativeDisplaySize = { [weak self] metrics in
             DispatchQueue.main.async {
-                guard let self, self.nativeDisplayMetrics != metrics else { return }
-                self.nativeDisplayMetrics = metrics
+                guard let self else { return }
+                if self.nativeDisplayMetrics != metrics { self.nativeDisplayMetrics = metrics }
+                self.reconcileNativeSizing()
             }
         }
         onVideoReset = { view.clear() }
@@ -1474,9 +1867,9 @@ final class StreamClient: ObservableObject {
         #if DEBUG
         if mockDiscovery {
             switch mac.route {
-            case .direct: status = "Connecting to \(mac.name) directly…"
-            case .remote: status = "Connecting to \(mac.name) remotely…"
-            case .network: status = "Connecting to \(mac.name)…"
+            case .direct: status = "正在直连 \(mac.name)…"
+            case .remote: status = "正在远程连接 \(mac.name)…"
+            case .network: status = "正在连接 \(mac.name)…"
             }
             return
         }
@@ -1622,6 +2015,7 @@ final class StreamClient: ObservableObject {
             connection = nil
             old.cancel()      // its .cancelled callback is ignored: connectionLost checks identity
         }
+        resetNativeSizingNegotiation()
         cancelRemoteDial()
         abandonMove()         // a new session: an old one's move to the network is moot
         resetPath()           // …and so is what the old one knew of its path
@@ -1636,7 +2030,7 @@ final class StreamClient: ObservableObject {
         session = Session(route: peerToPeer ? .direct : .network, macID: macID, bonjourName: bonjourName, home: trust, row: row,
                           endpoint: endpoint)
         goodbye = nil
-        status = peerToPeer ? "Connecting to \(name) directly…" : "Connecting to \(name)…"
+        status = peerToPeer ? "正在直连 \(name)…" : "正在连接 \(name)…"
         #if DEBUG
         if trust.tls { print("home: dialing \(name) over TLS, \(DiscoveryPolicy.pin(trust) == .anyKey ? "any key" : "pinned")") }
         #endif
@@ -1726,7 +2120,7 @@ final class StreamClient: ObservableObject {
                 // A tap's dial says so; the automatic reconnect's keeps its own line (DiscoveryPolicy.
                 // reconnectLine), which would otherwise flip with every dial.
                 DispatchQueue.main.async {
-                    if self.connection === c, self.reconnect == nil { self.status = "Waiting for \(name)…" }
+                    if self.connection === c, self.reconnect == nil { self.status = "正在等待 \(name)…" }
                 }
                 // A connection that never gets past waiting would block every reconnect path
                 // (they all require `connection == nil`): give it five seconds, then let it go. Its
@@ -1833,7 +2227,7 @@ final class StreamClient: ObservableObject {
         askedNearby = false
         connectedAt = Date()
         pinRefusedRows = []
-        status = "Connected to \(name)"
+        status = "已连接 \(name)"
         updateDiscovery()   // stops the nearby browser; the network one keeps running
         #if DEBUG
         if let endpoint, let test = UserDefaults.standard.string(forKey: "SillMoveTest") {
@@ -1929,7 +2323,7 @@ final class StreamClient: ObservableObject {
     private func moveToNetworkIfListed() {
         moveCheck?.cancel()
         moveCheck = nil
-        guard connected, connectedDirectly, sessionListed, moving == nil, connection != nil,
+        guard !extendedDesktopRequested, connected, connectedDirectly, sessionListed, moving == nil, connection != nil,
               let mac = macs.first(where: { $0.name == hostName && $0.route == .network }) else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let decision = DiscoveryPolicy.moveToNetwork(listedSince: sightings.since[mac.name], lastAttempt: lastMoveAttempt,
@@ -1961,7 +2355,7 @@ final class StreamClient: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         lastMoveAttempt = now
         lastMoveUp = now
-        status = "Switching to Wi\u{2011}Fi…"
+        status = "正在切换到 Wi-Fi…"
         if let wired = wiredDial(for: mac) {
             #if DEBUG
             print("discovery: moving the session to the network on \(wired.via)")
@@ -1999,7 +2393,7 @@ final class StreamClient: ObservableObject {
         homeMoveCheck = nil
         // A row no longer listed is forgotten, its refusal and its tries: listed again, it is tried afresh.
         homeMoveRows = homeMoveRows.keeping(listed: Set(macs.filter { $0.route == .network }.map(\.id)))
-        guard connected, let s = session, s.route.isRemote, s.why != .connectRemotely, sessionListed, moving == nil, !sessionDead,
+        guard !extendedDesktopRequested, connected, let s = session, s.route.isRemote, s.why != .connectRemotely, sessionListed, moving == nil, !sessionDead,
               connection != nil, homeInfo.latest != nil, let id = s.macID, let saved = savedMac(id) else { return }
         // Every network row whose tag names the session's saved Mac, by row: one not refused, at a door
         // that speaks TLS, dialed pinned to the saved Mac's key, never plain, never an ask (a plain door
@@ -2165,9 +2559,14 @@ final class StreamClient: ObservableObject {
         // Mac keeps a rate per connection). It is the new connection's first viewport, which the Mac
         // waits for to take the home quality and this device's full rate in one restart. Built here,
         // on the main thread (UIScreen, `lastViewport`).
-        let homeViewport: Data? = kind == .fromRemote
-            ? homeMoveViewport.map { StreamMessage(kind: .viewport, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
-                                                   payload: Wire.encode($0)).serialized() }
+        // A strict-size request waits for the new connection's launch identity. A host restart
+        // could otherwise receive the previous launch's render-size request before the probe
+        // discovers that it is a different (possibly older) service.
+        let homeViewport: Data? = kind == .fromRemote && hostRenderedNativeDesktop != true
+            ? homeMoveViewport.flatMap { nativeSizedViewport($0) }.map {
+                StreamMessage(kind: .viewport, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
+                              payload: Wire.encode($0)).serialized()
+            }
             : nil
         var wasReady = false   // the handler runs on `queue`, one state at a time
         // One handler for both lives of `c`: until it takes over, `moveEnded` acts (it checks
@@ -2492,7 +2891,7 @@ final class StreamClient: ObservableObject {
         pathSignals = PathSignals()
         lastPongAt = ProcessInfo.processInfo.systemUptime
         setRoute(from: c.currentPath, fresh: true)   // the new connection's, which carries the session now
-        status = "Connected to \(hostName)"
+        status = "已连接 \(hostName)"
         settings.reset()
         settingsProblem = nil
         settingsExpiry?.cancel()
@@ -2511,15 +2910,15 @@ final class StreamClient: ObservableObject {
         #endif
         queue.async {
             self.startMeasuring(c, remote: false)
-            for m in kept { self.handle(m.header, m.payload) }
+            for m in kept { self.handle(m.header, m.payload, from: c) }
             self.startReading(c)
         }
         // The Mac keeps a frame rate per connection: this one's viewport is the first thing the new
         // connection carries once the fence is down, and the old one closes half a second after
         // that (`fenceEnded`), so the stream's rate never falls back to the default. After the move
-        // home, the home viewport it already sent at `.ready` (the away one's 60 fps would take the
-        // new connection's rate down, and StreamScreen's re-send on `remoteRoute` up again: two more
-        // restarts); through `sendViewport` it becomes `lastViewport`, and the Mac finds it unchanged.
+        // home, the home viewport it sent at `.ready` for a legacy host; a strict-size host sends
+        // it here only after the launch identity is verified. Through `sendViewport` it becomes
+        // `lastViewport`, preserving the full-rate request.
         if let v = kind == .fromRemote ? (homeMoveViewport ?? lastViewport) : lastViewport { sendViewport(v) }
         if kind == .fromRemote { homeMoveViewport = nil }
         // The Mac sends its menus only to a connection that asked, and answers a request on the
@@ -2577,7 +2976,7 @@ final class StreamClient: ObservableObject {
             endSession()
             return
         }
-        if connected { status = "Connected to \(hostName)" }
+        if connected { status = "已连接 \(hostName)" }
         switch move.kind {
         case .fromRemote:
             // Still remote. A move that did not complete: the next try waits DiscoveryPolicy.upWait,
@@ -2644,7 +3043,7 @@ final class StreamClient: ObservableObject {
     private func followBestPath() {
         pathCheck?.cancel()
         pathCheck = nil
-        guard connected, connection != nil, sessionListed else { return }
+        guard !extendedDesktopRequested, connected, connection != nil, sessionListed else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let input = pathInput(now: now)
         if let move = moving {
@@ -2771,7 +3170,7 @@ final class StreamClient: ObservableObject {
     /// goodbye on (kind 22: it closed it on purpose, "quit" at home, and the session ends with the
     /// words that goodbye deserves rather than after a dial to a Mac that is going). Main thread.
     private func rescue(from c: NWConnection) -> Bool {
-        guard connected, sessionListed, goodbye == nil else { return false }
+        guard !extendedDesktopRequested, connected, sessionListed, goodbye == nil else { return false }
         // The remote connection went while the move home is under way (the hotspot dropped as the
         // home Wi-Fi joined): the move carries the session, without a fence (nothing sent on a dead
         // connection comes back). What the device sends waits from this moment: unlike a move to
@@ -3149,6 +3548,7 @@ final class StreamClient: ObservableObject {
             connection = nil
             old.cancel()
         }
+        resetNativeSizingNegotiation()
         abandonMove()
         resetPath()      // a new session: what an old one knew of its path is moot
         sessionListed = false
@@ -3257,7 +3657,20 @@ final class StreamClient: ObservableObject {
     /// never delivered its window list: the connect screen never left, and its Remote rows must not
     /// vanish for another 3 s. Main thread.
     func tearDown(status: String, restartSearch: Bool = true) {
+        displayPickerPresented = false
+        displayCatalogReceived = false
+        hostExistingDisplayCapture = false
+        pendingDisplaySelection = nil
+        awaitingDisplaySelection = false
+        selectedDisplayID = nil
+        remoteDisplays = []
+        displayThumbnails = [:]
         MainActor.assumeIsolated { touchBarController?.setConnection(nil) }
+        endExtendedDesktop(resumePaths: false)
+        resetNativeSizingNegotiation()
+        hostExtendedDesktop = false
+        extendedDesktopError = nil
+        nativeDesktopIssue = nil
         abandonMove()
         resetPath()
         lastMoveAttempt = nil
@@ -3337,8 +3750,34 @@ final class StreamClient: ObservableObject {
     /// Asks the host to stream this source: the person's pick (`select`), or this device's own
     /// request (the Desktop on a connection's first list, a pick made again after a move), which
     /// is not the person's doing.
-    private func request(_ source: StreamSource) {
+    private func request(_ source: StreamSource, automatic: Bool = false) {
+        // Until the first catalog, an old physical-only size must not reach a new host. Once a
+        // strict host is known, send its matching viewport before asking it to start a source.
+        if nativeActionMustWait {
+            if automatic {
+                let hasUserSource = pendingNativeActions.contains { item in
+                    guard !item.automatic, case .source = item.action else { return false }
+                    return true
+                }
+                guard !hasUserSource else { return }
+                pendingNativeActions.removeAll { $0.automatic }
+                pendingNativeActions.insert((.source(source), true), at: 0)
+            } else {
+                pendingNativeActions.removeAll { $0.automatic }
+                if let last = pendingNativeActions.last, case .source = last.action {
+                    pendingNativeActions.removeLast()
+                }
+                pendingNativeActions.append((.source(source), false))
+            }
+            choicesSent += 1
+            return
+        }
         choicesSent += 1
+        sendRequestedSource(source)
+    }
+
+    private func sendRequestedSource(_ source: StreamSource) {
+        lastRequestedSource = source
         send(.selectSource, Wire.encode(source))
         #if DEBUG
         // Layout harness (mock, no connection): show the pick locally so taps can be checked.
@@ -3392,7 +3831,18 @@ final class StreamClient: ObservableObject {
     /// Ask the host to launch an installed app; the host selects its first window itself.
     func launch(bundleID: String) {
         noteAction()
+        lastRequestedSource = nil
         choicesSent += 1   // the host picks the launched app's window: a choice, like a pick
+        if nativeActionMustWait {
+            // Launching is a user-visible side effect. Keep each launch and its order, while an
+            // automatic Desktop request already waiting can still start the native desktop.
+            pendingNativeActions.append((.launch(bundleID), false))
+            return
+        }
+        sendLaunchRequest(bundleID: bundleID)
+    }
+
+    private func sendLaunchRequest(bundleID: String) {
         send(.launchApp, Wire.encode(LaunchApp(bundleID: bundleID)))
     }
 
@@ -3789,7 +4239,7 @@ final class StreamClient: ObservableObject {
             switch header.kind {
             case .touchBarStatus: touchBarInbox.receiveStatus(data, from: c)
             case .touchBarFrame: touchBarInbox.receiveFrame(data, keyframe: header.isKeyframe, from: c)
-            default: handle(header, data)
+            default: handle(header, data, from: c)
             }
         } else if header.kind == .pong, let released = link.fenceReturned(data, on: c) {
             fenceEnded(c, released, why: "the Mac has read all the direct connection carried")
@@ -3797,8 +4247,35 @@ final class StreamClient: ObservableObject {
     }
 
     /// On the network queue.
-    private func handle(_ header: StreamHeader, _ data: Data) {
+    #if DUO_NATIVE_SIZING_TESTING
+    /// The isolated simulator probe injects only a catalog into the ordinary receive handler.
+    func handleNativeSizingTestCatalog(_ header: StreamHeader, _ data: Data, from source: NWConnection) {
+        guard header.kind == .windowList else { return }
+        handle(header, data, from: source)
+    }
+
+    /// The local goodbye probe uses the production reader and handler on an owned TCP connection.
+    func startTerminalGoodbyeTestReader(_ source: NWConnection) {
+        queue.async { self.startReading(source) }
+    }
+
+    /// Queue a decoded goodbye while the probe holds the main thread to test connection replacement.
+    func handleTerminalGoodbyeTest(_ header: StreamHeader, _ data: Data, from source: NWConnection) {
+        guard header.kind == .goodbye else { return }
+        handle(header, data, from: source)
+    }
+    #endif
+
+    private func handle(_ header: StreamHeader, _ data: Data, from source: NWConnection) {
+        guard connection === source else { return }
         switch header.kind {
+        case .extendedDesktopStatus:
+            guard let reply = Wire.decode(DuoExtendedDesktopStatus.self, from: data) else { return }
+            DispatchQueue.main.async {
+                guard self.connection === source,
+                      DuoExtendedDesktopPolicy.applies(reply, currentRequest: self.extendedRequestID) else { return }
+                if reply.state == .failed { self.extendedDesktopFailed(reply.message) }
+            }
         case .streamReset:
             guard videoEpoch.acceptReset(data) else { return }
             lastParameterSets = nil
@@ -3823,15 +4300,20 @@ final class StreamClient: ObservableObject {
             onFrame?(data, header.isKeyframe)
         case .windowList:
             guard let list = Wire.decode(WindowList.self, from: data) else { return }
-            let from = connection
             DispatchQueue.main.async {
                 // Only from the current connection: a list queued by a replaced one must not
                 // describe the next session.
-                guard self.connection === from else { return }
+                guard self.connection === source else { return }
+                let hadPendingSource = self.pendingNativeActions.contains { item in
+                    if case .source = item.action { return true }
+                    return false
+                }
+                let firstList = !self.sessionListed
                 // A remote session, and one at home over TLS, is connected at its first window list,
                 // not at `.ready`: the Mac has admitted this device's key.
                 self.remoteSessionReady()
                 self.homeSessionReady()
+                self.receiveDisplays(list)
                 self.syncTouchBarConnection()
                 // The host this session runs on, which a move to the network must reach again
                 // (`moveProbed`); its first list is what lets a move start.
@@ -3839,6 +4321,44 @@ final class StreamClient: ObservableObject {
                 if self.hostVersion != list.hostVersion { self.hostVersion = list.hostVersion }
                 if self.hostProtocol != list.protocol { self.hostProtocol = list.protocol }
                 if self.hostGestures != list.gestures { self.hostGestures = list.gestures }
+                let renderedSizing = list.renderedNativeDesktop == true
+                let resizableMirror = renderedSizing && list.resizableMirror == true
+                let sizingChanged = self.hostRenderedNativeDesktop != renderedSizing
+                    || self.hostResizableMirror != resizableMirror
+                if sizingChanged {
+                    self.hostRenderedNativeDesktop = renderedSizing
+                    self.hostResizableMirror = resizableMirror
+                    self.nativeViewportSent = false
+                    if !renderedSizing, !self.extendedDesktopRequested,
+                       self.nativeSizingContext?.innerDisplay != true {
+                        self.setNativeDesktopResolution(DuoStreamPolicy.cachedUpperDisplay(in: .standard, rendered: false))
+                    }
+                    self.recomputeNativeDesktopResolution()
+                }
+                let canExtend = list.extendedDesktop == true
+                if self.hostExtendedDesktop != canExtend { self.hostExtendedDesktop = canExtend }
+                if !canExtend && self.extendedDesktopRequested {
+                    self.extendedDesktopFailed("Mac 当前无法继续提供扩展显示器。")
+                }
+                let fallback = canExtend && self.hostRenderedNativeDesktop == true && !self.hostResizableMirror && !hadPendingSource
+                    && self.lastRequestedSource == .desktop && self.physicalDesktopFallback == nil
+                    ? DuoExtendedDesktopPolicy.physicalFallback(list.desktopIssue, expected: self.nativeDesktopResolution,
+                                                                extending: self.extendedDesktopRequested, active: list.active)
+                    : nil
+                if let fallback, let upper = self.nativeDesktopResolution, let viewport = self.lastViewport,
+                   self.nativeViewportIsReady {
+                    self.physicalDesktopFallback = (upper, fallback)
+                    self.usingPhysicalDesktopFallback = true
+                    self.nativeDesktopIssue = nil
+                    self.setNativeDesktopResolution(fallback)
+                    self.sendViewport(viewport)
+                    self.request(.desktop, automatic: true)
+                }
+                let issue = canExtend
+                    ? DuoExtendedDesktopPolicy.mirrorIssue(list.desktopIssue, expected: self.nativeDesktopResolution,
+                                                           extending: self.extendedDesktopRequested, active: list.active)
+                    : nil
+                if self.nativeDesktopIssue != issue { self.nativeDesktopIssue = issue }
                 // The clipboard: subscribe (or stop) as the Mac's word and this device's switch say.
                 self.hostClipboardChanged(list.clipboard)
                 if !self.sessionListed {
@@ -3862,6 +4382,10 @@ final class StreamClient: ObservableObject {
                     if let test = UserDefaults.standard.string(forKey: "SillMoveHomeTest") { self.beginMoveHomeTest(test) }
                     #endif
                 }
+                if firstList || sizingChanged {
+                    if let viewport = self.lastViewport { self.sendViewport(viewport) }
+                    self.flushPendingNativeActions()
+                }
                 if self.macName != list.macName { self.macName = list.macName; self.loadWindowOrder() }
                 let previous = self.active
                 self.windows = list.windows
@@ -3873,13 +4397,13 @@ final class StreamClient: ObservableObject {
                 // what this device was watching is picked again (`resumeSource`).
                 if let resume = self.resumeSource {
                     self.resumeSource = nil
-                    if list.active == .none {
+                    if list.active == .none, self.nativeDesktopIssue == nil, !hadPendingSource {
                         var pick = resume
                         if case .window(let id) = resume, !list.windows.contains(where: { $0.id == id }) { pick = .desktop }
                         #if DEBUG
                         print("path: nothing streams on the new connection: picking \(pick) again")
                         #endif
-                        self.request(pick)
+                        self.request(pick, automatic: true)
                         return
                     }
                 }
@@ -3888,7 +4412,7 @@ final class StreamClient: ObservableObject {
                 // (its capture stopped: issue #69), and when the window being watched has closed. Not
                 // when a pick failed (the host still lists the window): that is the user's to retry. At
                 // most once every 10 s, so a host that cannot start the Desktop does not loop.
-                if list.active == .none, !Self.noAutoDesktop {
+                if list.active == .none, !self.awaitingDisplaySelection, self.nativeDesktopIssue == nil, !Self.noAutoDesktop, !hadPendingSource {
                     let watched: DiscoveryPolicy.Watched
                     switch previous {
                     case .none: watched = .nothing
@@ -3901,7 +4425,7 @@ final class StreamClient: ObservableObject {
                         if watched == .desktop { print("session: the Mac stopped the Desktop; asking for it again") }
                         #endif
                         self.lastAutoDesktop = Date()
-                        self.request(.desktop)
+                        self.request(.desktop, automatic: true)
                     case .askAfterWait:
                         guard case .window(let id) = previous else { break }
                         // A window can drop off the list for a second or two (a Space change,
@@ -3913,15 +4437,22 @@ final class StreamClient: ObservableObject {
                         let choices = self.choicesSent
                         let wait = 2 + Double(self.lastRttMaxMs ?? 0) / 1000
                         DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-                            guard let self, self.connected, self.active == .none, self.choicesSent == choices,
+                            guard let self, self.connected, self.active == .none, self.nativeDesktopIssue == nil,
+                                  self.choicesSent == choices,
                                   !self.windows.contains(where: { $0.id == id }) else { return }
                             self.lastAutoDesktop = Date()
-                            self.request(.desktop)
+                            self.request(.desktop, automatic: true)
                         }
                     case .leave:
                         break
                     }
                 }
+            }
+        case .displayThumbnail:
+            guard let (displayID, jpeg) = ImageBlob.decodeThumbnail(data), let image = UIImage(data: jpeg) else { return }
+            DispatchQueue.main.async {
+                guard self.connection === source, self.remoteDisplays.contains(where: { $0.id == displayID }) else { return }
+                self.displayThumbnails[displayID] = image
             }
         case .thumbnail:
             guard let (windowID, jpeg) = ImageBlob.decodeThumbnail(data),
@@ -3975,13 +4506,14 @@ final class StreamClient: ObservableObject {
             }
         case .goodbye:
             // Why the Mac is about to close this connection: the words, and whether to reconnect
-            // (GoodbyePolicy, when the connection ends). One that does not decode is a reason this
-            // build does not know: its own words, and no reconnect.
+            // (GoodbyePolicy, when the connection ends). Older hosts sometimes send a fatal desktop
+            // error without closing their socket, so close those sessions here. One that does not
+            // decode is a reason this build does not know: its own words, and no reconnect.
             let goodbye = Wire.decode(Goodbye.self, from: data) ?? Goodbye(reason: "")
-            let from = connection
             DispatchQueue.main.async {
-                guard self.connection === from else { return }
+                guard self.connection === source else { return }
                 self.goodbye = goodbye
+                if GoodbyePolicy.closesStalledDesktopSession(goodbye) { self.endSession() }
             }
         case .clipboard:
             // Text copied on the Mac (StreamClient+Clipboard): written to this device's clipboard while

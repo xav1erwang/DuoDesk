@@ -84,6 +84,9 @@ public enum StreamMessageKind: UInt8 {
     case touchBarFrame = 37        // host → client: TouchBarKeyframe.encoded
     case touchBarTouch = 38        // client → host: JSON TouchBarTouch
     case touchBarRefresh = 39      // client → host: 16-byte source UUID for a fresh keyframe
+    case extendedDesktopStatus = 40 // host → client: JSON DuoExtendedDesktopStatus
+    case displayThumbnail = 41     // host → client: displayID(4, BE) + JPEG
+    case displayPreviewRequest = 42 // client → host: JSON Bool; capture previews only while choosing
     case unknown = 255       // never sent: what parseHeader yields for a kind this build does not know
 }
 

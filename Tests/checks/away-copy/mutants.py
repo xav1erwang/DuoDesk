@@ -9,7 +9,7 @@ SRC = os.path.join(ROOT, "iOSClient/AwayCopy.swift")
 orig = open(SRC).read()
 MUTANTS = {
     "AC1 the header line at home too": [("guard let a = away, a.thisConnectionAway else { return nil }\n        if a.awayRunning {", "guard let a = away else { return nil }\n        if a.awayRunning {")],
-    "AC2 running and not swapped": [("        if a.awayRunning {\n            return (\"Away: ", "        if !a.awayRunning {\n            return (\"Away: ")],
+    "AC2 running and not swapped": [("        if a.awayRunning {\n            return (\"远程画质：", "        if !a.awayRunning {\n            return (\"远程画质：")],
     "AC3 the at-home footnote whatever Remote Access says": [("        guard remoteAccessOn else { return nil }\n", "")],
     "AC4 the suggestion before the home quality's callout": [("        if let a = away, a.thisConnectionAway, !a.awayRunning {\n            return Callout(", "        if let a = away, a.thisConnectionAway, !a.awayRunning, link.suggestedBitrate == nil {\n            return Callout(")],
     "AC5 stalled shown": [("        guard let link, link.isBehind else { return nil }", "        guard let link else { return nil }")],
@@ -20,7 +20,7 @@ MUTANTS = {
     "AC10 announced on every update": [("guard visible, !announced, let t = text else { return nil }", "guard visible, let t = text else { return nil }")],
     "AC11 a flip back does not restart the linger": [("            text = report\n            clearedAt = nil\n", "            text = report\n")],
     "AC12 shown and announced while something is open": [("visible = text != nil && allowed", "visible = text != nil")],
-    "AC13 the reason left out of the spoken home line": [(", because a device at home is connected\")", "\")")],
+    "AC13 the reason left out of the spoken home line": [("，因为有本地设备连接\")", "\")")],
     "AC14 the running footnote names the away quality as home": [("let home = whole(title(a.homeBitrate, a.homeCaptureScale))", "let home = whole(title(a.awayBitrate, a.awayCaptureScale))")],
     "AC16 the footnote's qualities that may wrap": [("let home = whole(title(a.homeBitrate, a.homeCaptureScale))", "let home = title(a.homeBitrate, a.homeCaptureScale)")],
     "AC15 titles that may wrap": [('text.replacingOccurrences(of: " ", with: "\\u{00A0}")', "text")],
@@ -38,7 +38,7 @@ for name, edits in MUTANTS.items():
     if src is None: continue
     path = os.path.join(OUT, "AwayCopy.swift")
     open(path, "w").write(src)
-    b = subprocess.run(["swiftc", "-O", path, os.path.join(ROOT, "Sources/StreamProtocol/HostSettings.swift"), os.path.join(SP, "main.swift"),
+    b = subprocess.run(["swiftc", "-O", path, os.path.join(ROOT, "Sources/StreamProtocol/HostSettings.swift"), os.path.join(ROOT, "Sources/StreamProtocol/DuoQualityLabels.swift"), os.path.join(SP, "main.swift"),
                         "-o", os.path.join(OUT, "mutant")], capture_output=True, text=True)
     if b.returncode != 0:
         print(f"{name}: DOES NOT COMPILE\n{b.stderr[:600]}"); continue

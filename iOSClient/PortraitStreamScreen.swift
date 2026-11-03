@@ -147,6 +147,7 @@ struct PortraitStreamScreen: View {
     @Binding var windowMenu: UInt32?
     @Binding var latched: KeyModifiers
     let overlay: InputOverlayProxy
+    let showCleanImage: () -> Void
     /// The Settings panel, owned by `StreamScreen` (see its `setSettings`).
     let settingsOpen: Bool
     let setSettings: (_ open: Bool, _ restoreKeyboard: Bool) -> Void
@@ -228,7 +229,7 @@ struct PortraitStreamScreen: View {
                                showSystemKeyboard: {
                                    setSettings(false, false)
                                    overlay.toggleKeyboard()
-                               })
+                               }, showCleanImage: showCleanImage)
                     .frame(height: max(0, size.height - split.controlsTop))
             }
 
@@ -435,8 +436,8 @@ struct PortraitStreamScreen: View {
                              iconBox: PortraitMetrics.phoneIconBox, iconSpacing: metrics.buttonSpacing)
                 .tourTarget(.textSize)
 
-            barButton(open: keyboardShown, symbol: "keyboard", label: "Keyboard", width: width,
-                      accessibilityLabel: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
+            barButton(open: keyboardShown, symbol: "keyboard", label: "键盘", width: width,
+                      accessibilityLabel: keyboardShown ? "隐藏键盘" : "显示键盘",
                       action: {
                           setSettings(false, false)
                           overlay.toggleKeyboard()
@@ -501,9 +502,13 @@ struct PortraitStreamScreen: View {
                          sendGesture: { client.sendGesture($0, fingers: $1) })
                 .allowsHitTesting(client.hasNativeDesktopVideo)
             if !client.hasNativeDesktopVideo {
-                Text(waitingForDesktop)
+                Group {
+                    if let issue = client.nativeDesktopIssue { Text(verbatim: issue) }
+                    else { Text(waitingForDesktop) }
+                }
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                     .padding()
                     .allowsHitTesting(false)
             }
@@ -569,8 +574,8 @@ struct PortraitStreamScreen: View {
     }
 
     private func appsButton(width: CGFloat? = nil) -> some View {
-        barButton(open: drawerOpen, symbol: "magnifyingglass", label: "Apps", width: width,
-                  accessibilityLabel: drawerOpen ? "Close the app list" : "Open the app list",
+        barButton(open: drawerOpen, symbol: "magnifyingglass", label: "应用", width: width,
+                  accessibilityLabel: drawerOpen ? "关闭应用列表" : "打开应用列表",
                   action: {
                       setSettings(false, false)
                       withAnimation(.easeOut(duration: 0.18)) { drawerOpen.toggle() }
@@ -578,15 +583,15 @@ struct PortraitStreamScreen: View {
     }
 
     private func desktopButton(width: CGFloat? = nil) -> some View {
-        barButton(open: client.active == .desktop, symbol: "desktopcomputer", label: "Desktop", width: width,
-                  accessibilityLabel: "Show the full Mac desktop",
+        barButton(open: client.active == .desktop, symbol: "desktopcomputer", label: "桌面", width: width,
+                  accessibilityLabel: "显示完整的 Mac 桌面",
                   action: { client.select(.desktop) })
     }
 
     /// Leave's old slot: Disconnect is the Settings panel's pinned last row now.
     private func settingsButton(width: CGFloat? = nil) -> some View {
-        barButton(open: settingsOpen, symbol: "gearshape", label: "Settings", width: width,
-                  accessibilityLabel: settingsOpen ? "Close settings" : "Settings for \(client.macName.isEmpty ? "the Mac" : client.macName)",
+        barButton(open: settingsOpen, symbol: "gearshape", label: "设置", width: width,
+                  accessibilityLabel: settingsOpen ? "关闭设置" : "\(client.macName.isEmpty ? "Mac" : client.macName) 的设置",
                   action: { setSettings(!settingsOpen, true) })
             .tourTarget(.settings)
     }
@@ -852,7 +857,7 @@ private struct KeyRow: View {
                     .foregroundStyle(keyboardShown ? Palette.accent : Palette.text)
             }
         case .spotlight:
-            cap(open: false, label: "Open Spotlight on the Mac", action: { tap(key) }) {
+            cap(open: false, label: "在 Mac 上打开聚焦搜索", action: { tap(key) }) {
                 Image(systemName: Spotlight.symbol)
                     .font(.system(size: 19))
                     .foregroundStyle(Palette.text)

@@ -43,43 +43,49 @@ enum GoodbyePolicy {
         !knownReasons.contains(goodbye.reason)
     }
 
+    /// These desktop failures end the session; older hosts can leave its socket open. The usual
+    /// notice and reconnect policy still handles the message after the client closes it.
+    static func closesStalledDesktopSession(_ goodbye: Goodbye) -> Bool {
+        ["duoResolution", "duoStream", "duoPrivacy"].contains(goodbye.reason)
+    }
+
     /// The session ended with `goodbye` (nil: no goodbye came). `mac` is what the status line calls
     /// the Mac (its saved name, else its Bonjour name or the address dialled), `device` "iPad" or
     /// "iPhone", `saved` whether the Mac is a saved one (its remote door may be dialled).
     static func outcome(_ goodbye: Goodbye?, mac: String, device: String, saved: Bool) -> Outcome {
         guard let goodbye else {
-            return Outcome(text: saved ? "\(mac) disconnected. Sill will reconnect when it can reach it."
-                                       : "\(mac) disconnected. It will reconnect when the Mac is back.",
+            return Outcome(text: saved ? "\(mac) 已断开，能够访问时将自动重新连接。"
+                                       : "\(mac) 已断开，Mac 恢复后将自动重新连接。",
                            reconnect: true, remoteAllowed: saved, isNotice: false)
         }
         switch goodbye.reason {
         case Goodbye.quit:
-            return Outcome(text: "\(mac) quit Sill. This \(device) reconnects when it’s back.",
+            return Outcome(text: "\(mac) 已退出 DUO你电脑，恢复后这台 \(device) 将自动重新连接。",
                            reconnect: true, remoteAllowed: saved, isNotice: false)
         case Goodbye.removed:
-            return Outcome(text: "\(mac) removed this \(device). To use it again, pair it again.",
+            return Outcome(text: "\(mac) 已移除这台 \(device)，请重新配对后使用。",
                            reconnect: false, remoteAllowed: false, isNotice: false)
         case Goodbye.remoteOff:
-            return Outcome(text: "\(mac) turned off Remote Access.", reconnect: true, remoteAllowed: false, isNotice: false)
+            return Outcome(text: "\(mac) 已关闭远程访问。", reconnect: true, remoteAllowed: false, isNotice: false)
         case Goodbye.internetOff:
-            return Outcome(text: "\(mac) stopped accepting connections from the internet. Connect through your VPN.",
+            return Outcome(text: "\(mac) 已停止接受公网连接，请通过 VPN 连接。",
                            reconnect: true, remoteAllowed: false, isNotice: false)
         case Goodbye.busy:
-            return Outcome(text: "\(mac) is already serving 8 devices.", reconnect: true, remoteAllowed: saved, isNotice: false)
+            return Outcome(text: "\(mac) 已连接 8 台设备。", reconnect: true, remoteAllowed: saved, isNotice: false)
         case Goodbye.pairingRequired:
             // Only at a home door over TLS, to an unpaired device: a tap on its row asks to pair.
-            return Outcome(text: "\(mac) now asks devices to pair. Tap it to pair this \(device).",
+            return Outcome(text: "\(mac) 现在要求设备配对。点按该 Mac 可配对这台 \(device)。",
                            reconnect: false, remoteAllowed: false, isNotice: false)
         case Goodbye.update:
             // The host always sends its message; these words are for one that does not.
-            var own = "Update Sill on this \(device) to keep using \(mac)."
-            if let floor = goodbye.minimumVersion.flatMap({ SillVersion($0) }) { own += " It needs version \(floor) or later." }
+            var own = "请更新这台 \(device) 上的 DUO你电脑，以继续使用 \(mac)。"
+            if let floor = goodbye.minimumVersion.flatMap({ SillVersion($0) }) { own += "需要 \(floor) 或更高版本。" }
             return Outcome(text: message(goodbye) ?? own, reconnect: goodbye.reconnect == true, remoteAllowed: saved,
                            storeLink: true, isNotice: true)
         default:
             let reconnect = goodbye.reconnect == true
-            let own = reconnect ? "\(mac) closed the connection. Sill will reconnect when it can."
-                                : "\(mac) closed the connection. Tap it to try again."
+            let own = reconnect ? "\(mac) 已关闭连接，能够访问时将自动重新连接。"
+                                : "\(mac) 已关闭连接，点按该 Mac 可重试。"
             return Outcome(text: message(goodbye) ?? own, reconnect: reconnect, remoteAllowed: saved, isNotice: true)
         }
     }

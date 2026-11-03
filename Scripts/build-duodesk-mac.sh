@@ -24,7 +24,7 @@ if [ -f iOSClient/Assets.xcassets/AppIcon.appiconset/AppIcon.png ]; then
     done
     iconutil -c icns "$iconset" -o "$stage/Contents/Resources/AppIcon.icns"
 fi
-identity="${DUODESK_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development: / {print $2; exit}' || true)}"
+identity="${DUODESK_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development: / && !/CSSMERR|revoked/ {print $2; exit}' || true)}"
 if [ -z "$identity" ]; then
     identity="-"
     echo "No development identity available; this local build uses an ad-hoc signature."

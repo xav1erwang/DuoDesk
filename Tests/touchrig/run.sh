@@ -18,6 +18,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
+simctl="${SILL_SIMCTL_BIN:-$(xcrun --find simctl)}"
 rev="" switch=on name=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -40,11 +41,12 @@ fetch() {
         git -C "$root" show "$rev:$1" > "$work/src/$(basename "$1")" 2>/dev/null || rm -f "$work/src/$(basename "$1")"
     fi
 }
-for f in iOSClient/TrackpadView.swift iOSClient/InputOverlay.swift iOSClient/PointerPresence.swift \
+for f in iOSClient/TrackpadView.swift iOSClient/InputOverlay.swift iOSClient/StreamTextInputView.swift iOSClient/PointerPresence.swift \
          iOSClient/TrackpadGestures.swift iOSClient/KeyChords.swift iOSClient/PortraitStreamScreen.swift \
          iOSClient/HardwareKeyboardPolicy.swift Sources/StreamProtocol/Input.swift; do
     fetch "$f"
 done
+if [[ -n "${SILL_TOUCHRIG_TRACKPAD_SOURCE:-}" ]]; then cp "$SILL_TOUCHRIG_TRACKPAD_SOURCE" "$work/src/TrackpadView.swift"; fi
 cd "$work/src"
 # One module: StreamProtocol's Input.swift is compiled in, so its import goes.
 sed -i '' '/^import StreamProtocol$/d' TrackpadView.swift InputOverlay.swift $(ls KeyChords.swift 2>/dev/null)
@@ -61,7 +63,7 @@ target=arm64-apple-ios17.0-simulator
 xcrun -sdk iphonesimulator clang -target $target -fobjc-arc -Wall -c TouchSynth.m -o TouchSynth.o
 xcrun -sdk iphonesimulator swiftc -target $target -swift-version 5 -module-name TouchRig -Onone ${flags[@]+"${flags[@]}"} \
     -import-objc-header Bridging.h Stubs.swift Keys.swift Input.swift $(ls PointerPresence.swift TrackpadGestures.swift KeyChords.swift HardwareKeyboardPolicy.swift 2>/dev/null) \
-    TrackpadView.swift InputOverlay.swift main.swift TouchSynth.o -o "$work/TouchRig.app/TouchRig"
+    TrackpadView.swift InputOverlay.swift $(ls StreamTextInputView.swift 2>/dev/null) main.swift TouchSynth.o -o "$work/TouchRig.app/TouchRig"
 cat > "$work/TouchRig.app/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -84,7 +86,7 @@ codesign -s - --force "$work/TouchRig.app" >/dev/null 2>&1
 
 # The simulator.
 sim="${SILL_TOUCHRIG_SIM:-Sill touchrig}"
-udid="$(xcrun simctl list devices -j | python3 -c '
+udid="$("$simctl" list devices -j | python3 -c '
 import json, sys
 name = sys.argv[1]
 for runtime, devices in json.load(sys.stdin)["devices"].items():
@@ -93,20 +95,20 @@ for runtime, devices in json.load(sys.stdin)["devices"].items():
 ' "$sim")"
 made=0
 if [ -z "$udid" ]; then
-    runtime="$(xcrun simctl list runtimes -j | python3 -c '
+    runtime="$("$simctl" list runtimes -j | python3 -c '
 import json, sys
 ios = [r for r in json.load(sys.stdin)["runtimes"] if r["platform"] == "iOS" and r["isAvailable"]]
 print(sorted(ios, key=lambda r: [int(x) for x in r["version"].split(".")])[-1]["identifier"])')"
-    udid="$(xcrun simctl create "$sim" com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB "$runtime")"
+    udid="$("$simctl" create "$sim" com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB "$runtime")"
     made=1
 fi
-xcrun simctl boot "$udid" 2>/dev/null || true
-xcrun simctl bootstatus "$udid" -b >/dev/null
-xcrun simctl install "$udid" "$work/TouchRig.app"
+"$simctl" boot "$udid" 2>/dev/null || true
+"$simctl" bootstatus "$udid" -b >/dev/null
+"$simctl" install "$udid" "$work/TouchRig.app"
 log="$out/$name.log"
 SIMCTL_CHILD_RIG_SWITCH="$switch" perl -e 'alarm shift; exec @ARGV' 600 \
-    xcrun simctl launch --console-pty --terminate-running-process "$udid" me.saffer.sill.touchrig > "$log" 2>&1 || true
-xcrun simctl uninstall "$udid" me.saffer.sill.touchrig || true
-if [ "$made" = 1 ]; then xcrun simctl shutdown "$udid" || true; xcrun simctl delete "$udid" || true; fi
+    "$simctl" launch --console-pty --terminate-running-process "$udid" me.saffer.sill.touchrig > "$log" 2>&1 || true
+"$simctl" uninstall "$udid" me.saffer.sill.touchrig || true
+if [ "$made" = 1 ]; then "$simctl" shutdown "$udid" || true; "$simctl" delete "$udid" || true; fi
 grep -q '^RIG done' "$log" || { echo "touchrig: the run did not finish; see $log" >&2; exit 1; }
 echo "touchrig: $(grep -c '^===' "$log") scenarios, the log is $log"

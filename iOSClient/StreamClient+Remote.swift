@@ -73,7 +73,7 @@ enum PairingProblem: Equatable {
         case .codeTypo: return "配对码有误，请核对 Mac 上显示的数字。"
         case .wrongCode(let left):
             return "配对码不正确，请核对 Mac 上的数字。还可尝试 \(left) 次。"
-        case .notPairing(let mac): return "\(mac) 当前未开启配对。请在 Mac 的 DUO你电脑菜单中选择“Pair iPhone or iPad…”。"
+        case .notPairing(let mac): return "\(mac) 当前未开启配对。请在 Mac 的 DUO你电脑菜单中打开配对。"
         case .stopped(let mac):
             return "输入错误次数过多，\(mac) 已停止配对。请在 Mac 上重新打开配对获取新配对码。"
         case .expired: return "配对码已过期，请在 Mac 上重新打开配对获取新配对码。"
@@ -178,7 +178,7 @@ extension StreamClient {
     /// Forget: the record only. The Mac lists this device until it is removed there, and the
     /// status line says so.
     func forget(_ macID: String) {
-        let name = savedMac(macID) != nil ? displayName(macID) : (macs.first { $0.macID == macID }?.name ?? "the Mac")
+        let name = savedMac(macID) != nil ? displayName(macID) : (macs.first { $0.macID == macID }?.name ?? "这台 Mac")
         if reconnect?.macID == macID { reconnect = nil }
         savedMacs.removeAll { $0.macID == macID }
         savedSightings.since[macID] = nil
@@ -909,7 +909,7 @@ extension StreamClient {
             return
         }
         pairingDial?.cancel()
-        let shown = macName ?? candidates.first?.display ?? "your Mac"
+        let shown = macName ?? candidates.first?.display ?? "你的 Mac"
         pairing = .working("正在与 \(shown) 配对…")
         #if DEBUG
         print("remote: pairing with \(shown) (\(method)) at \(candidates.map(\.key))")
@@ -941,7 +941,7 @@ extension StreamClient {
                         }
                         self.pairing = .failed(Self.problem(for: r, mac: macName ?? w.candidate.display))
                     case .notPairing:
-                        self.pairing = .failed(.notPairing(macName ?? "The Mac at \(w.candidate.display)"))
+                        self.pairing = .failed(.notPairing(macName ?? "位于 \(w.candidate.display) 的 Mac"))
                     case .noProof:
                         self.pairing = .failed(.proofFailed(w.candidate.display))
                     }
@@ -957,7 +957,7 @@ extension StreamClient {
                 case .refused, .revoked:
                     // Nothing listening (Remote Access off and no pairing window), or a door that
                     // turned the pairing away in its handshake.
-                    self.pairing = .failed(.notPairing(macName ?? "The Mac at \(host)"))
+                    self.pairing = .failed(.notPairing(macName ?? "位于 \(host) 的 Mac"))
                 case .notSill, .wrongMac: self.pairing = .failed(.notSill(host))
                 case .localNetwork: self.pairing = .failed(.localNetwork(host))
                 default: self.pairing = .failed(.nothingAnswered(host))

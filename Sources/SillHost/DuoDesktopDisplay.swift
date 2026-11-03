@@ -16,12 +16,13 @@ enum StreamSamplingPolicy {
 }
 
 /// A transaction on the Mac desktop. A matching physical mode may be selected at its original
-/// refresh rate. Virtual mirroring is withheld until the system can establish it without changing
-/// physical refresh. Original modes, origins and mirror relationships are restored on exit.
+/// refresh rate. A virtual mirror uses that same clock, with sampling selected independently.
+/// Original modes, origins and mirror relationships are restored on exit.
 @MainActor
 final class DuoDesktopDisplay {
     // Independent primary is a CLI-only experiment until existing full-screen Spaces migrate.
-    enum Layout { case mirrored, nativePrimary }
+    // Extended is a separate display; it never moves the original main desktop onto itself.
+    enum Layout { case mirrored, nativePrimary, extended }
     struct Prepared {
         let display: SCDisplay
         let bounds: CGRect
@@ -30,13 +31,13 @@ final class DuoDesktopDisplay {
         let canvasHeight: Int
     }
     enum Failure: LocalizedError {
-        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable, samplingClockTooSlow, refreshInvariantUnavailable
+        case invalidResolution, invalidFrameRate, screenPermission, noDisplay, modeRejected, displayUnavailable, restorePending, topologyChanging, recoveryUnavailable, samplingClockTooSlow, refreshInvariantUnavailable, physicalModeChanged
         var errorDescription: String? {
             switch self {
             case .invalidResolution: return "Duo 上屏原生分辨率无效。"
             case .invalidFrameRate: return "Duo 请求的帧率无效。"
             case .screenPermission: return "请先在 Mac 系统设置中允许 DUO你电脑录制屏幕，再重新连接。"
-            case .noDisplay: return "找不到可匹配 Duo 的 Mac 主显示器。"
+            case .noDisplay: return "找不到所选的 Mac 显示器，请重新选择。"
             case .modeRejected: return "macOS 未能应用 Duo 的原生桌面尺寸和刷新率；本次连接不会降低分辨率。"
             case .displayUnavailable: return "无法捕获匹配 Duo 的桌面，请重新连接。"
             case .restorePending: return "此前的 Mac 显示配置仍待恢复，原显示器可能已离线、配置已变化或系统拒绝恢复。"
@@ -44,6 +45,7 @@ final class DuoDesktopDisplay {
             case .recoveryUnavailable: return "无法安全保存 Mac 显示配置；未启动新的原生桌面。"
             case .samplingClockTooSlow: return "当前桌面时钟低于请求的采样率；更高目标可在下次连接时尝试。"
             case .refreshInvariantUnavailable: return "当前无法在保持 Mac 屏幕刷新率不变的情况下建立 Duo 原生桌面。"
+            case .physicalModeChanged: return "Mac 的屏幕模式已变化，请重新连接后重试。"
             }
         }
     }
@@ -65,6 +67,7 @@ final class DuoDesktopDisplay {
     private var observedOffline: Set<CGDirectDisplayID> = []
     private var temporary: VirtualDisplay?
     private var preparedVirtualMode: CGDisplayMode?
+    private var retiringVirtualDisplayID: CGDirectDisplayID?
     private var selectedPhysicalMode: CGDisplayMode?
     private var pendingMirror = false
     private var capturedID: CGDirectDisplayID = 0
@@ -78,8 +81,11 @@ final class DuoDesktopDisplay {
     #if DUO_DISPLAY_RESTORE_TESTING
     private var testInventory: (() -> [CGDirectDisplayID: DisplayRestoreIdentity]?)?
     private var testInterceptConfiguration = false
+    private var testRejectConfiguration = false
     private var testConfigurationAttempts = 0
     private var testPreventDisplayMutation = false
+    /// Simulate a display that remains online after its owner was released.
+    private var testAfterDisplayRestore: (() -> Void)?
     private var testRecoveryModes: [CGDisplayMode]?
     private var testRecoveryRead: (() throws -> DisplayRecoveryRecord)?
     private var testAfterRecoveryConfiguration: (() -> Void)?
@@ -88,12 +94,17 @@ final class DuoDesktopDisplay {
     #endif
     private let mainDisplay: @MainActor () -> CGDirectDisplayID
     private let layout: Layout
+    /// A physical desktop chosen by the client; retained while its virtual mirror becomes main.
+    var selectedDisplayID: CGDirectDisplayID?
+    private var sourceDisplayID: CGDirectDisplayID { selectedDisplayID ?? mainDisplay() }
     init(mainDisplay: @escaping @MainActor () -> CGDirectDisplayID = { DuoDesktopDisplay.availableMainDisplayID() },
          layout: Layout = .mirrored, recoveryDirectory: URL? = nil) {
         self.mainDisplay = mainDisplay
         self.layout = layout
         self.recoveryDirectory = recoveryDirectory
     }
+
+    var isExtendedLayout: Bool { layout == .extended && resolution != nil }
     /// A Screen Sharing display handover can leave CGMainDisplayID pointing at a removed
     /// display. AppKit already knows the replacement. Only accept an unambiguous, online
     /// desktop; never move an arbitrary secondary display when the main display is unknown.
@@ -113,12 +124,11 @@ final class DuoDesktopDisplay {
     nonisolated static func isDisplayOnline(_ id: CGDirectDisplayID) -> Bool {
         CGDisplayIsOnline(id) > 0
     }
-    /// Keep a stable identity for each source desktop, rather than sharing serial 1 with
-    /// every source and virtual-display utility. A Screen Sharing handover can retain the
-    /// previous source's identity after its display has left the online list.
+    /// A new mirror transaction must not inherit a remembered main-display arrangement from a
+    /// previous size/session. Sampling-only changes keep the existing object and identity.
     private static func virtualDesktopSerial(source: CGDirectDisplayID) -> UInt32 {
         let words: [UInt32] = [0x44554F32, CGDisplayVendorNumber(source),
-                               CGDisplayModelNumber(source), CGDisplaySerialNumber(source)]
+                               CGDisplayModelNumber(source), CGDisplaySerialNumber(source), UInt32.random(in: 2...UInt32.max)]
         var hash: UInt32 = 2_166_136_261
         for word in words {
             for shift in stride(from: 0, to: 32, by: 8) {
@@ -130,7 +140,7 @@ final class DuoDesktopDisplay {
     private(set) var resolution: DuoDesktopResolution?
     private var requestedFPS: Int?
     /// Set once when a virtual desktop is created. Sampling changes never change this clock.
-    private var virtualDesktopClockFPS: Int?
+    private var virtualDesktopClockHz: Double?
     var captureBounds: CGRect? { capturedID == 0 ? nil : CGDisplayBounds(capturedID) }
     /// SCK may follow an exact native clock on both the mirrored product desktop and the
     /// independent diagnostic desktop. A second 1/fps limiter is unnecessary in either case.
@@ -148,7 +158,7 @@ final class DuoDesktopDisplay {
         return mode.refreshRate > Double(requestedFPS) + 0.5
     }
     /// Keep the diagnostic filter choice separate from the capture interval policy.
-    var usesIndependentCaptureFilter: Bool { layout == .nativePrimary && activeModeMatches }
+    var usesIndependentCaptureFilter: Bool { layout != .mirrored && activeModeMatches }
     /// A physical resolution may change, but its reported refresh must stay exactly as it was.
     /// A slower physical clock caps sampling instead of forcing a different panel refresh.
     nonisolated static func permitsPhysicalMode(currentHz: Double, candidateHz: Double, fps: Int) -> Bool {
@@ -165,6 +175,32 @@ final class DuoDesktopDisplay {
         samplingCeiling(refreshHz: refreshHz).map { min(requested, $0) } ?? requested
     }
 
+    /// A full-screen fallback may retain the physical aspect only if both pixel dimensions still
+    /// cover the requested Duo canvas. No display mode is changed or presented as an exact match.
+    nonisolated static func physicalFallback(requested: DuoDesktopResolution, width: Int, height: Int) -> DuoDesktopResolution? {
+        let current = DuoDesktopResolution(width: width, height: height)
+        guard requested.isValid, current.isValid, width >= requested.width, height >= requested.height else { return nil }
+        return current
+    }
+
+    /// A mirror uses the original physical clock and selects samples separately. The transaction
+    /// selects only the new mirror's pixel size; it must not pin the source to its old resolution.
+    nonisolated static func candidateVirtualClock(mirrored: Bool, physicalHz: Double,
+                                                  requestedFPS: Int) -> (refreshHz: Double, samplingFPS: Int)? {
+        guard (1...240).contains(requestedFPS) else { return nil }
+        guard mirrored else { return (Double(requestedFPS), requestedFPS) }
+        guard physicalHz.isFinite, physicalHz >= 1, physicalHz <= 1000 else { return nil }
+        return (physicalHz, initialPhysicalSamplingFPS(requested: requestedFPS, refreshHz: physicalHz))
+    }
+
+    /// A non-mirrored extension owns its own clock; it never needs to retime an existing display.
+    /// A known physical clock is still required so the before/after invariant can be checked.
+    nonisolated static func extendedVirtualClock(physicalHz: Double, requestedFPS: Int)
+        -> (refreshHz: Double, samplingFPS: Int)? {
+        guard samplingCeiling(refreshHz: physicalHz) != nil else { return nil }
+        return candidateVirtualClock(mirrored: false, physicalHz: physicalHz, requestedFPS: requestedFPS)
+    }
+
     /// Reuse the current matching mode without a display write. Otherwise prefer the smallest
     /// matching pixel canvas, and the lower logical width for duplicate HiDPI modes.
     private static func physicalMode(_ modes: [CGDisplayMode], wanted: DuoDesktopResolution,
@@ -178,11 +214,6 @@ final class DuoDesktopDisplay {
             return left == right ? $0.width < $1.width : left < right
         }
     }
-    /// No public guarantee has been established that creating a mirror set keeps every physical
-    /// clock unchanged throughout the transaction. Preserve the future path, but fail before
-    /// creating or attaching its virtual display until a compliant mechanism is demonstrated.
-    private static let virtualMirrorTimingSafetyVerified = false
-
     private static func physicalModeSharesMirrorSet(main: CGDirectDisplayID, originals: [Original]) -> Bool {
         originals.contains { ($0.id == main && $0.mirror != kCGNullDirectDisplay) || $0.mirror == main }
     }
@@ -198,12 +229,13 @@ final class DuoDesktopDisplay {
         return temporary != nil
     }
     var activeModeMatches: Bool {
-        guard !pendingMirror, let resolution, let requestedFPS, let mode = CGDisplayCopyDisplayMode(capturedID),
+        guard selectedDisplayID == nil || selectedDisplayID == originalMainID,
+              !pendingMirror, let resolution, let requestedFPS, let mode = CGDisplayCopyDisplayMode(capturedID),
               mode.refreshRate >= Double(requestedFPS) - 0.5,
               physicalRefreshMatchesOriginal else { return false }
         if isVirtualDesktop {
-            guard let virtualDesktopClockFPS,
-                  abs(mode.refreshRate - Double(virtualDesktopClockFPS)) < 0.5 else { return false }
+            guard let virtualDesktopClockHz,
+                  abs(mode.refreshRate - virtualDesktopClockHz) < 0.5 else { return false }
             #if DUO_DISPLAY_RESTORE_TESTING
             if testVirtualSampling { return resolution.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight) }
             #endif
@@ -211,6 +243,8 @@ final class DuoDesktopDisplay {
             switch layout {
             case .mirrored:
                 guard CGDisplayMirrorsDisplay(originalMainID) == capturedID else { return false }
+                guard CGDisplayBounds(capturedID).origin == .zero,
+                      CGMainDisplayID() == capturedID || CGMainDisplayID() == originalMainID else { return false }
             case .nativePrimary:
                 guard CGDisplayMirrorsDisplay(capturedID) == kCGNullDirectDisplay,
                       CGDisplayMirrorsDisplay(originalMainID) != capturedID else { return false }
@@ -219,6 +253,14 @@ final class DuoDesktopDisplay {
                     guard CGDisplayBounds(old.id).origin == primaryOrigins[old.id],
                           CGDisplayMirrorsDisplay(old.id) == old.mirror,
                           Self.sameMode(CGDisplayCopyDisplayMode(old.id), old.mode) else { return false }
+                }
+            case .extended:
+                guard CGMainDisplayID() == originalSystemMainID,
+                      CGDisplayMirrorsDisplay(capturedID) == kCGNullDirectDisplay else { return false }
+                for old in originals {
+                    guard CGDisplayMirrorsDisplay(old.id) == old.mirror,
+                          CGDisplayMirrorsDisplay(old.id) != capturedID,
+                          Self.sameRestoredMode(CGDisplayCopyDisplayMode(old.id), old.mode) else { return false }
                 }
             }
         } else {
@@ -238,11 +280,14 @@ final class DuoDesktopDisplay {
         }
     }
 
-    func prepare(_ wanted: DuoDesktopResolution, fps: Int) async throws -> Prepared {
+    func prepare(_ wanted: DuoDesktopResolution, fps: Int, preservePhysicalMode: Bool = false,
+                 requestIsCurrent: () -> Bool = { true }, restoreOnFailure: () -> Bool = { true }) async throws -> Prepared {
         guard CGPreflightScreenCaptureAccess() else { throw Failure.screenPermission }
-        let id = try await prepareGraphics(wanted, fps: fps)
+        let id = try await prepareGraphics(wanted, fps: fps, preservePhysicalMode: preservePhysicalMode, requestIsCurrent: requestIsCurrent,
+                                           restoreOnFailure: restoreOnFailure)
         do {
             let display = try await findDisplay(id)
+            guard requestIsCurrent() else { throw Failure.topologyChanging }
             guard activeModeMatches, let mode = CGDisplayCopyDisplayMode(id),
                   wanted.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight) else { throw Failure.modeRejected }
             let width = mode.pixelWidth, height = mode.pixelHeight
@@ -250,18 +295,38 @@ final class DuoDesktopDisplay {
             return Prepared(display: display, bounds: CGDisplayBounds(id), mirrored: temporary != nil && layout == .mirrored,
                             canvasWidth: width, canvasHeight: height)
         } catch {
-            _ = restore()
+            if restoreOnFailure() { _ = restore() }
             throw error
         }
     }
 
+    /// Wait for a previously destroyed virtual display to leave WindowServer's online inventory before
+    /// another layout is selected. A failed retirement must not start a competing display session.
+    func waitForRetiredVirtualDisplay() async throws {
+        guard let retiring = retiringVirtualDisplayID else { return }
+        for _ in 0..<30 where Self.isDisplayOnline(retiring) {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard !Self.isDisplayOnline(retiring) else { throw Failure.restorePending }
+        retiringVirtualDisplayID = nil
+    }
+
     /// Separated for a graphics-only test whose injected main display is itself disposable.
     /// The production entry point above always requires Screen Recording before changing a mode.
-    func prepareGraphics(_ wanted: DuoDesktopResolution, fps: Int, deferMirror: Bool = false) async throws -> CGDirectDisplayID {
+    func prepareGraphics(_ wanted: DuoDesktopResolution, fps: Int, deferMirror: Bool = false,
+                         preservePhysicalMode: Bool = false,
+                         requestIsCurrent: () -> Bool = { true },
+                         restoreOnFailure: () -> Bool = { true }) async throws -> CGDirectDisplayID {
         guard wanted.isValid else { throw Failure.invalidResolution }
         guard (1...240).contains(fps) else { throw Failure.invalidFrameRate }
         guard !deferMirror || layout == .mirrored else { throw Failure.invalidResolution }
+        guard !preservePhysicalMode || (layout == .mirrored && !deferMirror) else { throw Failure.invalidResolution }
+        try await waitForRetiredVirtualDisplay()
+        guard requestIsCurrent() else { throw Failure.topologyChanging }
         if resolution == wanted, activeModeMatches {
+            if preservePhysicalMode, temporary != nil || capturedID != CGMainDisplayID() || didAttemptDisplayChange {
+                throw Failure.physicalModeChanged
+            }
             guard let ceiling = currentSamplingCeiling, fps <= ceiling else { throw Failure.samplingClockTooSlow }
             guard requestedFPS != fps else { return capturedID }
             let previous = requestedFPS
@@ -270,24 +335,35 @@ final class DuoDesktopDisplay {
             print("Duo desktop: sampling target updated to \(fps) fps; desktop clock unchanged")
             return capturedID
         }
+        // A fallback request may use the current mode only. Even restoring an earlier display
+        // transaction would change what the user is currently looking at, so decline it here.
+        if preservePhysicalMode, temporary != nil || didAttemptDisplayChange { throw Failure.physicalModeChanged }
         guard restore() else { throw Failure.restorePending }
+        #if DUO_DISPLAY_RESTORE_TESTING
+        testAfterDisplayRestore?()
+        #endif
+        // `restore()` can release a virtual display whose ID remains online briefly. Its
+        // removal must finish before the next inventory is used to create a replacement.
+        try await waitForRetiredVirtualDisplay()
+        guard requestIsCurrent() else { throw Failure.topologyChanging }
         let store: DisplayRecoveryStore?
         do { store = try recoveryDirectory.map { try DisplayRecoveryStore(directory: $0) } }
         catch { print("Duo display recovery storage unavailable: \(error)"); throw Failure.recoveryUnavailable }
-        var main = mainDisplay()
+        var main = sourceDisplayID
         var systemMain = CGMainDisplayID()
         var sampled = try snapshot()
-        guard main == mainDisplay(), systemMain == CGMainDisplayID() else { throw Failure.topologyChanging }
+        guard main == sourceDisplayID, systemMain == CGMainDisplayID() else { throw Failure.topologyChanging }
         let recoveryRecord: DisplayRecoveryRecord?
         if let store {
             var record = try Self.recoveryRecord(sampled, systemMain: systemMain)
             do {
                 if let prior = try store.load() {
                     if !prior.alreadyRestored(as: record) {
+                        guard !preservePhysicalMode else { throw Failure.restorePending }
                         guard let intent = try store.loadIntent(for: prior),
                               try recoverSingleDisplay(prior, intent: intent, current: record) else { throw Failure.restorePending }
-                        main = mainDisplay(); systemMain = CGMainDisplayID(); sampled = try snapshot()
-                        guard main == mainDisplay(), systemMain == CGMainDisplayID() else { throw Failure.topologyChanging }
+                        main = sourceDisplayID; systemMain = CGMainDisplayID(); sampled = try snapshot()
+                        guard main == sourceDisplayID, systemMain == CGMainDisplayID() else { throw Failure.topologyChanging }
                         record = try Self.recoveryRecord(sampled, systemMain: systemMain)
                         guard prior.alreadyRestored(as: record) else { throw Failure.restorePending }
                         print("Duo desktop: interrupted single-display mode restored")
@@ -309,10 +385,19 @@ final class DuoDesktopDisplay {
         didAttemptDisplayChange = false
         do {
             let physicalFPS = Self.initialPhysicalSamplingFPS(requested: fps, refreshHz: home.mode.refreshRate)
+            var selectedSamplingFPS = physicalFPS
             let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-            let modes = (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
+            let modes = layout == .extended ? [] : (CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode]) ?? []
             let native = Self.physicalMode(modes, wanted: wanted, current: home.mode, fps: physicalFPS)
-            if let native {
+            if preservePhysicalMode {
+                guard main == systemMain, let native, Self.sameMode(native, home.mode) else {
+                    throw Failure.physicalModeChanged
+                }
+            }
+            if layout == .extended {
+                selectedSamplingFPS = try await prepareExtended(wanted, fps: fps, home: home)
+                guard requestIsCurrent() else { throw Failure.topologyChanging }
+            } else if let native {
                 if !Self.sameMode(native, home.mode) {
                     // Quartz may adjust every display in a mirror set when one mode changes.
                     guard !Self.physicalModeSharesMirrorSet(main: main, originals: sampled) else {
@@ -325,7 +410,7 @@ final class DuoDesktopDisplay {
                         // The intent is durable; check the complete state again before mutation.
                         let latestMain = CGMainDisplayID()
                         let latest = try Self.recoveryRecord(snapshot(), systemMain: latestMain)
-                        guard latestMain == CGMainDisplayID(), main == mainDisplay(),
+                        guard latestMain == CGMainDisplayID(), main == sourceDisplayID,
                               recoveryRecord.sameState(as: latest) else { throw Failure.topologyChanging }
                     }
                     #if DUO_DISPLAY_RESTORE_TESTING
@@ -339,7 +424,13 @@ final class DuoDesktopDisplay {
                 capturedID = main
                 selectedPhysicalMode = native
             } else {
-                guard Self.virtualMirrorTimingSafetyVerified else { throw Failure.refreshInvariantUnavailable }
+                // The independent-primary experiment remains unavailable here. Native mirrors
+                // use the source's original refresh rate, never the requested sampling rate.
+                guard layout == .mirrored, main == systemMain else { throw Failure.refreshInvariantUnavailable }
+                guard let plan = Self.candidateVirtualClock(mirrored: layout == .mirrored,
+                                                           physicalHz: home.mode.refreshRate,
+                                                           requestedFPS: fps) else { throw Failure.refreshInvariantUnavailable }
+                selectedSamplingFPS = plan.samplingFPS
                 try persistRecovery(recoveryRecord)
                 #if DUO_DISPLAY_RESTORE_TESTING
                 if testPreventDisplayMutation { throw Failure.modeRejected }
@@ -348,11 +439,11 @@ final class DuoDesktopDisplay {
                 let display = try VirtualDisplay(name: "DUO你电脑 · 原生桌面",
                                                  widthPt: wanted.encodedWidth / 2,
                                                  heightPt: wanted.encodedHeight / 2,
-                                                 scale: 2, refreshHz: Double(fps),
+                                                 scale: 2, refreshHz: plan.refreshHz,
                                                  vendorID: 0x4455, productID: 0x4F01,
                                                  serialNum: Self.virtualDesktopSerial(source: main))
                 temporary = display
-                virtualDesktopClockFPS = fps
+                virtualDesktopClockHz = plan.refreshHz
                 // Do not select a virtual mode in a separate display transaction. If macOS
                 // remembers a mirror relationship, that selection can also alter other screens.
                 guard let mode = await display.waitForRequestedMode(),
@@ -366,7 +457,7 @@ final class DuoDesktopDisplay {
                     // The selected filter continues to identify this same display after attach.
                     pendingMirror = true
                 } else {
-                    try attachMirror(display, home: home)
+                    try await attachMirror(display, home: home)
                 }
                 if layout == .nativePrimary {
                     try configure { config in
@@ -380,27 +471,118 @@ final class DuoDesktopDisplay {
                 }
             }
             resolution = wanted
-            requestedFPS = temporary == nil ? physicalFPS : fps
+            requestedFPS = selectedSamplingFPS
             guard pendingMirror || activeModeMatches else { throw Failure.modeRejected }
-            let kind = temporary == nil ? "physical mode" : layout == .mirrored ? "mirrored HiDPI mode" : "independent native primary"
+            let kind = temporary == nil ? "physical mode" : layout == .mirrored ? "mirrored HiDPI mode"
+                : layout == .extended ? "extended display" : "independent native primary"
             let current = CGDisplayCopyDisplayMode(capturedID)
             let canvas = current.map { "\($0.pixelWidth)×\($0.pixelHeight)" } ?? "unknown"
             print("Duo desktop: at least \(wanted.width)×\(wanted.height) native; canvas \(canvas) pixels; \(pendingMirror ? "awaiting desktop attachment" : kind)")
             return capturedID
         } catch {
-            _ = restore()
+            if restoreOnFailure() { _ = restore() }
             throw error
         }
     }
 
-    func attachPreparedMirror() throws {
+    /// Creates only a new display. It never configures, mirrors, or changes the mode of any
+    /// pre-existing display; a fresh serial avoids a remembered mirror arrangement. WindowServer
+    /// may still alter topology itself, so the complete pre-existing snapshot is checked before
+    /// and after selecting the new display's own mode. No physical display is restored over a
+    /// concurrent user change if these checks fail.
+    private func prepareExtended(_ wanted: DuoDesktopResolution, fps: Int, home: Original) async throws -> Int {
+        guard let plan = Self.extendedVirtualClock(physicalHz: home.mode.refreshRate, requestedFPS: fps) else {
+            throw Failure.refreshInvariantUnavailable
+        }
+        let vendor: UInt32 = 0x4455, product: UInt32 = 0x4F45
+        let serial = UInt32.random(in: 2...UInt32.max)
+        let identity = DisplayRestoreIdentity(vendor: vendor, model: product, serial: serial, builtIn: false)
+        guard !originals.contains(where: { $0.identity == identity }) else { throw Failure.topologyChanging }
+        #if DUO_DISPLAY_RESTORE_TESTING
+        if testPreventDisplayMutation { throw Failure.modeRejected }
+        #endif
+        didAttemptDisplayChange = true
+        let display = try VirtualDisplay(name: "DUO你电脑 · 扩展显示器",
+                                         widthPt: wanted.encodedWidth / 2,
+                                         heightPt: wanted.encodedHeight / 2,
+                                         scale: 2, refreshHz: plan.refreshHz,
+                                         vendorID: vendor, productID: product, serialNum: serial)
+        temporary = display
+        virtualDesktopClockHz = plan.refreshHz
+        guard let mode = await display.waitForRequestedMode(),
+              wanted.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight) else { throw Failure.modeRejected }
+        try await waitForExtendedSnapshot(display, identity: identity)
+        if !Self.sameRestoredMode(CGDisplayCopyDisplayMode(display.displayID), mode) {
+            try configure { config in
+                guard display.isAlive, (try? extendedSnapshotUnchanged(display, identity: identity)) == true else {
+                    return .illegalArgument
+                }
+                return Self.configureExtendedMode(virtualID: display.displayID, originalIDs: Set(originals.map(\.id)),
+                                                  mode: mode) { id, mode in
+                    CGConfigureDisplayWithDisplayMode(config, id, mode, nil)
+                }
+            }
+            for _ in 0..<30 where !Self.sameRestoredMode(CGDisplayCopyDisplayMode(display.displayID), mode) {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        try await waitForExtendedSnapshot(display, identity: identity)
+        guard Self.sameRestoredMode(CGDisplayCopyDisplayMode(display.displayID), mode) else { throw Failure.modeRejected }
+        preparedVirtualMode = mode
+        capturedID = display.displayID
+        return plan.samplingFPS
+    }
+
+    /// WindowServer may briefly report placeholder modes on members of an existing mirror set
+    /// while adding a display. Wait for stable, unchanged originals without writing to them.
+    private func waitForExtendedSnapshot(_ display: VirtualDisplay, identity: DisplayRestoreIdentity) async throws {
+        var stable = 0
+        for _ in 0..<30 {
+            guard display.isAlive else { throw Failure.displayUnavailable }
+            stable = try extendedSnapshotUnchanged(display, identity: identity, logChange: false) ? stable + 1 : 0
+            if stable >= 3 { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        _ = try extendedSnapshotUnchanged(display, identity: identity)
+        throw Failure.modeRejected
+    }
+
+    private func extendedSnapshotUnchanged(_ display: VirtualDisplay, identity: DisplayRestoreIdentity,
+                                           logChange: Bool = true) throws -> Bool {
+        let latest = try snapshot()
+        let unchanged = Self.mirrorSnapshotUnchanged(originals: originals, current: latest,
+                                             originalSystemMain: originalSystemMainID,
+                                             currentSystemMain: CGMainDisplayID(),
+                                             virtualID: display.displayID, virtualIdentity: identity)
+        if !unchanged && logChange {
+            print("Duo extension: existing display configuration changed while adding display \(display.displayID); main \(originalSystemMainID) → \(CGMainDisplayID())")
+            for old in originals {
+                let now = latest.first { $0.id == old.id }
+                print("Duo extension source \(old.id): \(old.mode.pixelWidth)×\(old.mode.pixelHeight) at \(old.mode.refreshRate) Hz, mode \(old.mode.ioDisplayModeID), origin \(old.origin), mirror \(old.mirror); now \(now.map { "\($0.mode.pixelWidth)×\($0.mode.pixelHeight) at \($0.mode.refreshRate) Hz, mode \($0.mode.ioDisplayModeID), origin \($0.origin), mirror \($0.mirror)" } ?? "offline")")
+            }
+            if let added = latest.first(where: { $0.id == display.displayID }) {
+                print("Duo extension added: mirror \(added.mirror), origin \(added.origin)")
+            }
+        }
+        return unchanged
+    }
+
+    /// The only display-mode operation for an extension must target the newly added display.
+    private static func configureExtendedMode(virtualID: CGDirectDisplayID, originalIDs: Set<CGDirectDisplayID>,
+                                               mode: CGDisplayMode,
+                                               setMode: (CGDirectDisplayID, CGDisplayMode) -> CGError) -> CGError {
+        guard virtualID != kCGNullDirectDisplay, !originalIDs.contains(virtualID) else { return .illegalArgument }
+        return setMode(virtualID, mode)
+    }
+
+    func attachPreparedMirror() async throws {
         guard pendingMirror else { return }
         do {
             guard let display = temporary, let home = originals.first(where: { $0.id == originalMainID }),
                   Self.isDisplayOnline(home.id), Self.isDisplayOnline(display.displayID) else {
                 throw Failure.displayUnavailable
             }
-            try attachMirror(display, home: home)
+            try await attachMirror(display, home: home)
             pendingMirror = false
             guard activeModeMatches else { throw Failure.modeRejected }
         } catch {
@@ -409,19 +591,28 @@ final class DuoDesktopDisplay {
         }
     }
 
-    private func attachMirror(_ display: VirtualDisplay, home: Original) throws {
-        guard Self.virtualMirrorTimingSafetyVerified else { throw Failure.refreshInvariantUnavailable }
+    private func attachMirror(_ display: VirtualDisplay, home: Original) async throws {
         guard let mode = preparedVirtualMode else { throw Failure.displayUnavailable }
-        // This candidate pins every pre-existing mode and the virtual mode in the same Quartz
-        // transaction. It is still disabled: neither atomic submission nor a post-check proves
-        // that WindowServer preserves physical refresh throughout creation and reconfiguration.
+        guard display.refreshHz == home.mode.refreshRate, mode.refreshRate == home.mode.refreshRate else {
+            throw Failure.refreshInvariantUnavailable
+        }
+        // A secondary is captured directly by the coordinator. Mirroring it would evacuate
+        // its Space or require promoting it, which display selection must never do.
+        guard home.id == originalSystemMainID else { throw Failure.refreshInvariantUnavailable }
+        // Select the new mirror size at the source's clock. Pin unrelated displays, while letting
+        // the source adopt the mirror's pixel dimensions in this same transaction.
         try configure { config in
-            guard display.isAlive, let latest = try? snapshot(), mainDisplay() == originalMainID,
+            guard display.isAlive, let latest = try? snapshot(),
                   Self.mirrorSnapshotUnchanged(originals: originals, current: latest,
                                                originalSystemMain: originalSystemMainID,
                                                currentSystemMain: CGMainDisplayID(), virtualID: display.displayID,
                                                virtualIdentity: DisplayRestoreIdentity(vendor: display.vendorID,
                                                    model: display.productID, serial: display.serialNum, builtIn: false)) else {
+                print("Duo mirror topology rejected: expected main \(originalSystemMainID), current \(CGMainDisplayID()), source \(originalMainID)/\(mainDisplay()), virtual \(display.displayID)")
+                for old in originals {
+                    let mode = CGDisplayCopyDisplayMode(old.id)
+                    print("Duo mirror source \(old.id): mode \(old.mode.ioDisplayModeID)→\(mode?.ioDisplayModeID ?? 0), pixels \(old.mode.pixelWidth)×\(old.mode.pixelHeight)→\(mode?.pixelWidth ?? 0)×\(mode?.pixelHeight ?? 0), Hz \(old.mode.refreshRate)→\(mode?.refreshRate ?? 0), origin \(old.origin)→\(CGDisplayBounds(old.id).origin), mirror \(old.mirror)→\(CGDisplayMirrorsDisplay(old.id))")
+                }
                 return .failure
             }
             return Self.configurePinnedMirror(virtualID: display.displayID, virtualMode: mode,
@@ -429,6 +620,18 @@ final class DuoDesktopDisplay {
                 setOrigin: { id, x, y in CGConfigureDisplayOrigin(config, id, x, y) },
                 setMirror: { id, master in CGConfigureDisplayMirrorOfDisplay(config, id, master) },
                 setMode: { id, mode in CGConfigureDisplayWithDisplayMode(config, id, mode, nil) })
+        }
+        // WindowServer may promote another drawable desktop while the old primary becomes a
+        // mirror follower. Apply the saved origins after that graph exists, so the main-display
+        // assignment is evaluated against the committed mirror set rather than its old graph.
+        if CGDisplayBounds(display.displayID).origin != home.origin || CGMainDisplayID() != display.displayID {
+            try configure { config in
+                for old in originals where old.id != home.id && old.mirror == kCGNullDirectDisplay {
+                    let result = CGConfigureDisplayOrigin(config, old.id, Int32(old.origin.x), Int32(old.origin.y))
+                    guard result == .success else { return result }
+                }
+                return CGConfigureDisplayOrigin(config, display.displayID, Int32(home.origin.x), Int32(home.origin.y))
+            }
         }
         guard CGDisplayMirrorsDisplay(home.id) == display.displayID, display.hasRequestedMode else { throw Failure.modeRejected }
         guard physicalRefreshMatchesOriginal else {
@@ -438,8 +641,7 @@ final class DuoDesktopDisplay {
         print("Duo mirror timing: desktop \(display.refreshHz) Hz; source \(CGDisplayCopyDisplayMode(home.id)?.refreshRate ?? 0) Hz")
     }
 
-    /// This rejects topology drift after the virtual display appears. It cannot undo an effect
-    /// that creation itself already had; therefore it does not authorize enabling the candidate.
+    /// Reject topology, identity or physical-mode drift after the virtual display appears.
     private static func mirrorSnapshotUnchanged(originals: [Original], current: [Original],
                                                 originalSystemMain: CGDirectDisplayID,
                                                 currentSystemMain: CGDirectDisplayID,
@@ -447,20 +649,34 @@ final class DuoDesktopDisplay {
                                                 virtualIdentity: DisplayRestoreIdentity) -> Bool {
         let ids = Set(originals.map(\.id))
         guard !ids.isEmpty, ids.count == originals.count, !ids.contains(virtualID),
-              virtualID != kCGNullDirectDisplay, originalSystemMain == currentSystemMain,
+              virtualID != kCGNullDirectDisplay,
               ids.contains(originalSystemMain), current.count == originals.count + 1,
               Set(current.map(\.id)) == ids.union([virtualID]),
               let virtual = current.first(where: { $0.id == virtualID }),
               virtual.mirror == kCGNullDirectDisplay, virtual.identity == virtualIdentity else { return false }
+        guard let anchor = originals.first,
+              let currentAnchor = current.first(where: { $0.id == anchor.id }) else { return false }
+        // Adding a display can make WindowServer rebase the entire desktop onto a left-hand
+        // screen. Accept only a uniform translation with identical modes, identities and mirror
+        // relationships. The transaction below restores the saved arrangement atomically.
+        let translation = CGPoint(x: currentAnchor.origin.x - anchor.origin.x,
+                                  y: currentAnchor.origin.y - anchor.origin.y)
+        if originalSystemMain != currentSystemMain {
+            guard translation != .zero, ids.contains(currentSystemMain),
+                  current.first(where: { $0.id == currentSystemMain })?.origin == .zero else { return false }
+        }
         return originals.allSatisfy { original in
             guard original.mode.refreshRate.isFinite, original.mode.refreshRate > 0,
                   let now = current.first(where: { $0.id == original.id }) else { return false }
-            return sameRestoredMode(now.mode, original.mode) && now.origin == original.origin
+            return sameRestoredMode(now.mode, original.mode)
+                && now.origin == CGPoint(x: original.origin.x + translation.x, y: original.origin.y + translation.y)
                 && now.mirror == original.mirror && now.identity == original.identity
         }
     }
 
-    /// Stage each mode explicitly in the same transaction as the mirror relationship. The
+    /// Stage the mirror mode and restore the other displays' origins. Reapplying unchanged
+    /// unrelated modes can make Quartz reject a multi-display commit. Pinning the source's
+    /// old pixel size would also contradict the new mirror size. The
     /// injectable operations let the order and failure handling be checked without display writes.
     private static func configurePinnedMirror(virtualID: CGDirectDisplayID, virtualMode: CGDisplayMode,
                                                home: Original, originals: [Original],
@@ -475,31 +691,44 @@ final class DuoDesktopDisplay {
               originals.allSatisfy({ $0.mode.refreshRate.isFinite && $0.mode.refreshRate > 0
                   && ($0.mirror == kCGNullDirectDisplay || ($0.mirror != $0.id && ids.contains($0.mirror))) }),
               virtualMode.refreshRate.isFinite, virtualMode.refreshRate > 0,
+              virtualMode.refreshRate == home.mode.refreshRate,
               !ids.contains(virtualID), virtualID != kCGNullDirectDisplay, let x = Int32(exactly: home.origin.x),
               let y = Int32(exactly: home.origin.y) else { return .illegalArgument }
-        var result = setOrigin(virtualID, x, y)
-        guard result == .success else { return result }
-        result = setMirror(home.id, virtualID)
+        var result = setMirror(home.id, virtualID)
         guard result == .success else { return result }
         result = setMode(virtualID, virtualMode)
         guard result == .success else { return result }
-        for original in originals {
-            result = setMode(original.id, original.mode)
+        for original in originals where original.id != home.id {
+            guard let ox = Int32(exactly: original.origin.x), let oy = Int32(exactly: original.origin.y) else { return .illegalArgument }
+            result = setOrigin(original.id, ox, oy)
             guard result == .success else { return result }
         }
-        return .success
+        // Set the master's origin last: replacing an active main with a mirror follower makes
+        // WindowServer temporarily promote a secondary. The final origin assigns the intended
+        // primary after the mirroring graph and mode are complete.
+        return setOrigin(virtualID, x, y)
     }
 
     /// Synchronous for the app's Quit/signal path. Never writes persistent display preferences.
     @discardableResult
     func restore() -> Bool {
         guard !originals.isEmpty || temporary != nil else { return finishRecovery() }
+        if layout == .extended {
+            if let display = temporary, display.displayID != 0 { retiringVirtualDisplayID = display.displayID }
+            temporary?.destroy()
+            temporary = nil
+            originals = []; originalIdentityCounts.removeAll(); observedOffline.removeAll()
+            capturedID = 0; originalMainID = 0; originalSystemMainID = 0; primaryOrigins = [:]
+            resolution = nil; requestedFPS = nil; virtualDesktopClockHz = nil; preparedVirtualMode = nil
+            selectedPhysicalMode = nil; pendingMirror = false; didAttemptDisplayChange = false
+            return finishRecovery()
+        }
         // If recording the journal failed, no display API has been called yet. Do not change a
         // user's display just to clean up a transaction that never started.
         if !didAttemptDisplayChange {
             originals = []; originalIdentityCounts.removeAll(); observedOffline.removeAll()
             capturedID = 0; originalMainID = 0; originalSystemMainID = 0; primaryOrigins = [:]
-            resolution = nil; requestedFPS = nil; virtualDesktopClockFPS = nil; preparedVirtualMode = nil
+            resolution = nil; requestedFPS = nil; virtualDesktopClockHz = nil; preparedVirtualMode = nil
             selectedPhysicalMode = nil
             return finishRecovery()
         }
@@ -536,6 +765,7 @@ final class DuoDesktopDisplay {
                 }
             } catch { success = false; print("Duo desktop detach failed: \(error.localizedDescription)") }
         }
+        if let display = temporary, display.displayID != 0 { retiringVirtualDisplayID = display.displayID }
         temporary?.destroy()
         temporary = nil
         preparedVirtualMode = nil
@@ -573,8 +803,12 @@ final class DuoDesktopDisplay {
         primaryOrigins = [:]
         resolution = nil
         requestedFPS = nil
-        virtualDesktopClockFPS = nil
-        if success {
+        virtualDesktopClockHz = nil
+        // A failed detach can itself remove the transient mirror, restoring the original mode
+        // before the error is returned. Judge the resulting state, not the API result alone: an
+        // already-restored display must not block every later connection indefinitely.
+        let configurationFailed = !success
+        do {
             var pending = unavailable
             let verifiedIdentities = onlineIdentitySnapshot()
             for old in live {
@@ -601,6 +835,7 @@ final class DuoDesktopDisplay {
             observedOffline.formIntersection(Set(originals.map(\.id)))
             success = pending.isEmpty
             if success {
+                if configurationFailed { print("Duo desktop: configuration reported an error, but the original displays are verified restored") }
                 originalSystemMainID = 0; originalIdentityCounts.removeAll(); didAttemptDisplayChange = false
                 success = finishRecovery()
                 if success { print("Duo desktop: original Mac display configuration restored") }
@@ -608,8 +843,6 @@ final class DuoDesktopDisplay {
             } else {
                 print("Duo desktop: \(pending.count) original display(s) still need restoration; snapshot retained")
             }
-        } else if !unavailable.isEmpty {
-            print("Duo desktop: \(unavailable.count) original display(s) unavailable; restoration snapshot retained")
         }
         // Preserve the snapshot on failure: the next stop/reconnect/exit can retry restoration.
         return success
@@ -906,7 +1139,11 @@ final class DuoDesktopDisplay {
 
     private func configure(_ body: (CGDisplayConfigRef) -> CGError) throws {
         #if DUO_DISPLAY_RESTORE_TESTING
-        if testInterceptConfiguration { testConfigurationAttempts += 1; return }
+        if testInterceptConfiguration {
+            testConfigurationAttempts += 1
+            if testRejectConfiguration { throw Failure.modeRejected }
+            return
+        }
         #endif
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let config else { throw Failure.modeRejected }
@@ -932,6 +1169,44 @@ final class DuoDesktopDisplay {
     }
 
     #if DUO_DISPLAY_RESTORE_TESTING
+    /// Exercises the production extension mode-operation gate with a read-only real mode and a
+    /// fake display ID. The injected closure records calls; it never changes a display.
+    static func inspectExtendedModeWritesForTesting() -> [Bool]? {
+        let physical = CGMainDisplayID()
+        guard physical != kCGNullDirectDisplay, let mode = CGDisplayCopyDisplayMode(physical) else { return nil }
+        let virtual: CGDirectDisplayID = physical == UInt32.max ? UInt32.max - 1 : UInt32.max
+        var called: [CGDirectDisplayID] = []
+        let accepted = configureExtendedMode(virtualID: virtual, originalIDs: [physical], mode: mode) { id, _ in
+            called.append(id); return .success
+        }
+        let virtualOnly = accepted == .success && called == [virtual]
+        called.removeAll()
+        let physicalRejected = configureExtendedMode(virtualID: physical, originalIDs: [physical], mode: mode) { id, _ in
+            called.append(id); return .success
+        } == .illegalArgument && called.isEmpty
+        let nullRejected = configureExtendedMode(virtualID: kCGNullDirectDisplay, originalIDs: [physical], mode: mode) { id, _ in
+            called.append(id); return .success
+        } == .illegalArgument && called.isEmpty
+        let errorPropagated = configureExtendedMode(virtualID: virtual, originalIDs: [physical], mode: mode) { _, _ in
+            .illegalArgument
+        } == .illegalArgument
+        return [virtualOnly, physicalRejected, nullRejected, errorPropagated]
+    }
+
+    /// The real extension cleanup path must not run a display configuration transaction for the
+    /// saved physical screen, even if one was recorded before a failed creation.
+    static func inspectExtendedRestoreForTesting() -> Bool {
+        let desktop = DuoDesktopDisplay(layout: .extended)
+        guard let originals = try? desktop.snapshot(), !originals.isEmpty else { return false }
+        desktop.originals = originals
+        desktop.originalMainID = CGMainDisplayID()
+        desktop.originalSystemMainID = CGMainDisplayID()
+        desktop.didAttemptDisplayChange = true
+        desktop.testInterceptConfiguration = true
+        let removed = desktop.restore()
+        return removed && desktop.originals.isEmpty && desktop.testConfigurationAttempts == 0
+    }
+
     /// Uses the current main mode as a read-only stand-in for a virtual desktop. No display is
     /// created, configured or mirrored. The caller may capture only its own separate window.
     static func readOnlySamplingFixtureForTesting() throws -> DuoDesktopDisplay {
@@ -950,7 +1225,7 @@ final class DuoDesktopDisplay {
         desktop.originalMainID = id; desktop.originalSystemMainID = id; desktop.capturedID = id
         desktop.selectedPhysicalMode = main.mode
         desktop.resolution = native; desktop.requestedFPS = 120
-        desktop.virtualDesktopClockFPS = ceiling
+        desktop.virtualDesktopClockHz = main.mode.refreshRate
         desktop.testVirtualSampling = true
         desktop.testPreventDisplayMutation = true; desktop.testInterceptConfiguration = true
         desktop.testSnapshotReads = 0
@@ -963,20 +1238,21 @@ final class DuoDesktopDisplay {
             let desktop = try readOnlySamplingFixtureForTesting()
             guard let native = desktop.resolution, let ceiling = desktop.currentSamplingCeiling else { return nil }
             let id = desktop.capturedID
+            let clock = desktop.virtualDesktopClockHz
             let virtualReady = desktop.activeModeMatches && desktop.currentSamplingCeiling == ceiling
             let down = try await desktop.prepareGraphics(native, fps: 60)
-            let downOnlySampled = down == id && desktop.requestedFPS == 60 && desktop.virtualDesktopClockFPS == ceiling
+            let downOnlySampled = down == id && desktop.requestedFPS == 60 && desktop.virtualDesktopClockHz == clock
                 && desktop.activeModeMatches && desktop.needsCadenceResampling && desktop.testSnapshotReads == 0
                 && desktop.testConfigurationAttempts == 0
             let up = try await desktop.prepareGraphics(native, fps: 120)
-            let upOnlySampled = up == id && desktop.requestedFPS == 120 && desktop.virtualDesktopClockFPS == ceiling
+            let upOnlySampled = up == id && desktop.requestedFPS == 120 && desktop.virtualDesktopClockHz == clock
                 && desktop.activeModeMatches && desktop.testSnapshotReads == 0 && desktop.testConfigurationAttempts == 0
             var rejectedTooFast = false
             do { _ = try await desktop.prepareGraphics(native, fps: ceiling + 1) }
             catch Failure.samplingClockTooSlow { rejectedTooFast = true }
             let rejectedWithoutReconfiguration = rejectedTooFast && desktop.requestedFPS == 120
                 && desktop.activeModeMatches && desktop.testSnapshotReads == 0 && desktop.testConfigurationAttempts == 0
-            desktop.testVirtualSampling = false; desktop.virtualDesktopClockFPS = nil
+            desktop.testVirtualSampling = false; desktop.virtualDesktopClockHz = nil
             let physical = try await desktop.prepareGraphics(native, fps: 60)
             let physicalOnlySampled = physical == id && desktop.requestedFPS == 60 && desktop.activeModeMatches
                 && desktop.testSnapshotReads == 0 && desktop.testConfigurationAttempts == 0
@@ -1004,7 +1280,8 @@ final class DuoDesktopDisplay {
             desktop.testInterceptConfiguration = true
             var rejected = false
             do { _ = try await desktop.prepareGraphics(wanted, fps: 60, deferMirror: deferMirror) }
-            catch Failure.refreshInvariantUnavailable { rejected = true }
+            catch Failure.refreshInvariantUnavailable { rejected = layout == .nativePrimary }
+            catch Failure.modeRejected { rejected = layout == .mirrored }
             catch { }
             rejectedWithoutMutation = rejectedWithoutMutation && rejected && desktop.testConfigurationAttempts == 0
                 && !desktop.didAttemptDisplayChange && desktop.temporary == nil && !desktop.pendingMirror
@@ -1049,8 +1326,11 @@ final class DuoDesktopDisplay {
             && !unchanged([home, replaced, virtual]) && !unchanged([home, other, alreadyMirrored])
             && !unchanged([home, other, wrongVirtual]) && !unchanged([home, other])
             && !unchanged(current, mainID: peer)
-        let expected = ["origin:\(virtualID):0:0", "mirror:\(main):\(virtualID)",
-                        "mode:\(virtualID)", "mode:\(main)", "mode:\(peer)"]
+        let rebasedHome = Original(id: main, mode: mode, origin: CGPoint(x: -300, y: 0), mirror: 0, identity: homeIdentity)
+        let rebasedOther = Original(id: peer, mode: mode, origin: .zero, mirror: 0, identity: peerIdentity)
+        let rebasingAccepted = unchanged([rebasedHome, rebasedOther, virtual], mainID: peer)
+        let expected = ["mirror:\(main):\(virtualID)", "mode:\(virtualID)",
+                        "origin:\(peer):300:0", "origin:\(virtualID):0:0"]
         func attempt(failAt: Int?) -> (CGError, [String]) {
             var events: [String] = []
             func step(_ value: String) -> CGError {
@@ -1080,7 +1360,7 @@ final class DuoDesktopDisplay {
             setOrigin: { _, _, _ in invoked = true; return .success },
             setMirror: { _, _ in invoked = true; return .success },
             setMode: { _, _ in invoked = true; return .success })
-        return [topologyChecks, ordered, shortCircuits,
+        return [topologyChecks && rebasingAccepted, ordered, shortCircuits,
                 invalid == .illegalArgument && invalidHome == .illegalArgument && !invoked]
     }
 
@@ -1244,6 +1524,31 @@ final class DuoDesktopDisplay {
                 unique.0 && !unique.1 && unique.3 == 1,
                 !changedDuringRestore && !changing.originals.isEmpty && changing.observedOffline.contains(id)
                     && changing.testConfigurationAttempts == 1]
+    }
+
+    /// Reproduce a rejected configuration without calling CoreGraphics configuration APIs. If the
+    /// original state is already present, it may be released; an actual mismatch stays pending.
+    static func inspectRejectedRestoreForTesting() -> [Bool]? {
+        let id = CGMainDisplayID()
+        guard isDisplayOnline(id), let mode = CGDisplayCopyDisplayMode(id) else { return nil }
+        let origin = CGDisplayBounds(id).origin, mirror = CGDisplayMirrorsDisplay(id)
+        let identity = DisplayRestoreIdentity(vendor: 42, model: 7, serial: 1234, builtIn: false)
+        func run(origin wanted: CGPoint) -> (Bool, Bool, Int) {
+            let desktop = DuoDesktopDisplay()
+            desktop.originals = [Original(id: id, mode: mode, origin: wanted, mirror: mirror, identity: identity)]
+            desktop.originalSystemMainID = id
+            desktop.originalIdentityCounts = [identity: 1]
+            desktop.didAttemptDisplayChange = true
+            desktop.testInventory = { [id: identity] }
+            desktop.testInterceptConfiguration = true
+            desktop.testRejectConfiguration = true
+            let result = desktop.restore()
+            return (result, !desktop.originals.isEmpty, desktop.testConfigurationAttempts)
+        }
+        let alreadyRestored = run(origin: origin)
+        let stillDifferent = run(origin: CGPoint(x: origin.x + 1, y: origin.y))
+        return [alreadyRestored.0 && !alreadyRestored.1 && alreadyRestored.2 == 1,
+                !stillDifferent.0 && stillDifferent.1 && stillDifferent.2 == 1]
     }
 
     static func inspectBlockedPrepareForTesting() async -> Bool? {

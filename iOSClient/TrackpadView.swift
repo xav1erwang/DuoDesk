@@ -38,7 +38,7 @@ struct Trackpad: View {
                          verticalSpan: verticalSpan, sendGesture: sendGesture)
             VStack {
                 Spacer(minLength: 0)
-                Text("Drag to move the pointer. Tap to click, two fingers to scroll.")
+                Text("拖动可移动指针，轻点可点击，双指可滚动。")
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.muted)
                     .multilineTextAlignment(.center)
@@ -84,6 +84,8 @@ struct TrackpadView: UIViewRepresentable {
     let latched: KeyModifiers
     let onModifiersConsumed: () -> Void
     var verticalSpan: CGFloat? = nil
+    /// Optional picture size for equal horizontal and vertical pointer travel in the picture.
+    var pointerFrameSize: CGSize? = nil
     var sendGesture: (TrackpadGestures.Gesture, Int) -> Bool = { _, _ in false }
 
     func makeUIView(context: Context) -> TrackpadSurface {
@@ -103,6 +105,7 @@ struct TrackpadView: UIViewRepresentable {
         uiView.onFingers = onFingers
         uiView.latchedModifiers = latched
         uiView.verticalSpan = verticalSpan
+        uiView.pointerFrameSize = pointerFrameSize
         uiView.sendGesture = sendGesture
         // Called from a gesture callback, never from inside a SwiftUI update, so the binding write
         // it performs needs no hop to the next runloop turn.
@@ -133,6 +136,8 @@ final class TrackpadSurface: UIView, UIGestureRecognizerDelegate {
     var verticalSpan: CGFloat?
     /// `verticalSpan`, or the pad's height.
     private var ySpan: CGFloat { verticalSpan.flatMap { $0 > 0 ? $0 : nil } ?? bounds.height }
+    /// The picture drawn above the Duo controls; only pointer motion uses this aspect ratio.
+    var pointerFrameSize: CGSize?
     /// A three- or four-finger gesture the pad decided, for the Mac (`StreamClient.sendGesture`,
     /// which checks this device's switch and the Mac's `gestures`, and shows the Desktop first while
     /// a window streams). True when it went, which the light tick follows.
@@ -225,12 +230,14 @@ final class TrackpadSurface: UIView, UIGestureRecognizerDelegate {
         pan.delegate = self
         addGestureRecognizer(pan)
 
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        let tap = TrackpadTapRecognizer(target: self, action: #selector(handleTap))
+        tap.maximumMovement = Self.trackSlop
         tap.numberOfTapsRequired = 1
         tap.numberOfTouchesRequired = 1
         addGestureRecognizer(tap)
 
-        let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap))
+        let twoFingerTap = TrackpadTapRecognizer(target: self, action: #selector(handleTwoFingerTap))
+        twoFingerTap.maximumMovement = Self.trackSlop
         twoFingerTap.numberOfTapsRequired = 1
         twoFingerTap.numberOfTouchesRequired = 2
         addGestureRecognizer(twoFingerTap)
@@ -240,9 +247,12 @@ final class TrackpadSurface: UIView, UIGestureRecognizerDelegate {
         // actually moves the pointer while the button is held.
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress))
         longPress.minimumPressDuration = 0.45
+        longPress.allowableMovement = Self.trackSlop
         longPress.numberOfTouchesRequired = 1
         longPress.delegate = self
         addGestureRecognizer(longPress)
+        tap.require(toFail: longPress)
+        twoFingerTap.require(toFail: longPress)
 
         // Only counts: it never recognizes, takes no touch from anyone and delays nothing.
         fingerCounter.onCount = { [weak self] n in self?.onFingers(n) }
@@ -266,9 +276,11 @@ final class TrackpadSurface: UIView, UIGestureRecognizerDelegate {
     // MARK: - Pointer
 
     private func moveCursor(dx: CGFloat, dy: CGFloat) {
-        guard bounds.width > 0, bounds.height > 0 else { return }
+        guard bounds.width > 0, bounds.height > 0,
+              let motion = PadCursor.motion(dx: dx, dy: dy, padWidth: bounds.width,
+                                            verticalSpan: ySpan, frameSize: pointerFrameSize) else { return }
         catchUp()
-        pad.move(dx: Double(dx / bounds.width * Self.travel), dy: Double(dy / ySpan * Self.travel))
+        pad.move(dx: Double(motion.x * Self.travel), dy: Double(motion.y * Self.travel))
         // The sprite first, since it is the feedback the finger is waiting for; then the Mac, whose
         // cursor still has to follow for clicks to land there. No rate limit needed here:
         // sendInput coalesces moves to one every 8 ms.
@@ -589,6 +601,48 @@ final class TrackpadSurface: UIView, UIGestureRecognizerDelegate {
     /// `click`: a tap on the pad, which clicks where the cursor is.
     func scriptClick() { click(down: .leftDown, up: .leftUp) }
     #endif
+}
+
+/// UIKit's tap tolerance is larger than the pointer tracker's movement threshold. Fail the tap
+/// as soon as either finger moves the pointer, including a final movement delivered at lift-off.
+/// Remember the furthest excursion: moving away and back is still a stroke, never a click.
+private final class TrackpadTapRecognizer: UITapGestureRecognizer {
+    var maximumMovement: CGFloat = 2
+    private var starts: [UITouch: CGPoint] = [:]
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches { starts[touch] = touch.location(in: view) }
+        super.touchesBegan(touches, with: event)
+    }
+
+    private func rejectMovement(_ touches: Set<UITouch>, event: UIEvent) -> Bool {
+        for touch in touches {
+            guard let start = starts[touch] else { continue }
+            for sample in event.coalescedTouches(for: touch) ?? [touch] {
+                let point = sample.location(in: view)
+                if hypot(point.x - start.x, point.y - start.y) > maximumMovement {
+                    state = .failed
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard !rejectMovement(touches, event: event) else { return }
+        super.touchesMoved(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard !rejectMovement(touches, event: event) else { return }
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func reset() {
+        super.reset()
+        starts.removeAll()
+    }
 }
 
 // MARK: - Finger counter

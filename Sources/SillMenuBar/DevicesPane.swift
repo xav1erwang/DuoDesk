@@ -15,7 +15,7 @@ struct LiveDevicesPane: View {
             Form {
                 HStack(spacing: 12) {
                     ProgressView().controlSize(.small).accessibilityHidden(true)
-                    Text("Reading saved pairing information…")
+                    Text("正在读取已保存的配对信息…")
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("duodesk.identity.loading")
@@ -66,21 +66,21 @@ struct DevicesPane: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Require pairing", isOn: $requirePairing)
+                Toggle("要求配对", isOn: $requirePairing)
                     .disabled(unavailable != nil)
                 if let problem = unavailable {
-                    Warning("Devices can’t connect: Sill couldn’t use its key in your keychain (\(withoutFullStop(problem))). Quit Sill and open it again, and choose Always Allow if the keychain asks.")
+                    Warning("设备无法连接：DUO你电脑 无法使用钥匙串中的密钥（\(withoutFullStop(problem))）。请重新打开应用；若钥匙串询问，请选择始终允许。")
                 } else if let p = requirePairingProblem {
                     let reason = withoutFullStop(p.reason)
                     Warning(p.wanted
-                            ? "Pairing is required until Sill quits: Sill couldn’t update the keychain (\(reason)). Try again."
-                            : "Pairing is still required: Sill couldn’t update the keychain (\(reason)). Try again.")
+                            ? "退出应用前仍要求配对：无法更新钥匙串（\(reason)）。请重试。"
+                            : "仍然要求配对：无法更新钥匙串（\(reason)）。请重试。")
                 }
             } footer: {
                 if requirePairing {
-                    Footnote("Each iPhone or iPad pairs once: over the USB cable by itself, or on Wi\u{2011}Fi with a code this Mac shows when the device asks. Everything devices send and receive is encrypted.")
+                    Footnote("每台 iPhone 或 iPad 只需配对一次：可通过 USB 连接，或在 Wi-Fi 下输入 Mac 显示的配对码。设备收发的内容均经过加密。")
                 } else {
-                    Label("Any device on your network (or nearby, with Direct Wireless Connection on) and any app on this Mac can see and control it without pairing. Connections are still encrypted.",
+                    Label("网络中的设备、开启无线直连后附近的设备，以及此 Mac 上的应用，都可无需配对查看和控制此 Mac。连接仍会加密。",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote)
                         .foregroundStyle(.orange)
@@ -95,16 +95,16 @@ struct DevicesPane: View {
     private var pairedDevices: some View {
         Section {
             if let removedName {
-                Text("\(removedName) can no longer connect. To use it again, pair it again.")
+                Text("\(removedName) 已无法连接；如需再次使用，请重新配对。")
             }
             if let removeProblem {
-                Warning("\(removeProblem.name) is still paired: Sill couldn’t update the keychain (\(withoutFullStop(removeProblem.reason))). Try again.")
+                Warning("\(removeProblem.name) 仍处于配对状态：无法更新钥匙串（\(withoutFullStop(removeProblem.reason))）。请重试。")
             }
             if unavailable != nil {
                 // The trust list lives with the key: unread, not empty.
-                Text("Your paired devices show here once Sill can use its key again.").foregroundStyle(.secondary)
+                Text("应用恢复使用密钥后，将在此显示已配对设备。").foregroundStyle(.secondary)
             } else if status.paired.isEmpty {
-                Text("No paired devices yet.").foregroundStyle(.secondary)
+                Text("尚无已配对设备。").foregroundStyle(.secondary)
             }
             ForEach(status.paired) { device in
                 PairedDeviceRow(device: device, now: now,
@@ -121,12 +121,12 @@ struct DevicesPane: View {
                                 },
                                 rename: { actions.rename(device.id, $0) })
             }
-            Button("Pair iPhone or iPad…") { actions.pair() }
+            Button("配对 iPhone 或 iPad…") { actions.pair() }
                 .disabled(unavailable != nil)
         } header: {
-            Text("Paired Devices")
+            Text("已配对设备")
         } footer: {
-            Footnote("A paired device can see and control this Mac on your network, nearby, and from afar while Remote Access is on. If one is lost, remove it here.")
+            Footnote("已配对设备可在本地网络或附近查看和控制此 Mac；开启远程访问后也可从外网连接。设备丢失时可在此移除。")
         }
     }
 }
@@ -146,10 +146,10 @@ struct PairedDeviceRow: View {
 
     var body: some View {
         LabeledContent {
-            Button("Remove", action: remove)
+            Button("移除", action: remove)
         } label: {
             if editing {
-                TextField("Name", text: $text)
+                TextField("名称", text: $text)
                     .focused($focused)
                     .onSubmit {
                         rename(text)
@@ -159,7 +159,7 @@ struct PairedDeviceRow: View {
             } else {
                 Text(device.name)
                     .onTapGesture(count: 2) { startEditing() }
-                    .accessibilityAction(named: "Rename") { startEditing() }
+                    .accessibilityAction(named: "重命名") { startEditing() }
             }
             Text(Self.detail(device, now: now ?? Date()))
         }
@@ -174,17 +174,30 @@ struct PairedDeviceRow: View {
     /// "Paired Sep 25 over the USB cable · last connected 2 minutes ago over Wi‑Fi", "Paired Sep 24
     /// with the QR code · last connected yesterday through Tailscale".
     static func detail(_ device: PairedDeviceSummary, now: Date) -> String {
-        var out = "Paired \(day(device.pairedAt, now: now))"
-        if let method = device.displayMethod { out += " \(method)" }
+        var out = "配对于 \(day(device.pairedAt, now: now))"
+        if let method = device.displayMethod { out += " · \(translatedRoute(method))" }
         if let seen = device.lastSeen {
             let formatter = RelativeDateTimeFormatter()
+            formatter.locale = Locale(identifier: "zh_Hans_CN")
             formatter.unitsStyle = .full
             formatter.dateTimeStyle = .named
-            let when = now.timeIntervalSince(seen) < 60 ? "just now" : formatter.localizedString(for: seen, relativeTo: now)
-            out += " · last connected \(when)"
-            if let route = device.lastRoute { out += " \(route)" }
+            let when = now.timeIntervalSince(seen) < 60 ? "刚刚" : formatter.localizedString(for: seen, relativeTo: now)
+            out += " · 上次连接：\(when)"
+            if let route = device.lastRoute { out += " · \(translatedRoute(route))" }
         }
         return out
+    }
+
+    private static func translatedRoute(_ value: String) -> String {
+        switch value {
+        case "over the USB cable": return "通过 USB 线缆"
+        case "over Wi-Fi", "over Wi‑Fi": return "通过 Wi-Fi"
+        case "with the QR code": return "通过二维码"
+        case "with a code": return "通过配对码"
+        default:
+            if value.hasPrefix("through ") { return "通过 " + String(value.dropFirst("through ".count)) }
+            return value
+        }
     }
 
     static func day(_ date: Date, now: Date) -> String {

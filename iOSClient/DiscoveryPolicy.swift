@@ -750,11 +750,11 @@ enum DiscoveryPolicy {
     /// hears it once), and after `reconnectDials` that the dials stopped, in the words the remote
     /// path's end uses.
     static func reconnectLine(mac: String, failed: Int, direct: Bool) -> String {
-        if failed >= reconnectDials { return "Stopped trying to reach \(mac). Tap it to try again." }
+        if failed >= reconnectDials { return "已停止尝试连接 \(mac)。点按该 Mac 可重试。" }
         if failed >= reconnectQuietAfter {
-            return "\(mac) isn\u{2019}t answering. It may be asleep. Sill keeps trying, or tap it to try now."
+            return "\(mac) 没有响应，可能已睡眠。正在继续尝试，也可点按该 Mac 立即重试。"
         }
-        return direct ? "Reconnecting to \(mac) directly\u{2026}" : "Reconnecting to \(mac)\u{2026}"
+        return direct ? "正在通过直连重新连接 \(mac)…" : "正在重新连接 \(mac)…"
     }
 
     /// What this device watched when a window list says nothing streams (`autoDesktop`).
@@ -1029,7 +1029,7 @@ enum DiscoveryPolicy {
 
     /// The status line after a tap that dialed nothing because the Mac's Sill is too old.
     static func updateSillStatus(mac: String) -> String {
-        "\(mac) runs an older Sill. Update Sill on the Mac to connect."
+        "\(mac) 上的 DUO你电脑版本过旧，请更新 Mac 端后连接。"
     }
 
     /// Whether this device's connection runs over the USB cable to the Mac, as this device sees it
@@ -1396,67 +1396,67 @@ enum DiscoveryPolicy {
     /// calls the Mac; `device` this device's kind ("iPad").
     enum HomeCopy {
         static func pairing(mac: String, cable: Bool) -> String {
-            cable ? "Pairing with \(mac) over the cable\u{2026}" : "Pairing with \(mac)\u{2026}"
+            cable ? "正在通过数据线与 \(mac) 配对…" : "正在与 \(mac) 配对…"
         }
-        static func pairedOverCable(mac: String) -> String { "Paired with \(mac) over the cable." }
+        static func pairedOverCable(mac: String) -> String { "已通过数据线与 \(mac) 配对。" }
         /// The status line while the home card is up, and the card's scan line.
-        static func showing(mac: String, device: String) -> String { "\(mac) is showing a code. Point this \(device) at it." }
+        static func showing(mac: String, device: String) -> String { "\(mac) 正在显示配对码，请用这台 \(device) 扫描。" }
         /// The home card (§7.7): its title, a heading; its typed path's line, which is also the
         /// line it collapses to while the code has the keyboard; the viewfinder's caption, and
         /// what VoiceOver says for the viewfinder.
-        static func cardTitle(mac: String) -> String { "Pair with \(mac)" }
-        static func typeCode(mac: String) -> String { "Type the code \(mac) shows." }
-        static func viewfinderCaption(mac: String) -> String { "Point at the code on \(mac)" }
-        static func viewfinderLabel(mac: String) -> String { "Camera. Point it at the code on \(mac)." }
+        static func cardTitle(mac: String) -> String { "与 \(mac) 配对" }
+        static func typeCode(mac: String) -> String { "输入 \(mac) 显示的配对码。" }
+        static func viewfinderCaption(mac: String) -> String { "对准 \(mac) 上的配对码" }
+        static func viewfinderLabel(mac: String) -> String { "相机。请对准 \(mac) 上的配对码。" }
         /// Pair This iPad… over a session at home that needs no pairing (the Settings panel's
         /// footnote, `AwayFromHome.pairThisDevice(atHome: true)`).
         static func pairThisDeviceAtHome(mac: String, device: String) -> String {
-            "\(mac) lets devices connect without pairing. Pair this \(device) once to keep connecting if that changes, and to reach \(mac) away from home while Remote Access is on. \(mac) shows a code; scan it with this \(device)."
+            "\(mac) 当前允许不配对连接。配对这台 \(device) 后，即使设置改变也能继续连接；开启远程访问后还可在外连接。请用这台 \(device) 扫描 \(mac) 显示的配对码。"
         }
         /// Pair This iPad…'s errors over a stream at home, where no row can be tapped: the Mac
         /// could not prove it knows the code; nothing answered the pairing connection. (A refused
         /// code says what the remote path's does: choose Pair iPhone or iPad… on the Mac.)
         static func proofFailedOverStream(mac: String) -> String {
-            "Pairing didn\u{2019}t finish: \(mac) couldn\u{2019}t show it knows the code."
+            "配对未完成：无法验证 \(mac) 是否持有配对码。"
         }
-        static func noAnswerOverStream(mac: String) -> String { "\(mac) didn\u{2019}t answer. Try again." }
+        static func noAnswerOverStream(mac: String) -> String { "\(mac) 没有响应，请重试。" }
         /// Pair This iPad…'s line under its title over a session at home that speaks TLS, from the
         /// Mac's answer to its ask (`overlayLine`): asking; a code showing; none shown by itself;
         /// the Mac locked. Never "Tap": over a stream there is no row.
-        static func overlayAsking(mac: String) -> String { "Asking \(mac) for a code\u{2026}" }
-        static func overlayShowing(mac: String) -> String { "\(mac) is showing a code now." }
+        static func overlayAsking(mac: String) -> String { "正在向 \(mac) 请求配对码…" }
+        static func overlayShowing(mac: String) -> String { "\(mac) 正在显示配对码。" }
         static func overlayOpenOnMac(mac: String) -> String {
-            "\(mac) didn\u{2019}t show a code by itself. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu."
+            "\(mac) 未自动显示配对码，请在 Mac 的 DUO你电脑菜单中打开配对。"
         }
         static func overlayLocked(mac: String, device: String) -> String {
-            "Unlock \(mac), then choose Pair This \(device)\u{2026} again."
+            "请解锁 \(mac)，然后再次选择配对这台 \(device)。"
         }
         static func openOnMac(mac: String) -> String {
-            "\(mac) didn\u{2019}t show a code. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap \(mac) again."
+            "\(mac) 未显示配对码，请在 Mac 的 DUO你电脑菜单中打开配对，然后再次点按 \(mac)。"
         }
-        static func locked(mac: String) -> String { "Unlock \(mac), then tap it again." }
-        static func removed(mac: String, device: String) -> String { "\(mac) removed this \(device). Tap it to pair again." }
+        static func locked(mac: String) -> String { "请解锁 \(mac)，然后再次点按该 Mac。" }
+        static func removed(mac: String, device: String) -> String { "\(mac) 已移除这台 \(device)，点按该 Mac 可重新配对。" }
         /// Another key answered as the saved Mac and no other row of it was left (`afterPinRefused`).
         static func newKey(mac: String, device: String) -> String {
-            "\(mac) has a new key since this \(device) paired. Tap it to pair again."
+            "这台 \(device) 配对后，\(mac) 的密钥已更换。点按该 Mac 可重新配对。"
         }
         static func pairingRequired(mac: String, device: String) -> String {
-            "\(mac) now asks devices to pair. Tap it to pair this \(device)."
+            "\(mac) 现在要求设备配对。点按该 Mac 可配对这台 \(device)。"
         }
         /// The home card's errors, under its field or in its place (`homeRefusal`). After a stop
         /// or a closed code the Mac keeps this device quiet (a cancel on the Mac, a stop), so the
         /// words send the person to its menu first; after an expiry a tap is enough.
         static func stopped(mac: String) -> String {
-            "\(mac) stopped pairing after too many wrong codes. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap \(mac) again."
+            "\(mac) 因多次输入错误而停止配对。请在 Mac 的 DUO你电脑菜单中重新打开配对，然后再次点按 \(mac)。"
         }
-        static func expired(mac: String) -> String { "That code expired. Tap \(mac) for a new one." }
+        static func expired(mac: String) -> String { "配对码已过期，点按 \(mac) 可获取新配对码。" }
         static func closed(mac: String) -> String {
-            "That code no longer works. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap \(mac) again."
+            "配对码已失效，请在 Mac 的 DUO你电脑菜单中重新打开配对，然后再次点按 \(mac)。"
         }
         static func proofFailed(mac: String) -> String {
-            "Pairing didn\u{2019}t finish: \(mac) couldn\u{2019}t show it knows the code. Tap it to try again."
+            "配对未完成：无法验证 \(mac) 是否持有配对码。点按该 Mac 可重试。"
         }
         /// Nothing answered the ask or a proof at the row (it went, or Sill quit meanwhile).
-        static func noAnswer(mac: String) -> String { "\(mac) didn\u{2019}t answer. Check that Sill is open on it, then tap it again." }
+        static func noAnswer(mac: String) -> String { "\(mac) 没有响应，请检查 Mac 上的 DUO你电脑是否已打开，然后再次点按该 Mac。" }
     }
 }

@@ -60,19 +60,56 @@ public struct Viewport: Codable, Hashable {
     /// Optional for old clients. A host must not substitute a lower resolution on slow links.
     public var desktopResolution: DuoDesktopResolution?
 
+    /// Request a separate extended display at `desktopResolution`, not a mirror of the Mac's
+    /// desktop. A device sends true only after this connection's host advertises support in its
+    /// WindowList. Older hosts ignore unknown JSON keys and must never receive this request.
+    public var extendedDesktop: Bool?
+    /// Identifies one extension attempt, so a late failure cannot cancel a later choice.
+    public var extendedRequestID: UUID?
+    /// This client understands a nonterminal native-mirror failure in WindowList and can offer
+    /// the separate extended-display mode while the connection remains open. Older hosts ignore it.
+    public var recoverableDesktopFailure: Bool?
+    /// Request the current physical desktop mode without changing that mode. Used only after the
+    /// host explicitly offers its current pixel dimensions in a recoverable mirror issue.
+    public var preservePhysicalMode: Bool?
+    /// The one physical desktop to capture or mirror. nil keeps the host's current selection.
+    public var displayID: UInt32?
+
     /// Validate external layout numbers before sizing windows or converting them to integers.
     /// Zero-sized panels remain valid for legacy frame-rate-only requests.
     public var isValid: Bool {
         guard width.isFinite, height.isFinite, (0...32768).contains(width),
-              (0...32768).contains(height), desktopResolution?.isValid ?? true else { return false }
+              (0...32768).contains(height), desktopResolution?.isValid ?? true,
+              extendedDesktop != true || (desktopResolution != nil && extendedRequestID != nil),
+              extendedDesktop == true || extendedRequestID == nil,
+              preservePhysicalMode != true || (desktopResolution != nil && extendedDesktop != true),
+              displayID != 0 else { return false }
         if let scale { return scale.isFinite && (0.0625...16).contains(scale) }
         return true
     }
 
     public init(width: Double, height: Double, scale: Double?, localCursor: Bool? = nil, fps: Int? = nil,
-                desktopResolution: DuoDesktopResolution? = nil) {
+                desktopResolution: DuoDesktopResolution? = nil, extendedDesktop: Bool? = nil,
+                extendedRequestID: UUID? = nil, recoverableDesktopFailure: Bool? = nil,
+                preservePhysicalMode: Bool? = nil, displayID: UInt32? = nil) {
         self.width = width; self.height = height; self.scale = scale; self.localCursor = localCursor; self.fps = fps
         self.desktopResolution = desktopResolution
+        self.extendedDesktop = extendedDesktop
+        self.extendedRequestID = extendedRequestID
+        self.recoverableDesktopFailure = recoverableDesktopFailure
+        self.preservePhysicalMode = preservePhysicalMode
+        self.displayID = displayID
+    }
+}
+
+/// Host → device after a specific extension request. A stale response must be ignored.
+public struct DuoExtendedDesktopStatus: Codable, Hashable, Sendable {
+    public enum State: String, Codable, Sendable { case ready, failed }
+    public var requestID: UUID
+    public var state: State
+    public var message: String?
+    public init(requestID: UUID, state: State, message: String? = nil) {
+        self.requestID = requestID; self.state = state; self.message = message
     }
 }
 

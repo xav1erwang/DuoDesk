@@ -854,22 +854,22 @@ check(texts(words(.bar, P)) == Array(texts(barL).prefix(2)), "bar upright: no Ke
 check(barL.hint == "In the bar at the top, after Apps." && words(.bar, P).hint == "In the bar below the picture, after Apps.", "bar's hints")
 check(texts(words(.bar, L, mac: "Studio")).last == "Keyboard types on Studio, on screen or with a hardware keyboard.", "the Mac's name in the Keyboard row")
 let settingsL = words(.settings, L)
-check(settingsL.title == "Settings" && settingsL.subtitle == nil && settingsL.hint == "The last button in the bar.", "settings: title, hint")
-check(texts(settingsL) == ["Disconnect is at the bottom of Settings.", "Take the Tour is there too, to see this again.",
-                           "Hold your iPad upright for a trackpad and keys."], "settings sideways on iPad")
-check(settingsL.rows.map(\.symbol) == ["xmark.circle", "questionmark.circle", "ipad"], "settings' symbols on iPad")
-check(texts(words(.settings, L, device: "iPhone")).last == "Hold your iPhone upright for a trackpad and keys."
+check(settingsL.title == "设置" && settingsL.subtitle == nil && settingsL.hint == "工具栏中的最后一个按钮。", "settings: title, hint")
+check(texts(settingsL) == ["断开连接可在设置中断开与 Mac 的连接。",
+                           "将 iPad 竖起，即可使用键盘和触控板。"], "settings sideways on iPad")
+check(settingsL.rows.map(\.symbol) == ["xmark.circle", "ipad"], "settings' symbols on iPad")
+check(texts(words(.settings, L, device: "iPhone")).last == "将 iPhone 竖起，即可使用键盘和触控板。"
       && words(.settings, L, device: "iPhone").rows.last?.symbol == "iphone", "the upright row on iPhone")
-check(texts(words(.settings, P)) == Array(texts(settingsL).prefix(2)), "no upright row when upright")
+check(texts(words(.settings, P)) == Array(texts(settingsL).prefix(1)), "no upright row when upright")
 let laptopFirst = words(.laptop, P, first: true)
 check(laptopFirst.title == "Keys and Trackpad" && laptopFirst.subtitle == "Upright, Sill adds keys and a trackpad.", "laptop as a run's first card")
 check(words(.laptop, P, first: false).subtitle == nil, "laptop's subtitle only as a run's first")
 // The iPhone Duo open: its keys and trackpad come with the device on its side (the laptop pose, open
 // flat upright), so the words say so where an iPhone's and the Duo's cover's say upright.
 let duoSettings = words(.settings, L, device: "iPhone", onItsSide: true)
-check(texts(duoSettings).last == "Turn your iPhone on its side for a trackpad and keys." && duoSettings.rows.last?.symbol == "iphone"
-      && duoSettings.rows.last?.spans.first == TourSpan(text: "Turn your iPhone on its side", strong: true), "the Duo's inner display sideways")
-check(texts(duoSettings).prefix(2) == texts(words(.settings, L, device: "iPhone")).prefix(2), "the Duo: the other rows as before")
+check(texts(duoSettings).last == "将 iPhone 横放，即可使用键盘和触控板。" && duoSettings.rows.last?.symbol == "iphone"
+      && duoSettings.rows.last?.spans.first == TourSpan(text: "将 iPhone 横放", strong: true), "the Duo's inner display sideways")
+check(texts(duoSettings).prefix(1) == texts(words(.settings, L, device: "iPhone")).prefix(1), "the Duo: the other rows as before")
 check(words(.laptop, P, device: "iPhone", first: true, onItsSide: true).subtitle == "On its side, Sill adds keys and a trackpad.", "the Duo's laptop card")
 check(words(.laptop, P, device: "iPhone", first: false, onItsSide: true).subtitle == nil, "…only as a run's first")
 check(texts(words(.laptop, P, device: "iPhone", onItsSide: true)) == texts(words(.laptop, P, device: "iPhone")), "the Duo's laptop rows as before")
@@ -891,8 +891,8 @@ let barPhone = words(.bar, F, device: "iPhone")
 check(texts(barPhone) == texts(words(.bar, L, device: "iPhone")) && texts(barPhone).count == 3, "a phone's bar card: as sideways, with Keyboard")
 check(barPhone.hint == "Under the picture: Aa and Keyboard in the first row, the windows in the second.", "a phone's bar hint")
 check(words(.touch, F, device: "iPhone").hint == "The picture of Mac mini is at the top of the screen.", "a phone's picture hint")
-check(words(.settings, F, device: "iPhone").hint == "The last button in the row under the picture."
-      && texts(words(.settings, F, device: "iPhone")) == Array(texts(settingsL).prefix(2)), "a phone's settings card: no upright row")
+check(words(.settings, F, device: "iPhone").hint == "画面下方一排按钮中的最后一个。"
+      && texts(words(.settings, F, device: "iPhone")) == Array(texts(settingsL).prefix(1)), "a phone's settings card: no upright row")
 let laptopPhone = words(.laptop, F, device: "iPhone", first: true)
 check(texts(laptopPhone) == ["cmd, opt, ctrl and shift stay on for the next key or trackpad click: tap cmd, then C, to copy.",
                              "Tap with two fingers on the trackpad to right-click.",
@@ -951,7 +951,8 @@ for layout in [L, P, F] {
         for row in words(step, layout, first: true).rows + words(step, layout, first: true, thumbnails: false).rows {
             // Read as its words (the key row's caps by name), never with the symbol's name before them.
             check(!row.spoken.isEmpty && !row.spoken.hasPrefix(row.symbol) && !(row.symbol.contains(".") && row.spoken.contains(row.symbol))
-                  && (row.spoken == row.text || row.symbol == "command") && row.spoken.hasSuffix("."), "\(step): a row read whole: \(row.spoken)")
+                  && (row.spoken == row.text || row.symbol == "command")
+                  && (row.spoken.hasSuffix(".") || row.spoken.hasSuffix("。")), "\(step): a row read whole: \(row.spoken)")
         }
     }
 }
@@ -1028,11 +1029,11 @@ do {
 
 check(TourPolicy.spokenTitle(barL, index: 1, count: 3) == "Windows and Text Size, step 2 of 3", "VoiceOver hears the count")
 check(TourPolicy.spokenTitle(laptopFirst, index: 0, count: 1) == "Keys and Trackpad", "a one-card run has no count")
-check(TourPolicy.skipTitle == "Skip" && TourPolicy.nextTitle == "Next" && TourPolicy.doneTitle == "Done", "the buttons")
-check(TourPolicy.skipHint == "Ends the tour. Take the Tour in Settings shows it again.", "Skip's hint")
-check(TourPolicy.takeTourTitle == "Take the Tour", "the Settings row")
-check(TourPolicy.takeTourFootnote(device: "iPad") == "A short tour of Sill’s controls on this iPad.", "its footnote")
-check(TourPolicy.takeTourHint(device: "iPhone") == "Shows how to use Sill on this iPhone.", "its hint")
+check(TourPolicy.skipTitle == "跳过" && TourPolicy.nextTitle == "下一步" && TourPolicy.doneTitle == "完成", "the buttons")
+check(TourPolicy.skipHint == "结束使用指南。", "Skip's hint")
+check(TourPolicy.takeTourTitle == "使用指南", "the Settings row")
+check(TourPolicy.takeTourFootnote(device: "iPad") == "简要介绍如何在这台 iPad 上使用 DUO你电脑。", "its footnote")
+check(TourPolicy.takeTourHint(device: "iPhone") == "了解如何在这台 iPhone 上使用 DUO你电脑。", "its hint")
 
 print("\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -3,12 +3,18 @@
 import AppKit
 import CoreGraphics
 import StreamProtocol
+import ScreenCaptureKit
+import ImageIO
+import UniformTypeIdentifiers
 
 setbuf(stdout, nil)
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let usesPrimary = CommandLine.arguments.contains("--primary")
 let switchesRate = CommandLine.arguments.contains("--rate-switch")
+let switchesSize = CommandLine.arguments.contains("--size-switch")
+let selectedPhysicalTarget = CommandLine.arguments.first(where: { $0.hasPrefix("--display-id=") })
+    .flatMap { UInt32($0.dropFirst("--display-id=".count)) }
 let slowNativeMode = CommandLine.arguments.contains("--slow-native")
 let nativePrimary = CommandLine.arguments.contains("--native-primary")
 let fullscreen = CommandLine.arguments.contains("--fullscreen")
@@ -82,6 +88,26 @@ func ownWindowBounds(_ window: NSWindow) -> CGRect? {
     return CGRect(dictionaryRepresentation: bounds as CFDictionary)
 }
 
+@MainActor
+func capturePreview(_ id: CGDirectDisplayID, target: CGDirectDisplayID, stage: String) async throws {
+    guard let directory = ProcessInfo.processInfo.environment["DUO_DISPLAY_PREVIEW_DIR"] else { return }
+    guard CGPreflightScreenCaptureAccess() else { throw DuoDesktopDisplay.Failure.screenPermission }
+    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+    guard let display = content.displays.first(where: { $0.displayID == id }) else { throw DuoDesktopDisplay.Failure.displayUnavailable }
+    let config = SCStreamConfiguration()
+    let scale = min(480 / display.frame.width, 300 / display.frame.height)
+    config.width = max(2, Int(display.frame.width * scale)); config.height = max(2, Int(display.frame.height * scale))
+    config.showsCursor = false
+    let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config)
+    guard image.width == config.width, image.height == config.height else { throw DuoDesktopDisplay.Failure.displayUnavailable }
+    let url = URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent("display-\(target)-\(stage).jpg")
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else { throw DuoDesktopDisplay.Failure.displayUnavailable }
+    CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { throw DuoDesktopDisplay.Failure.displayUnavailable }
+    print("Preview capture PASS: selected physical display \(target), capture \(id), \(image.width)×\(image.height), \(url.lastPathComponent)")
+}
+
 Task { @MainActor in
     var fakeMac: VirtualDisplay?
     var session: DuoDesktopDisplay?
@@ -109,16 +135,17 @@ Task { @MainActor in
         print("Graphics baseline: main=\(physical), pixels=\(physicalMode.pixelWidth)×\(physicalMode.pixelHeight), origin=\(physicalOrigin), primaryTest=\(usesPrimary)")
         let target: CGDirectDisplayID
         if usesPrimary {
-            target = physical
-            guard let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == physical }) else {
+            target = selectedPhysicalTarget ?? physical
+            guard let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == target }) else {
                 throw DuoDesktopDisplay.Failure.noDisplay
             }
             let window = NSWindow(contentRect: CGRect(x: screen.frame.minX + 80, y: screen.frame.minY + 80, width: 320, height: 200),
-                                  styleMask: fullscreen ? [.titled, .resizable, .closable, .miniaturizable] : [.borderless], backing: .buffered, defer: false)
+                                  styleMask: fullscreen ? [.titled, .resizable, .closable, .miniaturizable] : [.borderless], backing: .buffered, defer: false, screen: screen)
             fixture = window
             window.isReleasedWhenClosed = false
             window.title = "DUO disposable desktop fixture"
             window.backgroundColor = .systemBlue
+            window.setFrameOrigin(CGPoint(x: screen.frame.minX + 80, y: screen.frame.minY + 80))
             window.orderFrontRegardless()
             if fullscreen {
                 app.setActivationPolicy(.regular)
@@ -169,6 +196,12 @@ Task { @MainActor in
             }
             // A missing initial frame must fail setup, never skip the restoration assertions.
             guard originalFixtureBounds != nil else { throw DuoDesktopDisplay.Failure.displayUnavailable }
+            if usesPrimary, let originalFixtureBounds {
+                print("Graphics fixture before mirror: target \(target), frame \(originalFixtureBounds), display \(CGDisplayBounds(target))")
+                guard CGDisplayBounds(target).intersection(originalFixtureBounds).size == originalFixtureBounds.size else {
+                    throw DuoDesktopDisplay.Failure.displayUnavailable
+                }
+            }
         }
         if let secondaryWindow { secondaryBounds = ownWindowBounds(secondaryWindow) }
         let baseline = CGDisplayCopyDisplayMode(target)
@@ -188,9 +221,12 @@ Task { @MainActor in
         }
         let correctRole = nativePrimary ? CGDisplayMirrorsDisplay(target) == kCGNullDirectDisplay : CGDisplayMirrorsDisplay(target) == master
         guard test.activeModeMatches, master == target || correctRole else { throw DuoDesktopDisplay.Failure.modeRejected }
-        guard test.followsNativeCadence,
+        let clock = CGDisplayCopyDisplayMode(master)?.refreshRate ?? 0
+        let sampling = min(120, DuoDesktopDisplay.samplingCeiling(refreshHz: clock) ?? 120)
+        guard test.followsNativeCadence == (abs(clock - Double(sampling)) < 0.5),
+              test.needsCadenceResampling == (clock > Double(sampling) + 0.5),
               test.usesIndependentCaptureFilter == nativePrimary else { throw DuoDesktopDisplay.Failure.modeRejected }
-        print("Native sampling: exact negotiated desktop clock; no additional 1/fps interval; filter choice unchanged")
+        print("Native sampling: desktop clock \(clock) Hz unchanged; sampling \(sampling) FPS; filter choice unchanged")
         if let window = fixture {
             var visible = false
             for _ in 0..<20 {
@@ -284,7 +320,24 @@ Task { @MainActor in
                 }
             }
         }
-        let same = try await test.prepareGraphics(native, fps: 120)
+        if switchesSize {
+            for (label, size) in [("full", DuoDesktopResolution(width: 2853, height: 2007)), ("upper", native)] {
+                master = try await test.prepareGraphics(size, fps: sampling)
+                guard test.activeModeMatches, let mode = CGDisplayCopyDisplayMode(master),
+                      size.acceptsDisplayMode(width: mode.pixelWidth, height: mode.pixelHeight),
+                      CGDisplayMirrorsDisplay(target) == master else { throw DuoDesktopDisplay.Failure.modeRejected }
+                for _ in 0..<30 {
+                    if let fixture, let rect = ownWindowBounds(fixture), CGDisplayBounds(master).intersection(rect).size == rect.size { break }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                if let fixture, let rect = ownWindowBounds(fixture) {
+                    guard CGDisplayBounds(master).intersection(rect).size == rect.size else { throw DuoDesktopDisplay.Failure.displayUnavailable }
+                }
+                try await capturePreview(master, target: target, stage: label)
+                print("Desktop size switch PASS: \(label), \(mode.pixelWidth)×\(mode.pixelHeight), source \(target), main \(CGMainDisplayID()), clock \(mode.refreshRate) Hz")
+            }
+        }
+        let same = try await test.prepareGraphics(native, fps: sampling)
         guard same == master else { throw DuoDesktopDisplay.Failure.modeRejected }
         guard test.restore(), test.restore(), CGDisplayMirrorsDisplay(target) == kCGNullDirectDisplay,
               let restored = CGDisplayCopyDisplayMode(target),

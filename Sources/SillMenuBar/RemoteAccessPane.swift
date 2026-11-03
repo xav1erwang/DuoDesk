@@ -55,25 +55,25 @@ struct RemoteAccessPane: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Remote access", isOn: $remoteAccess)
+                Toggle("远程访问", isOn: $remoteAccess)
                     .disabled(!available)
                 if let problem = status.identityProblem {
                     // The system's messages end with a full stop of their own.
                     let reason = problem.hasSuffix(".") ? String(problem.dropLast()) : problem
-                    Warning("Remote access isn’t available: Sill couldn’t use the keychain (\(reason)).")
+                    Warning("远程访问不可用：无法使用钥匙串（\(reason)）。")
                 }
             } footer: {
-                Footnote("Lets the iPhone and iPad you pair connect to this Mac from other networks: through a VPN such as Tailscale, or through a port you forward on your router. Sill turns away every device you haven’t paired, and encrypts everything the paired ones send and receive.")
+                Footnote("允许已配对的 iPhone 和 iPad 通过 VPN 或路由器转发端口从其他网络连接。未配对设备会被拒绝，已配对设备收发的内容均经过加密。")
             }
             if on { addresses }
             pairedDevices
             if on { internet }
             Section {
                 LabeledContent {
-                    Button("Open Energy Settings…") { Self.openEnergySettings() }
+                    Button("打开电源设置…") { Self.openEnergySettings() }
                 } label: {
-                    Text("Sleep")
-                    Text("This Mac can’t be reached while it’s asleep. While a device is connected from away, Sill keeps it from going to sleep by itself.")
+                    Text("睡眠")
+                    Text("Mac 睡眠时无法连接。远程设备连接期间，应用会防止 Mac 自动睡眠。")
                 }
             }
         }
@@ -87,12 +87,12 @@ struct RemoteAccessPane: View {
             switch status.listener {
             case .portInUse(let p):
                 LabeledContent {
-                    Button("Change…") { startEditingPort() }
+                    Button("更改…") { startEditingPort() }
                 } label: {
-                    Warning("Port \(p) is in use by another app, so devices can’t reach this Mac remotely. Sill tries again every 30 seconds.")
+                    Warning("端口 \(p) 已被其他应用占用，设备暂时无法远程连接。应用每 30 秒重试一次。")
                 }
             case .failed(let error):
-                Warning("Remote access couldn’t start (\(error)). Sill tries again every 30 seconds.")
+                Warning("远程访问无法启动（\(error)）。应用每 30 秒重试一次。")
             case .off, .listening:
                 EmptyView()
             }
@@ -108,31 +108,31 @@ struct RemoteAccessPane: View {
                                     .textSelection(.enabled)
                             }
                         }
-                        CopyButton(text: row.primary, spoken: "Copy the \(row.label) address")
+                        CopyButton(text: row.primary, spoken: "复制 \(row.label) 地址")
                     }
                 } label: {
                     Text(row.label)
                     if row.lan {
-                        Text("This network. Use it with a VPN into your home network, such as WireGuard on your router.")
+                        Text("本地网络地址。可通过 VPN 连接到此网络后使用。")
                     }
                 }
             }
             ForEach(status.vpnDown, id: \.self) { name in
-                Text("\(name) — Not connected").foregroundStyle(.secondary)
+                Text("\(name) — 未连接").foregroundStyle(.secondary)
             }
             if !rows.contains(where: { $0.vpn }) && status.vpnDown.isEmpty {
-                Text("No VPN is running on this Mac. Install one such as Tailscale on this Mac and on your iPhone or iPad, or allow connections from the internet below.")
+                Text("此 Mac 未运行 VPN。可在 Mac 和 iPhone 或 iPad 上安装 Tailscale 等应用，或在下方允许公网连接。")
                     .foregroundStyle(.secondary)
             }
             portRow
         } header: {
-            Text("Addresses")
+            Text("连接地址")
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(status.vpnDown, id: \.self) { name in
-                    Footnote("Your devices can’t reach this Mac through \(name) until it connects.")
+                    Footnote("\(name) 连接后，设备才能通过它访问此 Mac。")
                 }
-                Footnote("Your devices learn these when they pair and keep them current whenever they connect.")
+                Footnote("设备配对时会获取这些地址，之后每次连接都会更新。")
             }
         }
     }
@@ -140,33 +140,33 @@ struct RemoteAccessPane: View {
     @ViewBuilder private var portRow: some View {
         if editingPort {
             let problem = Self.portProblem(portText)
-            LabeledContent("Port") {
+            LabeledContent("端口") {
                 HStack(spacing: 8) {
-                    TextField("Port", text: $portText)
+                    TextField("端口", text: $portText)
                         .labelsHidden()
                         .frame(width: 72)
                         .multilineTextAlignment(.trailing)
                         .monospacedDigit()
                         .onSubmit { savePort() }
                         .onExitCommand { editingPort = false }
-                    Button("Save") { savePort() }
+                    Button("保存") { savePort() }
                         .disabled(problem?.blocks ?? false)
                         .keyboardShortcut(.defaultAction)
-                    Button("Cancel") { editingPort = false }
+                    Button("取消") { editingPort = false }
                 }
             }
             if let problem {
                 if problem.blocks { Warning(problem.message) } else { Text(problem.message).foregroundStyle(.secondary) }
             }
         } else {
-            LabeledContent("Port") {
+            LabeledContent("端口") {
                 HStack(spacing: 8) {
                     Text(String(port)).monospacedDigit().textSelection(.enabled)
-                    Button("Change…") { startEditingPort() }
+                    Button("更改…") { startEditingPort() }
                 }
             }
             if portSaved {
-                Text("Paired devices learn the new port the next time they connect at home.").foregroundStyle(.secondary)
+                Text("已配对设备下次通过本地网络连接时会获取新端口。").foregroundStyle(.secondary)
             }
         }
     }
@@ -192,10 +192,10 @@ struct RemoteAccessPane: View {
     static func portProblem(_ text: String) -> (message: String, blocks: Bool)? {
         let t = text.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty, t.allSatisfy({ $0.isASCII && $0.isNumber }), t.count <= 5, let p = Int(t), (1024...65535).contains(p) else {
-            return ("Choose a port from 1024 to 65535.", true)
+            return ("请选择 1024 到 65535 之间的端口。", true)
         }
-        if p == 5000 || p == 7000 { return ("Port \(p) belongs to AirPlay Receiver. Choose another.", true) }
-        if p >= 49152 { return ("Ports from 49152 up can be taken by any app at any moment.", false) }
+        if p == 5000 || p == 7000 { return ("端口 \(p) 由 AirPlay 接收器使用，请选择其他端口。", true) }
+        if p >= 49152 { return ("49152 及以上的端口可能随时被其他应用占用。", false) }
         return nil
     }
 
@@ -205,14 +205,14 @@ struct RemoteAccessPane: View {
     /// devices connect at home too.
     private var pairedDevices: some View {
         Section {
-            LabeledContent("Paired devices") {
+            LabeledContent("已配对设备") {
                 HStack(spacing: 8) {
-                    Text(status.paired.isEmpty ? "None" : "\(status.paired.count)").monospacedDigit()
-                    Button("Show Devices…") { actions.showDevices() }
+                    Text(status.paired.isEmpty ? "无" : "\(status.paired.count)").monospacedDigit()
+                    Button("显示设备…") { actions.showDevices() }
                 }
             }
         } footer: {
-            Footnote("The devices you pair in Devices can connect from afar while Remote Access is on.")
+            Footnote("开启远程访问后，在“设备”中配对的设备可从外网连接。")
         }
     }
 
@@ -220,13 +220,13 @@ struct RemoteAccessPane: View {
 
     private var internet: some View {
         Section {
-            Toggle("Allow connections from the internet", isOn: $internetAccess)
+            Toggle("允许公网连接", isOn: $internetAccess)
             if internetAccess {
                 if let lan = status.lanAddress {
                     LabeledContent {
-                        CopyButton(text: lan, spoken: "Copy this Mac’s address")
+                        CopyButton(text: lan, spoken: "复制此 Mac 的地址")
                     } label: {
-                        Text("Forward TCP port \(String(port)) on your router to this Mac (\(lan)), and reserve that address for this Mac in the router’s settings.")
+                        Text("在路由器上将 TCP 端口 \(String(port)) 转发到此 Mac（\(lan)），并为此 Mac 保留该地址。")
                     }
                 }
                 routerRow
@@ -235,21 +235,21 @@ struct RemoteAccessPane: View {
                     LabeledContent {
                         HStack(spacing: 8) {
                             Text(v6.host).textSelection(.enabled)
-                            CopyButton(text: v6.host, spoken: "Copy the IPv6 address")
+                            CopyButton(text: v6.host, spoken: "复制 IPv6 地址")
                         }
                     } label: {
                         Text("IPv6")
-                        Text("Works only if your router lets incoming IPv6 connections reach this Mac; most don’t.")
+                        Text("仅当路由器允许外部 IPv6 连接访问此 Mac 时可用。")
                     }
                 }
             }
         } header: {
-            Text("Internet")
+            Text("公网")
         } footer: {
             if internetAccess {
-                Footnote("Anyone on the internet can now reach port \(String(port)) and try to connect. Sill turns away every device you haven’t paired. Turning this off doesn’t close the port on your router: remove the forward there too.")
+                Footnote("公网用户可访问端口 \(String(port)) 并尝试连接；未配对设备会被拒绝。关闭此选项不会关闭路由器端口，请同时移除路由器上的转发。")
             } else {
-                Footnote("Only needed for a port forward on your router. A VPN is simpler and keeps this Mac off the open internet.")
+                Footnote("仅使用路由器端口转发时需要开启。VPN 配置更简单，也无需将 Mac 暴露在公网上。")
             }
         }
     }
@@ -259,39 +259,39 @@ struct RemoteAccessPane: View {
         case .off:
             EmptyView()
         case .asking:
-            LabeledContent("Router’s internet address") { Text("Asking your router…").foregroundStyle(.secondary) }
+            LabeledContent("路由器公网地址") { Text("正在查询路由器…").foregroundStyle(.secondary) }
         case .address(let a):
-            LabeledContent("Router’s internet address") {
+            LabeledContent("路由器公网地址") {
                 HStack(spacing: 8) {
                     Text(a).textSelection(.enabled)
-                    CopyButton(text: a, spoken: "Copy the router’s internet address")
+                    CopyButton(text: a, spoken: "复制路由器公网地址")
                 }
             }
         case .carrierNAT(let a):
-            LabeledContent("Router’s internet address") {
-                Warning("Your internet provider shares this address among many homes (\(Self.masked(a))), so a port forward can’t reach this Mac. Use a VPN such as Tailscale instead.")
+            LabeledContent("路由器公网地址") {
+                Warning("运营商将此地址（\(Self.masked(a))）共享给多个用户，端口转发无法连接到此 Mac。请改用 Tailscale 等 VPN。")
             }
         case .doubleNAT:
-            LabeledContent("Router’s internet address") {
-                Warning("Your router sits behind another router. Forward the port on both, or use a VPN.")
+            LabeledContent("路由器公网地址") {
+                Warning("当前路由器连接在另一台路由器之后，请在两台路由器上转发端口，或使用 VPN。")
             }
         case .noAnswer:
-            LabeledContent("Router’s internet address") {
-                Text("Your router didn’t say. You’ll find the address in its settings.").foregroundStyle(.secondary)
+            LabeledContent("路由器公网地址") {
+                Text("路由器未返回地址，可在路由器设置中查看。").foregroundStyle(.secondary)
             }
         }
     }
 
     @ViewBuilder private var addressNameRow: some View {
         LabeledContent {
-            TextField("Address name", text: Binding(get: { nameText ?? addressName }, set: { nameText = $0; nameProblem = nil }),
+            TextField("地址名称", text: Binding(get: { nameText ?? addressName }, set: { nameText = $0; nameProblem = nil }),
                       prompt: Text("home.example.net"))
                 .labelsHidden()
                 .frame(width: 220)
                 .onSubmit { saveAddressName() }
         } label: {
-            Text("Address name (optional)")
-            Text("If your router has a dynamic DNS name, enter it so your devices keep finding this Mac when your internet address changes. Add :port if the router forwards a different outside port.")
+            Text("地址名称（可选）")
+            Text("如果路由器使用动态 DNS，请输入域名，以便公网地址变化后设备仍能找到此 Mac。若外部端口不同，请在后面添加 :端口。")
         }
         if let nameProblem { Warning(nameProblem) }
     }
@@ -304,9 +304,9 @@ struct RemoteAccessPane: View {
             nameProblem = nil
             actions.setAddressName(text)
         case .failure(.zone):
-            nameProblem = "Remove the part after %: it only works on this network."
+            nameProblem = "请移除 % 及其后面的内容；该部分只在本地网络有效。"
         case .failure:
-            nameProblem = "That doesn’t look like an address. Try home.example.net, or home.example.net:17455."
+            nameProblem = "地址格式无效，请尝试 home.example.net 或 home.example.net:17455。"
         }
     }
 
@@ -367,7 +367,7 @@ private struct CopyButton: View {
     @State private var copied = false
 
     var body: some View {
-        Button(copied ? "Copied" : "Copy") {
+        Button(copied ? "已复制" : "复制") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             copied = true
@@ -376,6 +376,6 @@ private struct CopyButton: View {
                 copied = false
             }
         }
-        .accessibilityLabel(copied ? "Copied" : spoken)
+        .accessibilityLabel(copied ? "已复制" : spoken)
     }
 }

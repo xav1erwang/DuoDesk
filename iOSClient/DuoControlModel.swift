@@ -15,6 +15,8 @@ enum DuoStreamPolicy {
     // The first release starts at 60; 120 is an explicit opt-in and remains bounded by the
     // screen and Low Power Mode. This is a request, not a claim about delivered distinct frames.
     static let preferredFPSKey = "duodesk.preferredFPS"
+    static let legacyUpperDisplayKey = "duodesk.nativeUpperDisplay"
+    static let renderedUpperDisplayKey = "duodesk.nativeUpperDisplay.renderPixelsV1"
     static let defaultFPS = 60
     static func normalizedFPS(_ value: Int) -> Int { value == 120 ? 120 : defaultFPS }
     static func requestedFPS(panelMaximum: Int, lowPower: Bool, preferredFPS: Int = defaultFPS) -> Int {
@@ -30,6 +32,71 @@ enum DuoStreamPolicy {
         return resolution.isValid ? resolution : nil
     }
 
+    /// Keep the same native desktop while entering or leaving clean-image mode. Older installed
+    /// hosts may be unable to detach and restore a virtual display after an in-session resize.
+    /// The renderer preserves the whole frame; a differently shaped screen can show black bars.
+    static func stableDesktopRequest(width: Double, height: Double, cleanImage: Bool) -> DuoDesktopResolution? {
+        nativeUpperDisplay(width: width, height: height)
+    }
+
+    /// UIKit can render more pixels than the physical panel has. Accept one complete canvas only
+    /// when it covers the other and their aspects agree within one pixel of quantization per side.
+    /// Combining unrelated widths and heights would silently change the desktop's aspect.
+    static func requiredDisplayPixels(physical: CGSize, rendered: CGSize) -> CGSize? {
+        let physicalSides = [physical.width, physical.height].sorted()
+        let renderedSides = [rendered.width, rendered.height].sorted()
+        guard (physicalSides + renderedSides).allSatisfy({ $0.isFinite && $0 > 0 && $0 <= 16384 }) else { return nil }
+        let cross = abs(physicalSides[0] * renderedSides[1] - renderedSides[0] * physicalSides[1])
+        guard cross <= physicalSides[1] + renderedSides[1] else { return nil }
+        if renderedSides[0] >= physicalSides[0], renderedSides[1] >= physicalSides[1] {
+            return CGSize(width: renderedSides[0], height: renderedSides[1])
+        }
+        if physicalSides[0] >= renderedSides[0], physicalSides[1] >= renderedSides[1] {
+            return CGSize(width: physicalSides[0], height: physicalSides[1])
+        }
+        return nil
+    }
+
+    static func upperDisplay(metrics: DuoNativeDisplayMetrics, renderedRequired: Bool) -> DuoDesktopResolution? {
+        let pixels: CGSize
+        if renderedRequired {
+            guard let rendered = metrics.renderPixels,
+                  let required = requiredDisplayPixels(physical: metrics.pixels, rendered: rendered) else { return nil }
+            pixels = required
+        } else { pixels = metrics.pixels }
+        return nativeUpperDisplay(width: pixels.width, height: pixels.height)
+    }
+
+    static func cachedUpperDisplay(in defaults: UserDefaults, rendered: Bool) -> DuoDesktopResolution? {
+        let key = rendered ? renderedUpperDisplayKey : legacyUpperDisplayKey
+        guard let data = defaults.data(forKey: key),
+              let resolution = try? JSONDecoder().decode(DuoDesktopResolution.self, from: data),
+              resolution.isValid else { return nil }
+        return resolution
+    }
+
+    /// Immersive mode uses the whole inner screen. Match its current orientation so the host can
+    /// provide every desktop pixel without cropping or distorting an upper-half picture.
+    static func nativeFullDisplay(width: Double, height: Double, landscape: Bool) -> DuoDesktopResolution? {
+        guard width.isFinite, height.isFinite, width > 0, height > 0,
+              width <= 8192, height <= 8192 else { return nil }
+        let short = Int(min(width, height).rounded(.up))
+        let long = Int(max(width, height).rounded(.up))
+        let resolution = DuoDesktopResolution(width: landscape ? long : short, height: landscape ? short : long)
+        return resolution.isValid ? resolution : nil
+    }
+
+    /// The orientation is chosen once when the extension is created and kept for its life.
+    /// An unknown or inconsistent render canvas must not silently become a smaller extension.
+    static func extendedDisplay(metrics: DuoNativeDisplayMetrics) -> DuoDesktopResolution? {
+        guard let rendered = metrics.renderPixels,
+              let required = requiredDisplayPixels(physical: metrics.pixels, rendered: rendered) else { return nil }
+        guard metrics.windowSize.width.isFinite, metrics.windowSize.height.isFinite,
+              metrics.windowSize.width > 0, metrics.windowSize.height > 0 else { return nil }
+        return nativeFullDisplay(width: Double(required.width), height: Double(required.height),
+                                 landscape: metrics.windowSize.width > metrics.windowSize.height)
+    }
+
     static func coherentInnerMetrics(_ metrics: DuoNativeDisplayMetrics, frame: CGRect, fold: CGRect?) -> Bool {
         guard let fold, !frame.isEmpty,
               frame.minX >= -2, frame.minY >= -2,
@@ -41,9 +108,69 @@ enum DuoStreamPolicy {
     }
 }
 
+/// Fits the existing native desktop into the whole screen without requesting a Mac resize.
+/// A quarter turn is useful when a landscape desktop is shown on the unfolded Duo upright.
+enum DuoCleanImageLayout {
+    static func shouldRotate(panel: CGSize, video: CGSize, nativeDesktop: Bool) -> Bool {
+        guard nativeDesktop,
+              panel.width.isFinite, panel.height.isFinite,
+              video.width.isFinite, video.height.isFinite,
+              panel.width > 0, panel.height > 0, video.width > 0, video.height > 0 else { return false }
+        let upright = min(panel.width / video.width, panel.height / video.height)
+        let rotated = min(panel.width / video.height, panel.height / video.width)
+        // Avoid rotating nearly square content for an imperceptible gain. The comparison is in
+        // linear scale; 1.05 is a little over 10% more area, with no cropping or distortion.
+        return rotated.isFinite && upright.isFinite && rotated > upright * 1.05
+    }
+}
+
+enum DuoExtendedDesktopPolicy {
+    /// A fallback must preserve the entire physical display at no fewer pixels than the requested
+    /// Duo picture. Its different aspect is intentional and shown to the user.
+    static func physicalFallback(_ issue: DuoDesktopIssue?, expected: DuoDesktopResolution?,
+                                 extending: Bool, active: StreamSource) -> DuoDesktopResolution? {
+        guard !extending, active == .none, let issue, issue.resolution == expected,
+              let physical = issue.physicalFallback, physical.isValid,
+              physical.width >= issue.resolution.width, physical.height >= issue.resolution.height else { return nil }
+        return physical
+    }
+
+    static func request(hostAdvertised: Bool, connected: Bool, alreadyExtended: Bool,
+                        pathMoving: Bool = false, connectionDead: Bool = false,
+                        upper: DuoDesktopResolution?, metrics: DuoNativeDisplayMetrics?) -> DuoDesktopResolution? {
+        guard hostAdvertised, connected, !alreadyExtended, !pathMoving, !connectionDead,
+              upper?.isValid == true, let metrics else { return nil }
+        return DuoStreamPolicy.extendedDisplay(metrics: metrics)
+    }
+
+    static func applies(_ response: DuoExtendedDesktopStatus, currentRequest: UUID?) -> Bool {
+        currentRequest != nil && response.requestID == currentRequest
+    }
+
+    /// A mirror error belongs only to the matching idle mirror request. A delayed catalog cannot
+    /// hide an extension, replace a live desktop, or describe a different requested canvas.
+    static func mirrorIssue(_ issue: DuoDesktopIssue?, expected: DuoDesktopResolution?,
+                            extending: Bool, active: StreamSource) -> String? {
+        guard !extending, active == .none, let issue, issue.resolution.isValid,
+              issue.resolution == expected else { return nil }
+        let safe = SafeText.label(issue.message, limit: 200)
+        return safe.isEmpty ? nil : safe
+    }
+
+    static func mirrorViewport(_ old: Viewport?, upper: DuoDesktopResolution?) -> Viewport? {
+        guard var result = old else { return nil }
+        result.desktopResolution = upper
+        result.extendedDesktop = nil
+        result.extendedRequestID = nil
+        result.preservePhysicalMode = nil
+        return result
+    }
+}
+
 struct DuoNativeDisplayMetrics: Equatable {
     var pixels: CGSize
     var windowSize: CGSize
+    var renderPixels: CGSize? = nil
 }
 
 struct DuoKey: Identifiable, Equatable {

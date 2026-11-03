@@ -58,11 +58,11 @@ struct CodeScanner: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.control)
                 if denied {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Sill can’t use the camera. Enter the code instead, or allow the camera in Settings.")
+                        Text("无法使用相机。可改为输入配对码，或在系统设置中允许访问相机。")
                             .font(.system(size: 15))
                             .foregroundStyle(Palette.text)
                             .fixedSize(horizontal: false, vertical: true)
-                        Button("Open Settings") {
+                        Button("打开系统设置") {
                             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                         }
                         .font(.system(size: 15, weight: .semibold))
@@ -86,10 +86,10 @@ struct CodeScanner: View {
                 }
             }
             .accessibilityElement(children: denied ? .contain : .ignore)
-            .accessibilityLabel(denied ? "" : mac.map(DiscoveryPolicy.HomeCopy.viewfinderLabel) ?? "Camera. Point it at the code on your Mac.")
+            .accessibilityLabel(denied ? "" : mac.map { "相机，请对准 \($0) 上的配对码。" } ?? "相机，请对准 Mac 上的配对码。")
             if !denied {
-                Text(notSill ? "That’s not a Sill code." : retryNeedsTap ? "Tap the code to try again."
-                     : mac.map(DiscoveryPolicy.HomeCopy.viewfinderCaption) ?? "Point at the code on your Mac")
+                Text(notSill ? "这不是 DUO你电脑 的配对码。" : retryNeedsTap ? "点按配对码以重试。"
+                     : mac.map { "请对准 \($0) 上的配对码" } ?? "请对准 Mac 上的配对码")
                     .font(.system(size: 13))
                     .foregroundStyle(notSill ? Color.orange : Palette.muted)
                     .accessibilityHidden(!notSill && !retryNeedsTap)
@@ -114,7 +114,7 @@ struct CodeScanner: View {
         } else if !notSill {
             notSill = true
             notSillToken += 1
-            AccessibilityNotification.Announcement("That’s not a Sill code.").post()
+            AccessibilityNotification.Announcement("这不是有效的 DUO你电脑配对码。").post()
         }
     }
 

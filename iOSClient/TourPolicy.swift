@@ -489,14 +489,14 @@ enum TourPolicy {
 
     // MARK: The words (§7)
 
-    static let skipTitle = "Skip"
-    static let nextTitle = "Next"
-    static let doneTitle = "Done"
-    static let skipHint = "Ends the tour. Take the Tour in Settings shows it again."
+    static let skipTitle = "跳过"
+    static let nextTitle = "下一步"
+    static let doneTitle = "完成"
+    static let skipHint = "结束使用指南。"
     /// The Settings panel's last row.
-    static let takeTourTitle = "Take the Tour"
-    static func takeTourFootnote(device: String) -> String { "A short tour of Sill’s controls on this \(device)." }
-    static func takeTourHint(device: String) -> String { "Shows how to use Sill on this \(device)." }
+    static let takeTourTitle = "使用指南"
+    static func takeTourFootnote(device: String) -> String { "简要介绍如何在这台 \(device) 上使用 DUO你电脑。" }
+    static func takeTourHint(device: String) -> String { "了解如何在这台 \(device) 上使用 DUO你电脑。" }
 
     /// The title as VoiceOver reads it: its place in the run, when the run has more than one card.
     static func spokenTitle(_ copy: TourCopy, index: Int, count: Int) -> String {
@@ -558,14 +558,13 @@ enum TourPolicy {
             }
             return TourCopy(title: "Windows and Text Size", subtitle: nil, rows: rows, hint: hint)
         case .settings:
-            var rows = [row("xmark.circle", [strong("Disconnect"), plain(" is at the bottom of Settings.")]),
-                        row("questionmark.circle", [strong("Take the Tour"), plain(" is there too, to see this again.")])]
+            var rows = [row("xmark.circle", [strong("断开连接"), plain("可在设置中断开与 Mac 的连接。")])]
             if layout == .landscape {
-                let turn = keysOnItsSide ? "Turn your \(device) on its side" : "Hold your \(device) upright"
-                rows.append(row(iPad ? "ipad" : "iphone", [strong(turn), plain(" for a trackpad and keys.")]))
+                let turn = keysOnItsSide ? "将 \(device) 横放" : "将 \(device) 竖起"
+                rows.append(row(iPad ? "ipad" : "iphone", [strong(turn), plain("，即可使用键盘和触控板。")]))
             }
-            return TourCopy(title: "Settings", subtitle: nil, rows: rows,
-                            hint: layout == .phone ? "The last button in the row under the picture." : "The last button in the bar.")
+            return TourCopy(title: "设置", subtitle: nil, rows: rows,
+                            hint: layout == .phone ? "画面下方一排按钮中的最后一个。" : "工具栏中的最后一个按钮。")
         case .laptop:
             var rows: [TourRow]
             if voiceOver {

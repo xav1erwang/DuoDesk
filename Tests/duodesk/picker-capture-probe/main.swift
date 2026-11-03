@@ -158,7 +158,7 @@ func runCapture() async {
         print("PICKER SELECTED ids=\(filter.includedDisplays.map(\.displayID)), rect=\(filter.contentRect), scale=\(filter.pointPixelScale)")
         guard filter.includedDisplays.first?.displayID == id else { throw DesktopCapturePicker.Failure.wrongContent }
         if native {
-            try desktop.attachPreparedMirror()
+            try await desktop.attachPreparedMirror()
             try await Task.sleep(for: .milliseconds(600))
         }
         if !native {

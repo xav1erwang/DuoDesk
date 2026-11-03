@@ -238,6 +238,25 @@ struct HostSettingsPanel: View {
 
     @ViewBuilder private var middle: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if !client.remoteDisplays.isEmpty {
+                Rows {
+                    Button {
+                        close()
+                        client.showDisplayPicker()
+                    } label: {
+                        HStack {
+                            Label("显示器", systemImage: "display.2")
+                            Spacer(minLength: 8)
+                            Text(client.remoteDisplays.first(where: { $0.id == client.selectedDisplayID })?.name ?? "选择")
+                                .foregroundStyle(.secondary).lineLimit(1)
+                            Image(systemName: "chevron.right").font(.caption)
+                        }
+                        .rowFrame()
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 12)
+            }
             if let state = client.settings.host, let shown = client.settings.displayed {
                 if state.softwareEncoder {
                     // Neither a restart nor a return is promised: hosts before 2026-09-25 keep the
@@ -456,7 +475,7 @@ struct HostSettingsPanel: View {
                     .rowFrame()
                 }
                 Footnote(text: atHome
-                         ? "\(mac) 当前允许不配对连接。配对后，即使此设置改变也能继续连接；打开 Remote Access 后还能在外连接。请扫描 \(mac) 显示的配对码。"
+                         ? "\(mac) 当前允许不配对连接。配对后，即使此设置改变也能继续连接；打开远程访问后还能在外连接。请扫描 \(mac) 显示的配对码。"
                          : "配对一次后，可通过 VPN 或公网连接 \(mac)。请扫描 \(mac) 显示的配对码。")
             case .turnOnRemoteAccess:
                 Footnote(text: Self.turnOnRemoteAccess(mac))
@@ -466,7 +485,7 @@ struct HostSettingsPanel: View {
 
     /// With Remote Access off on the Mac: how to reach it away from home.
     static func turnOnRemoteAccess(_ mac: String) -> String {
-        "要在外连接 \(mac)，请在其 DUO你电脑 设置中打开“Remote Access”。"
+        "要在外连接 \(mac)，请在其 DUO你电脑 设置中打开“远程访问”。"
     }
 
     // MARK: This device

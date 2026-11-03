@@ -70,38 +70,38 @@ enum StatusText {
 
         var attention: [StatusPresentation.Attention] = []
         if !permissions.screenRecording {
-            attention.append(.init(title: "Allow Screen Recording…", subtitle: "Needed to show your windows on your devices.",
+            attention.append(.init(title: "允许屏幕录制…", subtitle: "设备查看 Mac 画面需要此权限。",
                                    action: .allowScreenRecording))
         }
         if !permissions.accessibility {
-            attention.append(.init(title: "Allow Accessibility…", subtitle: "Devices can watch but not click or type.",
+            attention.append(.init(title: "允许辅助功能…", subtitle: "设备可以查看，但不能点击或输入。",
                                    action: .allowAccessibility))
         }
         // Kept to one line no wider than the rest of the menu: a menu item's subtitle does not wrap.
         if s.softwareEncoder, s.hardwareEncoderStuck {
-            attention.append(.init(title: "Hardware Encoder Stuck",
-                                   subtitle: "Streaming with the software encoder, up to 60 fps. Restarting the Mac fixes this.",
+            attention.append(.init(title: "硬件编码器无响应",
+                                   subtitle: "当前使用软件编码，最高 60 FPS；可尝试重启 Mac。",
                                    action: .none))
         } else if s.softwareEncoder {
-            attention.append(.init(title: "Hardware Encoder Busy",
-                                   subtitle: "Streaming with the software encoder, up to 60 fps, until it is free again.",
+            attention.append(.init(title: "硬件编码器正忙",
+                                   subtitle: "释放之前使用软件编码，最高 60 FPS。",
                                    action: .none))
         }
         let remotePortTaken = remotePortInUse(s.remote)
         if let port = remotePortTaken {
-            attention.append(.init(title: "Remote Access Can’t Start", subtitle: "Port \(port) is in use by another app.",
+            attention.append(.init(title: "远程访问无法启动", subtitle: "端口 \(port) 已被其他应用占用。",
                                    action: .showRemoteAccess))
         }
         // Pairing at home (docs/home-pairing-plan.md §6.4).
         let request = pairingRequest(s.remote, now: now)
         if let request { attention.append(request) }
         if let at = s.remote?.olderDeviceAt, now.timeIntervalSince(at) < olderDeviceShownFor {
-            attention.append(.init(title: "An iPhone or iPad Needs Sill Updated", subtitle: "It tried to connect with an older Sill.",
+            attention.append(.init(title: "iPhone 或 iPad 需要更新应用", subtitle: "设备尝试使用旧版本连接。",
                                    action: .none))
         }
         let homeDoorClosed = homeDoorUnavailable(s.remote)
         if homeDoorClosed {
-            attention.append(.init(title: "Devices Can’t Connect", subtitle: "Sill couldn’t use its key in your keychain.",
+            attention.append(.init(title: "设备无法连接", subtitle: "应用无法使用钥匙串中的密钥。",
                                    action: .showDevices))
         }
 
@@ -125,7 +125,7 @@ enum StatusText {
         return StatusPresentation(glyph: glyph, header: header, subtitle: subtitle,
                                   source: sourceRow(s), devices: s.devices.map(deviceRow), attention: attention,
                                   virtualDisplayNote: virtualDisplayNote(s),
-                                  tooltip: "Sill — \(header)", accessibilityLabel: "Sill, \(header)",
+                                  tooltip: "DUO你电脑 — \(header)", accessibilityLabel: "DUO你电脑，\(header)",
                                   advertisedName: name, remoteAccessNote: remoteAccessNote(s.remote),
                                   canPair: s.remote.map { $0.identityProblem == nil } ?? false, away: s.away)
     }
@@ -140,11 +140,11 @@ enum StatusText {
         let short = shortName(request.name)
         let subtitle: String
         switch request.reason {
-        case "showing": subtitle = "A code is showing."
-        case "locked": subtitle = "Unlock this Mac, then tap it on the \(short) again."
-        default: subtitle = "Click to show a code."
+        case "showing": subtitle = "配对码正在显示。"
+        case "locked": subtitle = "请解锁此 Mac，然后在 \(short) 上重新点按。"
+        default: subtitle = "点击显示配对码。"
         }
-        return .init(title: "\(short) Wants to Pair", subtitle: subtitle,
+        return .init(title: "\(short) 请求配对", subtitle: subtitle,
                      action: .pairingRequest(name: request.name, showing: request.reason == "showing"))
     }
 
@@ -165,57 +165,57 @@ enum StatusText {
     /// couldn’t be used".
     static func remoteAccessNote(_ r: RemoteStatus?) -> String? {
         guard let r else { return nil }
-        if r.identityProblem != nil { return "Unavailable: the keychain couldn’t be used" }
-        guard r.remoteAccess else { return "Off" }
+        if r.identityProblem != nil { return "不可用：无法使用钥匙串" }
+        guard r.remoteAccess else { return "已关闭" }
         switch r.listener {
-        case .portInUse(let port): return "Port \(port) is in use"
-        case .failed: return "Couldn’t start; trying again"
+        case .portInUse(let port): return "端口 \(port) 已被占用"
+        case .failed: return "无法启动，正在重试"
         case .off, .listening: break
         }
         var ways: [String] = []
         for a in r.addresses where a.kind == MacAddress.vpn && !ways.contains(a.via) { ways.append(a.via) }
-        if r.internetAccess { ways.append("the internet") }
-        guard let last = ways.last else { return "On · no VPN on this Mac" }
-        return "On · " + (ways.count == 1 ? last : ways.dropLast().joined(separator: ", ") + " and " + last)
+        if r.internetAccess { ways.append("公网") }
+        guard !ways.isEmpty else { return "已开启 · 此 Mac 未连接 VPN" }
+        return "已开启 · " + ways.joined(separator: "、")
     }
 
     /// The header and its explanation; the first match wins.
     private static func headline(_ s: HostStatusSnapshot, _ permissions: PermissionState, _ startupError: String?,
                                  _ hasCoordinator: Bool) -> (String, String?) {
-        if let startupError { return ("Sill Couldn’t Start", startupError) }
-        if !hasCoordinator { return ("Starting…", nil) }
+        if let startupError { return ("DUO你电脑 无法启动", startupError) }
+        if !hasCoordinator { return ("正在启动…", nil) }
         // No listener at all (fail closed): no device can find or reach this Mac.
         if homeDoorUnavailable(s.remote) {
-            return ("Not Visible on the Network",
-                    "Sill couldn’t use its key in your keychain. Quit Sill and open it again, and choose Always Allow if the keychain asks.")
+            return ("网络中不可见",
+                    "应用无法使用钥匙串中的密钥。请重新打开应用；若钥匙串询问，请选择始终允许。")
         }
         switch s.network {
         case .starting:
-            return ("Starting…", nil)
+            return ("正在启动…", nil)
         case .failed(let error):
-            return ("Not Visible on the Network", "\(error). Quit and reopen Sill to try again.")
+            return ("网络中不可见", "\(error)。请重新打开应用后重试。")
         case .waiting:
-            return ("Waiting for the Network",
-                    "Sill appears on your iPhone and iPad once this Mac is on Wi-Fi or Ethernet and Local Network access is allowed.")
+            return ("等待网络连接",
+                    "Mac 接入 Wi-Fi 或以太网并允许本地网络访问后，设备即可发现它。")
         case .notAdvertised(let port):
-            return ("Test Pattern Mode", "Not advertised; test clients connect to port \(port).")
+            return ("测试图模式", "不广播；测试客户端连接端口 \(port)。")
         case .registering, .advertising:
             break
         }
         if !permissions.screenRecording {
-            return ("Screen Recording Is Off", "Devices can connect but can’t see any windows.")
+            return ("屏幕录制未开启", "设备可以连接，但无法查看窗口。")
         }
         let count = s.devices.count
         if count > 0 {
-            let who = count == 1 ? (s.devices[0].name.map(shortName) ?? "a Device") : "\(count) Devices"
-            if s.stream != nil { return ("Streaming to \(who)", nil) }
-            let connected = count == 1 ? (s.devices[0].name.map(shortName) ?? "Device") : "\(count) Devices"
-            return ("\(connected) Connected", "Pick a window on the device to start streaming.")
+            let who = count == 1 ? (s.devices[0].name.map(shortName) ?? "设备") : "\(count) 台设备"
+            if s.stream != nil { return ("正在串流到 \(who)", nil) }
+            let connected = count == 1 ? (s.devices[0].name.map(shortName) ?? "设备") : "\(count) 台设备"
+            return ("\(connected) 已连接", "在设备上选择窗口以开始串流。")
         }
         if case .advertising(let name) = s.network {
-            return ("Waiting for a Device", "Open Sill on your iPhone or iPad. This Mac appears as “\(name)”.")
+            return ("等待设备连接", "在 iPhone 或 iPad 上打开 DUO你电脑。此 Mac 显示为“\(name)”。")
         }
-        return ("Waiting for a Device", "Registering on the local network…")
+        return ("等待设备连接", "正在本地网络注册…")
     }
 
     private static func isFailed(_ n: HostStatusSnapshot.Network) -> Bool {
@@ -237,8 +237,8 @@ enum StatusText {
         let title: String, symbol: String
         switch stream.kind {
         case .window: title = middleTruncated(stream.title, to: 44); symbol = "macwindow"
-        case .desktop: title = "Whole Desktop"; symbol = "menubar.dock.rectangle"
-        case .testPattern: title = "Test Pattern"; symbol = "checkerboard.rectangle"
+        case .desktop: title = "完整桌面"; symbol = "menubar.dock.rectangle"
+        case .testPattern: title = "测试图"; symbol = "checkerboard.rectangle"
         }
         // The encoder only produces a frame when the picture changed (ScreenCaptureKit delivers
         // frames on repaint), so 0 means a still window, not a stalled stream. "120 fps, still" is
@@ -246,15 +246,15 @@ enum StatusText {
         // changing, unless the count's own digits tip it: the open menu resizes the card on every
         // change, and "nothing changing" with the route word made it jump a line each time a
         // window stopped or started changing.
-        let rate = s.encodedFPS > 0 ? "\(min(s.encodedFPS, stream.fps)) of \(stream.fps) fps" : "\(stream.fps) fps, still"
+        let rate = s.encodedFPS > 0 ? "\(min(s.encodedFPS, stream.fps))/\(stream.fps) FPS" : "\(stream.fps) FPS，画面静止"
         var detail = "\(stream.width)×\(stream.height) · \(rate) · \(stream.mbps) Mbps"
         if s.devices.count == 1, let route = routeWord(s.devices[0]) { detail += " · \(route)" }
         if stream.onVirtualDisplay {
-            detail += " · virtual display"
+            detail += " · 虚拟显示器"
         } else if s.virtualDisplayOn, stream.kind == .window {
-            detail += " · real window (virtual display: \(s.lastStageFailure ?? s.virtualDisplayProblem ?? "unavailable"))"
+            detail += " · 原窗口（虚拟显示器：\(s.lastStageFailure ?? s.virtualDisplayProblem ?? "不可用")）"
         }
-        if stream.softwareEncoder { detail += " · software encoder" }
+        if stream.softwareEncoder { detail += " · 软件编码" }
         return StatusPresentation.Row(id: "source", symbol: symbol, title: title, detail: detail)
     }
 
@@ -273,7 +273,7 @@ enum StatusText {
         if let link = d.link {
             parts.append(linkWords(link, fps: d.fps, rttMs: d.rttMs))
         } else if let fps = d.fps, let age = d.frameAgeMs, let rtt = d.rttMs {
-            parts.append("\(fps) fps · frame age \(ms(age)) · RTT \(ms(rtt))")
+            parts.append("\(fps) FPS · 帧延迟 \(ms(age)) · 往返 \(ms(rtt))")
         }
         if let route = routeWord(d) { parts.append(route) }
         return StatusPresentation.Row(id: String(describing: d.id), symbol: symbol, title: name,
@@ -286,12 +286,12 @@ enum StatusText {
     static func linkWords(_ link: HostStatusSnapshot.LinkStatus, fps: Int?, rttMs: Int?) -> String {
         switch link.state {
         case .stalled:
-            return "Nothing is getting through"
+            return "连接暂时没有数据通过"
         case .behind:
             let quality = QualityPreset.name(forBitrate: link.bitrate).replacingOccurrences(of: " ", with: "\u{00A0}")
-            var words = (fps.map { "\($0) fps, " } ?? "") + "the link can’t carry \(quality)"
-            if let rtt = rttMs { words += " · RTT \(ms(rtt))" }
-            return fps == nil ? words.prefix(1).uppercased() + words.dropFirst() : words
+            var words = (fps.map { "\($0) FPS，" } ?? "") + "连接无法承载 \(quality) 画质"
+            if let rtt = rttMs { words += " · 往返 \(ms(rtt))" }
+            return words
         }
     }
 
@@ -312,9 +312,9 @@ enum StatusText {
     /// detail never splits it.
     private static func word(_ route: ClientLink.Route) -> String {
         switch route {
-        case .wired: return "Wired"
+        case .wired: return "有线"
         case .wifi: return "Wi\u{2011}Fi"
-        case .direct: return "Direct"
+        case .direct: return "直连"
         }
     }
 
@@ -323,9 +323,9 @@ enum StatusText {
     private static func ms(_ v: Int) -> String { v < 0 ? "–" : "\(v) ms" }
 
     private static func virtualDisplayNote(_ s: HostStatusSnapshot) -> String {
-        if let problem = s.virtualDisplayProblem { return "Unavailable: \(problem)" }
-        if s.virtualDisplayOn, s.stream?.onVirtualDisplay == true { return "The streamed window is on the virtual display" }
-        return "Picked windows leave this screen while they stream"
+        if let problem = s.virtualDisplayProblem { return "不可用：\(problem)" }
+        if s.virtualDisplayOn, s.stream?.onVirtualDisplay == true { return "串流窗口位于虚拟显示器" }
+        return "串流期间所选窗口会离开此屏幕"
     }
 
     /// "Safari — A very long window title that goes on" → "Safari — A very long…that goes on".

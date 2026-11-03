@@ -1,3 +1,4 @@
+// Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import AppKit
 
 /// The status item's image: design/AppIcon.svg reduced to a menu bar template. The iMac is an
@@ -16,7 +17,7 @@ enum StatusGlyph {
     static let size = NSSize(width: 21, height: 18)
 
     static let symbolFallback: NSImage? = {
-        let image = NSImage(systemSymbolName: "macbook.and.ipad", accessibilityDescription: "Sill")
+        let image = NSImage(systemSymbolName: "macbook.and.ipad", accessibilityDescription: "DUO你电脑")
         image?.isTemplate = true
         return image
     }()
@@ -28,7 +29,7 @@ enum StatusGlyph {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Sill"
+        image.accessibilityDescription = "DUO你电脑"
         return image
     }
 

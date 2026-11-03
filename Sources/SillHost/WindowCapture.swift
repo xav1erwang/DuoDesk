@@ -63,6 +63,11 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var nativeGeometry: (geometry: NativeGeometry, scale: Double)?
     private var nativeGeometryRejected = false
     private let queue = DispatchQueue(label: "sill.capture", qos: .userInteractive)
+    #if DUO_CAPTURE_STARTUP_TESTING
+    /// Test-only replacements keep the production startup state machine off the real screen.
+    var testStartCapture: ((SCStream) async throws -> Void)?
+    var testStopCapture: ((SCStream) async throws -> Void)?
+    #endif
     #if DUO_CAPTURE_GEOMETRY_TESTING
     /// An owned-window fixture can ask SCK to scale the content, to exercise the live frame gate.
     var testDestinationRect: CGRect?
@@ -104,6 +109,20 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Recheck after an executor hop: a failure from the previous stream cannot stop its successor.
     func isCurrent(_ stop: Stop) -> Bool {
         stateLock.withLock { generation == stop.generation }
+    }
+
+    private func startCapture(_ stream: SCStream) async throws {
+        #if DUO_CAPTURE_STARTUP_TESTING
+        if let testStartCapture { try await testStartCapture(stream); return }
+        #endif
+        try await stream.startCapture()
+    }
+
+    private func stopCapture(_ stream: SCStream) async throws {
+        #if DUO_CAPTURE_STARTUP_TESTING
+        if let testStopCapture { try await testStopCapture(stream); return }
+        #endif
+        try await stream.stopCapture()
     }
 
     /// `showsCursor`: draw the Mac cursor into the frames. The host passes false: the client draws
@@ -151,7 +170,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         // Register before starting: a stop error that arrives during start must not be swallowed
         // by the identity check in didStopWithError.
-        stateLock.withLock {
+        let startGeneration = stateLock.withLock {
             self.stream = stream
             generation = UUID()
             startupFailure = nil
@@ -161,16 +180,23 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             nativeGeometry = geometry.map { ($0, filterScale) }
             nativeGeometryRejected = false
             framesSeen = 0
+            return generation
         }
+        var started = false
         do {
-            try await stream.startCapture()
+            try await startCapture(stream)
+            started = true
             // A delegate error may have arrived while startCapture was suspended.
             let failure: (any Error)? = stateLock.withLock {
                 startupFailure ?? (self.stream === stream ? nil : CancellationError())
             }
             if let failure { throw failure }
         } catch {
-            stateLock.withLock {
+            let systemAlreadyStopped = stateLock.withLock { () -> Bool in
+                // didStopWithError clears this same stream and records its error without changing
+                // its generation. A later explicit stop or replacement changes the generation;
+                // in that ambiguous case the late start still needs conservative cleanup.
+                let stopped = generation == startGeneration && self.stream == nil && startupFailure != nil
                 if self.stream === stream {
                     self.stream = nil
                     framePacer = nil
@@ -179,8 +205,15 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
                     nativeGeometry = nil
                     nativeGeometryRejected = false
                 }
+                return stopped
             }
-            try? await stream.stopCapture()
+            // A thrown start reports that SCK did not start this stream. Do not wait for an
+            // additional stop of that failed start: it can delay or wedge the next selection.
+            // Once start succeeds, still stop on any later validation/cancellation error. A
+            // concurrent stop may have raced ahead of that successful start and is not enough.
+            // A Swift cancellation while start is pending is not proof that SCK failed to start.
+            // A same-generation system stop is already confirmation that this stream ended.
+            if !systemAlreadyStopped && (started || error is CancellationError) { try? await stopCapture(stream) }
             await drainOutputQueue()
             throw error
         }
@@ -207,7 +240,7 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             nativeGeometryRejected = false
             return previous
         }
-        if let previous { try? await previous.stopCapture() }
+        if let previous { try? await stopCapture(previous) }
         // stopCapture returning does not mean the sample-handler queue has drained. Wait for it,
         // even when didStopWithError already cleared the stream.
         await drainOutputQueue()

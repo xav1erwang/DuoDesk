@@ -68,6 +68,7 @@
 		D0000001000000000000D799 /* HardwareDecoderRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F799 /* HardwareDecoderRouter.swift */; };
 		D0000001000000000000D704 /* HardwareVideoPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F704 /* HardwareVideoPresenter.swift */; };
 		D0000001000000000000D705 /* DeviceTLS.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F705 /* DeviceTLS.swift */; };
+		D0000001000000000000D801 /* DisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F801 /* DisplayPicker.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -133,6 +134,7 @@
 		D0000001000000000000F799 /* HardwareDecoderRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareDecoderRouter.swift; sourceTree = "<group>"; };
 		D0000001000000000000F704 /* HardwareVideoPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareVideoPresenter.swift; sourceTree = "<group>"; };
 		D0000001000000000000F705 /* DeviceTLS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTLS.swift; sourceTree = "<group>"; };
+		D0000001000000000000F801 /* DisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPicker.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -180,6 +182,7 @@
 				A1000001000000000000FB01 /* DuoPosture.swift */,
 				A1000001000000000000FB02 /* DuoPostureReader.swift */,
 				A1000001000000000000F003 /* StreamClient.swift */,
+				D0000001000000000000F801 /* DisplayPicker.swift */,
 				A1000001000000000000F012 /* HostSettingsLedger.swift */,
 				A1000001000000000000F014 /* DiscoveryPolicy.swift */,
 				A1000001000000000000F015 /* SessionLink.swift */,
@@ -337,6 +340,7 @@
 				A1000001000000000000AB01 /* DuoPosture.swift in Sources */,
 				A1000001000000000000AB02 /* DuoPostureReader.swift in Sources */,
 				A1000001000000000000A003 /* StreamClient.swift in Sources */,
+				D0000001000000000000D801 /* DisplayPicker.swift in Sources */,
 				A1000001000000000000A012 /* HostSettingsLedger.swift in Sources */,
 				A1000001000000000000A014 /* DiscoveryPolicy.swift in Sources */,
 				A1000001000000000000A015 /* SessionLink.swift in Sources */,
@@ -500,7 +504,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "$(SRCROOT)/../Signing/Simulator.entitlements";
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -532,7 +536,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;

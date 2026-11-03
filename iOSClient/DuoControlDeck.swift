@@ -9,6 +9,7 @@ struct DuoControlDeck: View {
     @Binding var latched: KeyModifiers
     let showSettings: () -> Void
     let showSystemKeyboard: () -> Void
+    let showCleanImage: () -> Void
     @AppStorage("duodesk.controlMode") private var mode: DuoControlMode = .combined
     @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
     @State private var capsLock = false
@@ -85,6 +86,7 @@ struct DuoControlDeck: View {
             .frame(maxWidth: 300)
             Spacer(minLength: 0)
             rateMenu
+            deckButton("纯净图像", symbol: "arrow.up.left.and.arrow.down.right", action: showCleanImage)
             deckButton("系统键盘", symbol: "keyboard.badge.ellipsis", action: showSystemKeyboard)
             deckButton("设置", symbol: "gearshape", action: showSettings)
         }
@@ -101,14 +103,17 @@ struct DuoControlDeck: View {
                 Text("120 FPS").tag(120)
             }
         } label: {
-            HStack(spacing: 2) {
-                Text("\(DuoStreamPolicy.normalizedFPS(preferredFPS))")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                Text("FPS")
-                    .font(.system(size: 8, weight: .semibold))
+            VStack(spacing: 0) {
+                Text("目标帧率")
+                    .font(.system(size: 8, weight: .medium))
+                    .lineLimit(1)
+                Text("\(DuoStreamPolicy.normalizedFPS(preferredFPS)) FPS")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .foregroundStyle(Color(white: 0.22))
-            .frame(width: 40, height: 34)
+            .frame(width: 48, height: 34)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("目标帧率")
@@ -136,6 +141,7 @@ struct DuoControlDeck: View {
                      onFingers: client.trackpadFingers,
                      latched: latched, onModifiersConsumed: { latched = [] },
                      verticalSpan: nil,
+                     pointerFrameSize: client.videoSize,
                      sendGesture: { client.sendGesture($0, fingers: $1) })
             .background {
                 RoundedRectangle(cornerRadius: 13)

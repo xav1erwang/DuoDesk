@@ -396,22 +396,22 @@ struct LinkConfirmation: View {
     let pair: () -> Void
     let cancel: () -> Void
 
-    private var at: String { link.addresses.first?.text ?? "its address" }
+    private var at: String { link.addresses.first?.text ?? "该地址" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Pair with \(link.name) at \(at)?")
+            Text("要与位于 \(at) 的 \(link.name) 配对吗？")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Palette.text)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
-            Text("Only pair with a code your own Mac shows.")
+            Text("请只使用自己 Mac 上显示的配对码。")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 18) {
                 Button(action: pair) {
-                    Text("Pair")
+                    Text("配对")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.black)
                         .frame(minWidth: 88, minHeight: 44)
@@ -419,7 +419,7 @@ struct LinkConfirmation: View {
                         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.accent))
                 }
                 .buttonStyle(.plain)
-                Button("Cancel", action: cancel)
+                Button("取消", action: cancel)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Palette.accent)
                     .frame(minHeight: 44)

@@ -224,9 +224,9 @@ enum UpdatePolicy {
     // MARK: Words
 
     /// "Sill 0.4 Is Available…": the status menu's item.
-    static func menuTitle(_ offer: Offer) -> String { "Sill \(offer.version) Is Available…" }
+    static func menuTitle(_ offer: Offer) -> String { "上游 Sill \(offer.version) 可用…" }
     /// "You have 0.3; opens its download page".
-    static func menuSubtitle(running: SillVersion) -> String { "You have \(running); opens its download page" }
+    static func menuSubtitle(running: SillVersion) -> String { "当前版本为 \(running)；点击打开发行页面" }
 
     /// The log's line for an outcome, nil for none (an automatic check that found nothing new).
     /// `running` as written ("0.3.0"); `retryIn` the retry's length, for a check with no answer.
@@ -267,18 +267,18 @@ enum UpdatePolicy {
     /// Settings › General's line after Check Now, and whether it is a failure (shown in orange).
     static func resultLine(_ outcome: Outcome, time: (Date) -> String) -> (text: String, failed: Bool) {
         switch outcome {
-        case .newer(let offer): return ("Sill \(offer.version) is available.", false)
-        case .upToDate: return ("Sill is up to date.", false)
-        case .noRelease: return ("Couldn’t check: GitHub has no release of Sill yet.", true)
+        case .newer(let offer): return ("上游 Sill \(offer.version) 可用。", false)
+        case .upToDate: return ("未发现更新的上游 Sill 版本。", false)
+        case .noRelease: return ("无法检查：上游 Sill 暂无发行版本。", true)
         case .limited(_, let reset):
-            return ("Couldn’t check: GitHub is limiting requests from this network. "
-                    + (reset.map { "Try again after \(time($0))." } ?? "Try again in an hour."), true)
-        case .httpError(let status): return ("Couldn’t check: GitHub answered with an error (HTTP \(status)).", true)
-        case .notARelease: return ("Couldn’t check: GitHub’s answer wasn’t a release Sill understands.", true)
+            return ("无法检查：GitHub 限制了此网络的请求。"
+                    + (reset.map { "请在 \(time($0)) 后重试。" } ?? "请在一小时后重试。"), true)
+        case .httpError(let status): return ("无法检查：GitHub 返回错误（HTTP \(status)）。", true)
+        case .notARelease: return ("无法检查：GitHub 返回了无法识别的发行信息。", true)
         case .noConnection(let code, let description):
-            return (tlsCodes.contains(code) ? "Couldn’t check: \(description)" : "Couldn’t check: this Mac isn’t connected to the internet.", true)
-        case .timeout: return ("Couldn’t check: GitHub didn’t answer within \(Int(requestTimeout)) seconds.", true)
-        case .failed(_, let description): return ("Couldn’t check: \(description)", true)
+            return (tlsCodes.contains(code) ? "无法检查：\(description)" : "无法检查：此 Mac 未连接互联网。", true)
+        case .timeout: return ("无法检查：GitHub 在 \(Int(requestTimeout)) 秒内没有响应。", true)
+        case .failed(_, let description): return ("无法检查：\(description)", true)
         }
     }
 
@@ -296,9 +296,9 @@ enum UpdatePolicy {
         var resultID = 0
     }
 
-    static let notCheckedLine = "Not checked yet."
-    static let noVersionLine = "This build of Sill has no version number, so it can’t check."
-    static let testPatternLine = "Sill doesn’t check for updates in test pattern mode."
+    static let notCheckedLine = "尚未检查更新。"
+    static let noVersionLine = "当前构建没有版本号，无法检查更新。"
+    static let testPatternLine = "测试图模式不检查更新。"
 
     /// The pane's line, first match wins: a check running; this run's Check Now result (kept until
     /// GitHub answers an automatic check, UpdateChecker); why Sill cannot check (no version, test
@@ -308,7 +308,7 @@ enum UpdatePolicy {
         let canCheck = hasVersion && !testPatternOnly
         var p = Pane(line: notCheckedLine, releasePage: offer?.url, canCheck: canCheck && !checking, resultID: resultID)
         if checking {
-            p.line = "Checking…"
+            p.line = "正在检查…"
         } else if let result {
             (p.line, p.failed) = resultLine(result, time: time)
         } else if !hasVersion {
@@ -316,13 +316,13 @@ enum UpdatePolicy {
         } else if testPatternOnly {
             p.line = testPatternLine
         } else if let offer {
-            p.line = "Sill \(offer.version) is available."
+            p.line = "上游 Sill \(offer.version) 可用。"
         } else if let lastCheck {
-            p.line = "Last checked \(date(lastCheck))."
+            p.line = "上次检查：\(date(lastCheck))。"
         }
         return p
     }
 
     /// The pane's footer.
-    static let footnote = "Once a day, Sill asks GitHub whether a newer version is out. GitHub sees this Mac’s IP address and which version of Sill it has; nothing else is sent. Sill never downloads or installs anything by itself: a new version opens its page on GitHub, where you download it."
+    static let footnote = "每天检查 GitHub 上游 Sill 的发行版本，结果不代表 DUO你电脑 的更新。GitHub 会收到此 Mac 的 IP 地址和应用版本号，不会收到其他信息。应用不会自动下载安装。"
 }

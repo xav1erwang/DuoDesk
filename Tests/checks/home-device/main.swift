@@ -92,7 +92,7 @@ check("hint: a method row keeps today's (Direct: \"Connects without a shared Wi�
       W.method(.direct).hint(name: mini, device: "iPad", direct: true) == "Connects without a shared Wi\u{2011}Fi network"
       && W.method(.wifi).hint(name: mini, device: "iPad", direct: false) == "")
 check("status: \"Mac mini runs an older Sill. Update Sill on the Mac to connect.\"",
-      P.updateSillStatus(mac: mini) == "Mac mini runs an older Sill. Update Sill on the Mac to connect.")
+      P.updateSillStatus(mac: mini) == "Mac mini 上的 DUO你电脑版本过旧，请更新 Mac 端后连接。")
 
 // MARK: §7.4, every combination against the table
 
@@ -387,19 +387,19 @@ check("linkRows: nothing with p listed: none (the link's addresses follow)", P.l
 
 // The words (§7.7).
 typealias C = DiscoveryPolicy.HomeCopy
-check("copy: Pairing with Mac mini…, …over the cable…", C.pairing(mac: mini, cable: false) == "Pairing with Mac mini\u{2026}"
-      && C.pairing(mac: mini, cable: true) == "Pairing with Mac mini over the cable\u{2026}")
-check("copy: Paired with Mac mini over the cable.", C.pairedOverCable(mac: mini) == "Paired with Mac mini over the cable.")
-check("copy: Mac mini is showing a code. Point this iPad at it.", C.showing(mac: mini, device: "iPad") == "Mac mini is showing a code. Point this iPad at it.")
-check("copy: openOnMac", C.openOnMac(mac: mini) == "Mac mini didn\u{2019}t show a code. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again.")
-check("copy: locked", C.locked(mac: mini) == "Unlock Mac mini, then tap it again.")
-check("copy: removed", C.removed(mac: mini, device: "iPad") == "Mac mini removed this iPad. Tap it to pair again."
-      && C.removed(mac: mini, device: "iPhone") == "Mac mini removed this iPhone. Tap it to pair again.")
-check("copy: pairingRequired", C.pairingRequired(mac: mini, device: "iPad") == "Mac mini now asks devices to pair. Tap it to pair this iPad.")
-check("copy: the home card's errors", C.stopped(mac: mini) == "Mac mini stopped pairing after too many wrong codes. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again."
-      && C.expired(mac: mini) == "That code expired. Tap Mac mini for a new one."
-      && C.closed(mac: mini) == "That code no longer works. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again."
-      && C.proofFailed(mac: mini) == "Pairing didn\u{2019}t finish: Mac mini couldn\u{2019}t show it knows the code. Tap it to try again.")
+check("copy: Pairing with Mac mini…, …over the cable…", C.pairing(mac: mini, cable: false) == "正在与 Mac mini 配对…"
+      && C.pairing(mac: mini, cable: true) == "正在通过数据线与 Mac mini 配对…")
+check("copy: Paired with Mac mini over the cable.", C.pairedOverCable(mac: mini) == "已通过数据线与 Mac mini 配对。")
+check("copy: Mac mini is showing a code. Point this iPad at it.", C.showing(mac: mini, device: "iPad") == "Mac mini 正在显示配对码，请用这台 iPad 扫描。")
+check("copy: openOnMac", C.openOnMac(mac: mini) == "Mac mini 未显示配对码，请在 Mac 的 DUO你电脑菜单中打开配对，然后再次点按 Mac mini。")
+check("copy: locked", C.locked(mac: mini) == "请解锁 Mac mini，然后再次点按该 Mac。")
+check("copy: removed", C.removed(mac: mini, device: "iPad") == "Mac mini 已移除这台 iPad，点按该 Mac 可重新配对。"
+      && C.removed(mac: mini, device: "iPhone") == "Mac mini 已移除这台 iPhone，点按该 Mac 可重新配对。")
+check("copy: pairingRequired", C.pairingRequired(mac: mini, device: "iPad") == "Mac mini 现在要求设备配对。点按该 Mac 可配对这台 iPad。")
+check("copy: the home card's errors", C.stopped(mac: mini) == "Mac mini 因多次输入错误而停止配对。请在 Mac 的 DUO你电脑菜单中重新打开配对，然后再次点按 Mac mini。"
+      && C.expired(mac: mini) == "配对码已过期，点按 Mac mini 可获取新配对码。"
+      && C.closed(mac: mini) == "配对码已失效，请在 Mac 的 DUO你电脑菜单中重新打开配对，然后再次点按 Mac mini。"
+      && C.proofFailed(mac: mini) == "配对未完成：无法验证 Mac mini 是否持有配对码。点按该 Mac 可重试。")
 
 // A refused proof at home (the security review, 2026-09-27): kind 20's reason → the card's words.
 // After a stop, and after a code closed (the Mac's Cancel, or used by another device), the Mac keeps
@@ -421,10 +421,10 @@ func refusalWords(_ r: R) -> String {
     }
 }
 check("refusal: stopped and closed send the person to the Sill menu before a tap",
-      [R.stopped, .closed].allSatisfy { refusalWords($0).contains("choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again") })
+      [R.stopped, .closed].allSatisfy { refusalWords($0).contains("DUO你电脑菜单中重新打开配对，然后再次点按 Mac mini") })
 check("refusal: expired, and only expired, says a tap alone gets a new code",
-      refusalWords(.expired).hasSuffix("Tap Mac mini for a new one.") && ![R.stopped, .closed].contains { refusalWords($0).contains("for a new") })
-check("copy: no answer", C.noAnswer(mac: mini) == "Mac mini didn\u{2019}t answer. Check that Sill is open on it, then tap it again.")
+      refusalWords(.expired).hasSuffix("点按 Mac mini 可获取新配对码。") && ![R.stopped, .closed].contains { refusalWords($0).contains("获取新配对码") })
+check("copy: no answer", C.noAnswer(mac: mini) == "Mac mini 没有响应，请检查 Mac 上的 DUO你电脑是否已打开，然后再次点按该 Mac。")
 
 // MARK: Step 5: the Settings panel's Away from home (§7.6) and the words of the home card and the
 // overlay at home (§7.7)
@@ -460,37 +460,37 @@ check("away: over all \(awayAll) inputs, a saved Mac always reads Paired (Pair T
 check("away: Pair This iPad… shows only in an unpaired session (§7.5, §7.6)", offersOnlyUnpaired)
 check("away: a remote session never pairs at a home door", remoteNeverAtHome && away(remote: true, remoteAccess: true, tls: true) == .pairThisDevice(atHome: false))
 
-check("copy: the home card's title, \"Pair with Mac mini\"", C.cardTitle(mac: mini) == "Pair with Mac mini")
-check("copy: the typed path's line (and the collapsed one), \"Type the code Mac mini shows.\"", C.typeCode(mac: mini) == "Type the code Mac mini shows.")
+check("copy: the home card's title, \"Pair with Mac mini\"", C.cardTitle(mac: mini) == "与 Mac mini 配对")
+check("copy: the typed path's line (and the collapsed one), \"Type the code Mac mini shows.\"", C.typeCode(mac: mini) == "输入 Mac mini 显示的配对码。")
 check("copy: the viewfinder's caption and spoken label name the Mac",
-      C.viewfinderCaption(mac: mini) == "Point at the code on Mac mini" && C.viewfinderLabel(mac: mini) == "Camera. Point it at the code on Mac mini.")
-check("copy: the scan line is the status line while the card is up", C.showing(mac: mini, device: "iPhone") == "Mac mini is showing a code. Point this iPhone at it.")
+      C.viewfinderCaption(mac: mini) == "对准 Mac mini 上的配对码" && C.viewfinderLabel(mac: mini) == "相机。请对准 Mac mini 上的配对码。")
+check("copy: the scan line is the status line while the card is up", C.showing(mac: mini, device: "iPhone") == "Mac mini 正在显示配对码，请用这台 iPhone 扫描。")
 check("copy: Pair This iPad… over an unpaired session at home",
-      C.pairThisDeviceAtHome(mac: mini, device: "iPad") == "Mac mini lets devices connect without pairing. Pair this iPad once to keep connecting if that changes, and to reach Mac mini away from home while Remote Access is on. Mac mini shows a code; scan it with this iPad.")
+      C.pairThisDeviceAtHome(mac: mini, device: "iPad") == "Mac mini 当前允许不配对连接。配对这台 iPad 后，即使设置改变也能继续连接；开启远程访问后还可在外连接。请用这台 iPad 扫描 Mac mini 显示的配对码。")
 check("copy: over a stream no row can be tapped: the overlay's words never say Tap",
-      C.proofFailedOverStream(mac: mini) == "Pairing didn\u{2019}t finish: Mac mini couldn\u{2019}t show it knows the code."
-      && C.noAnswerOverStream(mac: mini) == "Mac mini didn\u{2019}t answer. Try again."
-      && ![C.proofFailedOverStream(mac: mini), C.noAnswerOverStream(mac: mini)].contains { $0.contains("Tap") || $0.contains("tap") })
+      C.proofFailedOverStream(mac: mini) == "配对未完成：无法验证 Mac mini 是否持有配对码。"
+      && C.noAnswerOverStream(mac: mini) == "Mac mini 没有响应，请重试。"
+      && ![C.proofFailedOverStream(mac: mini), C.noAnswerOverStream(mac: mini)].contains { $0.contains("点按") })
 check("copy: the card's own errors (under the field) end at the row, the overlay's do not",
-      C.stopped(mac: mini).hasSuffix("tap Mac mini again.") && C.closed(mac: mini).hasSuffix("tap Mac mini again.")
-      && C.expired(mac: mini).contains("Tap Mac mini") && C.proofFailed(mac: mini).contains("Tap it"))
+      C.stopped(mac: mini).hasSuffix("再次点按 Mac mini。") && C.closed(mac: mini).hasSuffix("再次点按 Mac mini。")
+      && C.expired(mac: mini).contains("点按 Mac mini") && C.proofFailed(mac: mini).contains("点按该 Mac"))
 
 // MARK: Pair This iPad…'s line over a session at home that speaks TLS (the security review, 2026-09-27)
 
 let everyAnswer: [P.AskAnswer?] = [nil, .shown, .openOnMac, .locked, .busy(1), .refused, .invalid, .pairedOverCable]
 check("overlay: a code is said to show only when the Mac answered shown",
       everyAnswer.allSatisfy { a in (P.overlayLine(a, mac: mini, device: "iPad") == C.overlayShowing(mac: mini)) == (a == .shown) })
-check("overlay: \"Mac mini is showing a code now.\" for shown", P.overlayLine(.shown, mac: mini, device: "iPad") == "Mac mini is showing a code now.")
+check("overlay: \"Mac mini is showing a code now.\" for shown", P.overlayLine(.shown, mac: mini, device: "iPad") == "Mac mini 正在显示配对码。")
 check("overlay: no code by itself (openOnMac, refused, a second busy, an ok it does not take): the Mac's menu",
       [P.AskAnswer.openOnMac, .refused, .busy(2), .invalid, .pairedOverCable].allSatisfy {
-          P.overlayLine($0, mac: mini, device: "iPad") == "Mac mini didn\u{2019}t show a code by itself. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu."
+          P.overlayLine($0, mac: mini, device: "iPad") == "Mac mini 未自动显示配对码，请在 Mac 的 DUO你电脑菜单中打开配对。"
       })
 check("overlay: locked: \"Unlock Mac mini, then choose Pair This iPad… again.\"",
-      P.overlayLine(.locked, mac: mini, device: "iPad") == "Unlock Mac mini, then choose Pair This iPad\u{2026} again.")
+      P.overlayLine(.locked, mac: mini, device: "iPad") == "请解锁 Mac mini，然后再次选择配对这台 iPad。")
 check("overlay: nothing answered: \"Mac mini didn’t answer. Try again.\"", P.overlayLine(nil, mac: mini, device: "iPad") == C.noAnswerOverStream(mac: mini))
-check("overlay: while asking, \"Asking Mac mini for a code…\"", C.overlayAsking(mac: mini) == "Asking Mac mini for a code\u{2026}")
+check("overlay: while asking, \"Asking Mac mini for a code…\"", C.overlayAsking(mac: mini) == "正在向 Mac mini 请求配对码…")
 check("overlay: no line of it says Tap (over a stream there is no row)",
-      (everyAnswer.map { P.overlayLine($0, mac: mini, device: "iPad") } + [C.overlayAsking(mac: mini)]).allSatisfy { !$0.contains("Tap") && !$0.contains("tap") })
+      (everyAnswer.map { P.overlayLine($0, mac: mini, device: "iPad") } + [C.overlayAsking(mac: mini)]).allSatisfy { !$0.contains("点按") })
 
 // MARK: The reconnect at a row that waits for a tap (the security review, 2026-09-27)
 
@@ -511,8 +511,8 @@ for d in doors { for bits in 0..<16 {
     if P.sessionTrust(dial, savedPin: Data([1])) != nil || dial == .updateSill, end != nil { endsExactlyWhenWaiting = false }
 } }
 check("reconnectEnd: over all \(endsAll) reconnects, it ends exactly at a row that waits for a tap, with the words of why", endsExactlyWhenWaiting)
-check("reconnectEnd's words: the goodbye's own", C.pairingRequired(mac: mini, device: "iPad") == "Mac mini now asks devices to pair. Tap it to pair this iPad."
-      && C.removed(mac: mini, device: "iPad") == "Mac mini removed this iPad. Tap it to pair again.")
+check("reconnectEnd's words: the goodbye's own", C.pairingRequired(mac: mini, device: "iPad") == "Mac mini 现在要求设备配对。点按该 Mac 可配对这台 iPad。"
+      && C.removed(mac: mini, device: "iPad") == "Mac mini 已移除这台 iPad，点按该 Mac 可重新配对。")
 
 // MARK: Kind 18 and a goodbye "removed" speak for the Mac whose key the session has (the security
 // review, 2026-09-27)
@@ -594,7 +594,7 @@ check("a Mac marked newKey without p, seen over TLS: nothing dialed (Update Sill
       P.homeDial(door: .plain, saved: true, revoked: false, homeTLS: true, debug: true, tap: true, newKey: true) == .updateSill)
 check("reconnectEnd: a Mac marked newKey ends the reconnect with its words",
       P.reconnectEnd(P.homeDial(door: .pairingRequired, saved: true, revoked: false, homeTLS: true, debug: false, tap: false, newKey: true), saved: true, newKey: true) == .newKey
-      && C.newKey(mac: noah, device: "iPad") == "Noah’s MacBook Pro has a new key since this iPad paired. Tap it to pair again.")
+      && C.newKey(mac: noah, device: "iPad") == "这台 iPad 配对后，Noah’s MacBook Pro 的密钥已更换。点按该 Mac 可重新配对。")
 check("a dial not the reconnect's ends after 10 s, the reconnect's own 5 s left as it is", P.tapDialDeadline == 10)
 
 print(fails == 0 ? "ALL PASS (\(passes))" : "\(fails) FAIL, \(passes) pass")

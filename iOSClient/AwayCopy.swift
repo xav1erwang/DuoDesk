@@ -13,13 +13,14 @@ import StreamProtocol
 enum AwayCopy {
     /// "Low · Standard", from the Mac's word.
     static func title(_ bitrate: Int, _ captureScale: Double) -> String {
-        QualityPreset.shortTitle(bitrate: bitrate, captureScale: captureScale)
+        "\(String(localized: DuoQualityLabels.name(forBitrate: bitrate))) · \(captureScale >= 1.5 ? "Retina" : "标准")"
     }
 
     /// The same for VoiceOver: "Low, Standard", "12 megabits per second, Retina".
     static func spoken(_ bitrate: Int, _ captureScale: Double) -> String {
-        let name = QualityPreset(rawValue: bitrate)?.name ?? "\(QualityPreset.mbps(bitrate)) megabits per second"
-        return "\(name), \(captureScale >= 1.5 ? "Retina" : "Standard")"
+        let name = QualityPreset(rawValue: bitrate).map { _ in String(localized: DuoQualityLabels.name(forBitrate: bitrate)) }
+            ?? "每秒 \(QualityPreset.mbps(bitrate)) 兆比特"
+        return "\(name)，\(captureScale >= 1.5 ? "Retina" : "标准")"
     }
 
     /// A title kept whole on its line ("Low · Standard", "12 Mbps · Retina"): no-break spaces.
@@ -36,11 +37,11 @@ enum AwayCopy {
     static func headerLine(_ away: AwayQuality?) -> (text: String, spoken: String)? {
         guard let a = away, a.thisConnectionAway else { return nil }
         if a.awayRunning {
-            return ("Away: \(whole(title(a.awayBitrate, a.awayCaptureScale)))",
-                    ", away quality, \(spoken(a.awayBitrate, a.awayCaptureScale))")
+            return ("远程画质：\(whole(title(a.awayBitrate, a.awayCaptureScale)))",
+                    "，远程画质，\(spoken(a.awayBitrate, a.awayCaptureScale))")
         }
-        return ("Home quality: \(whole(title(a.homeBitrate, a.homeCaptureScale))) (a device at home is connected)",
-                ", home quality, \(spoken(a.homeBitrate, a.homeCaptureScale)), because a device at home is connected")
+        return ("本地画质：\(whole(title(a.homeBitrate, a.homeCaptureScale)))（有本地设备连接）",
+                "，本地画质，\(spoken(a.homeBitrate, a.homeCaptureScale))，因为有本地设备连接")
     }
 
     // MARK: The panel's footnote
@@ -52,13 +53,13 @@ enum AwayCopy {
         guard let a = away else { return nil }
         let home = whole(title(a.homeBitrate, a.homeCaptureScale))
         if a.thisConnectionAway, a.awayRunning {
-            return "Away from home, \(mac) streams at what you choose here and keeps it for next time. At home it goes back to \(home)."
+            return "远程连接时，\(mac) 使用并保存这里选择的画质；本地连接时恢复为 \(home)。"
         }
         if a.thisConnectionAway {
-            return "A device at home is connected, so \(mac) streams at its home quality, \(home). What you choose here applies once every device is away."
+            return "有本地设备连接，\(mac) 当前使用本地画质 \(home)。所有设备均为远程连接时，这里的选择才会生效。"
         }
         guard remoteAccessOn else { return nil }
-        return "Away from home, \(mac) streams at \(whole(title(a.awayBitrate, a.awayCaptureScale)))."
+        return "远程连接时，\(mac) 使用 \(whole(title(a.awayBitrate, a.awayCaptureScale)))。"
     }
 
     // MARK: The link
@@ -71,8 +72,8 @@ enum AwayCopy {
         if let scale = link.suggestedCaptureScale {
             return (title(bitrate, scale), spoken(bitrate, scale), change)
         }
-        let name = QualityPreset.name(forBitrate: bitrate)
-        return (name, QualityPreset(rawValue: bitrate)?.name ?? "\(QualityPreset.mbps(bitrate)) megabits per second", change)
+        let name = String(localized: DuoQualityLabels.name(forBitrate: bitrate))
+        return (name, QualityPreset(rawValue: bitrate) == nil ? "每秒 \(QualityPreset.mbps(bitrate)) 兆比特" : name, change)
     }
 
     /// The callout while the link is behind, and its button. First match wins: away while a device at
@@ -93,15 +94,15 @@ enum AwayCopy {
 
     static func callout(link: LinkReport?, away: AwayQuality?, mac: String) -> Callout? {
         guard let link, link.isBehind else { return nil }
-        let quality = QualityPreset.name(forBitrate: link.bitrate)
+        let quality = String(localized: DuoQualityLabels.name(forBitrate: link.bitrate))
         if let a = away, a.thisConnectionAway, !a.awayRunning {
-            return Callout(text: "The link can’t carry \(quality), which \(mac) keeps while a device at home is connected.", button: nil)
+            return Callout(text: "连接无法承载\(quality)画质；由于有本地设备连接，\(mac) 会继续使用该画质。", button: nil)
         }
         if let s = suggestion(link) {
-            return Callout(text: "The link can’t carry \(quality). \(whole(s.title)) is recommended.",
-                           button: Callout.Button(title: "Use \(whole(s.title))", spoken: "Use \(s.spoken)", change: s.change))
+            return Callout(text: "连接无法承载\(quality)画质，建议使用 \(whole(s.title))。",
+                           button: Callout.Button(title: "使用 \(whole(s.title))", spoken: "使用 \(s.spoken)", change: s.change))
         }
-        return Callout(text: "The link to \(mac) is too slow for a steady picture, even at Low.", button: nil)
+        return Callout(text: "连接 \(mac) 的速度过慢，即使使用省流画质也可能不稳定。", button: nil)
     }
 
     /// The old slow-link callout (the round trip over 250 ms away from home) shows only for a Mac that
@@ -115,8 +116,8 @@ enum AwayCopy {
     /// Settings." when the panel offers something to pick, else "The link to Mac mini can’t keep up."
     static func streamLine(link: LinkReport?, away: AwayQuality?, mac: String) -> String? {
         guard let c = callout(link: link, away: away, mac: mac), let link else { return nil }
-        if c.button != nil { return "The link can’t keep up with \(QualityPreset.name(forBitrate: link.bitrate)). Lower it in Settings." }
-        return "The link to \(mac) can’t keep up."
+        if c.button != nil { return "连接无法承载\(String(localized: DuoQualityLabels.name(forBitrate: link.bitrate)))画质，可在设置中调低。" }
+        return "连接 \(mac) 的速度过慢。"
     }
 }
 

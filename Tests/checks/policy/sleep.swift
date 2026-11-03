@@ -133,12 +133,12 @@ func afterSleepPolicy() {
           && redial(3, 10, fg: false, 1000) == (false, nil))
 
     let mini = "Mac mini"
-    let quiet = "Mac mini isn\u{2019}t answering. It may be asleep. Sill keeps trying, or tap it to try now."
-    let stopped = "Stopped trying to reach Mac mini. Tap it to try again."
+    let quiet = "Mac mini 没有响应，可能已睡眠。正在继续尝试，也可点按该 Mac 立即重试。"
+    let stopped = "已停止尝试连接 Mac mini。点按该 Mac 可重试。"
     check("reconnectLine: the first three dials say Reconnecting, as before",
-          (0...2).allSatisfy { P.reconnectLine(mac: mini, failed: $0, direct: false) == "Reconnecting to Mac mini\u{2026}" })
+          (0...2).allSatisfy { P.reconnectLine(mac: mini, failed: $0, direct: false) == "正在重新连接 Mac mini…" })
     check("reconnectLine: a Direct row's say directly, as before",
-          (0...2).allSatisfy { P.reconnectLine(mac: mini, failed: $0, direct: true) == "Reconnecting to Mac mini directly\u{2026}" })
+          (0...2).allSatisfy { P.reconnectLine(mac: mini, failed: $0, direct: true) == "正在通过直连重新连接 Mac mini…" })
     check("reconnectLine: after 3 that did not connect, the Mac may be asleep, through every later dial",
           (3...11).allSatisfy { P.reconnectLine(mac: mini, failed: $0, direct: false) == quiet && P.reconnectLine(mac: mini, failed: $0, direct: true) == quiet })
     check("reconnectLine: after 12, stopped, in the remote path's words", P.reconnectLine(mac: mini, failed: 12, direct: false) == stopped
@@ -179,14 +179,14 @@ func afterSleepPolicy() {
     let stop = reconnect(until: 600, answersFrom: 14)
     check("reconnect model (a host stopped for 20 s): dials at 0, 5 and 15 s, the third connects",
           stop.dials == [0, 5, 15] && stop.connectedAt == 15)
-    check("reconnect model (a host stopped for 20 s): Reconnecting… all the way", stop.lines.map(\.line) == ["Reconnecting to Mac mini\u{2026}"])
+    check("reconnect model (a host stopped for 20 s): Reconnecting… all the way", stop.lines.map(\.line) == ["正在重新连接 Mac mini…"])
     // A Mac a sleep proxy answers for, that never wakes: twelve dials in about 4.6 minutes, the quiet
     // line after the third, then stopped; never two dials closer than 5 s.
     let asleep = reconnect(until: 3600)
     check("reconnect model (a sleep proxy, the Mac never answers): 12 dials, at 0, 5, 15, 35, then every 30 s",
           asleep.dials == [0, 5, 15, 35, 65, 95, 125, 155, 185, 215, 245, 275])
     check("reconnect model (a sleep proxy): the quiet line 20 s after the loss, stopped at 280 s",
-          asleep.lines.map(\.at) == [0, 20, 280] && asleep.lines.map(\.line) == ["Reconnecting to Mac mini\u{2026}", quiet, stopped])
+          asleep.lines.map(\.at) == [0, 20, 280] && asleep.lines.map(\.line) == ["正在重新连接 Mac mini…", quiet, stopped])
     check("reconnect model: never two dials of a listing closer than 5 s",
           zip(asleep.dials, asleep.dials.dropFirst()).allSatisfy { $1 - $0 >= 5 })
     // The Mac wakes 100 s in (opened by someone at it): the next dial, at 125 s, connects.

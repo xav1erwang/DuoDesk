@@ -86,8 +86,13 @@ final class HEVCDisplayView: UIView {
         // A fold briefly reports the new hinge with the old scene metrics. Do not cache that
         // transient outer-display size as the inner display's native resolution.
         guard abs(windowPixels[0] - native[0]) < 2, abs(windowPixels[1] - native[1]) < 2 else { return }
-        onNativeDisplaySize?(DuoNativeDisplayMetrics(pixels: screen.nativeBounds.size, windowSize: window.bounds.size))
+        let rendered = CGSize(width: window.bounds.width * screen.scale, height: window.bounds.height * screen.scale)
+        onNativeDisplaySize?(DuoNativeDisplayMetrics(pixels: screen.nativeBounds.size, windowSize: window.bounds.size,
+                                                     renderPixels: rendered))
     }
+
+    /// A new connection can reuse the already attached view without another layout callback.
+    func refreshNativeDisplaySize() { reportNativeDisplaySize() }
 
     /// The streamed frame's pixel size, reported on main whenever new parameter sets arrive.
     /// Input needs it: touches are normalized against the video, not against this view.
@@ -112,6 +117,8 @@ final class HEVCDisplayView: UIView {
     /// Where the sprite's tip is, a fraction of the video frame, or nil when hidden: what
     /// `StreamClient.renderPointer` last handed over.
     private var pointer: CGPoint?
+    private var videoOnly = false
+    private var cursorInVideoOnly = false
     /// Main-thread copy of the frame size the layer draws. `apply` runs on the network queue and
     /// hops here with it; `clear` zeroes it. Zero hides the sprite: there is no frame to point into.
     private var pointerVideoSize: CGSize = .zero
@@ -206,6 +213,7 @@ final class HEVCDisplayView: UIView {
         guard DiagnosticsHUDView.isEnabled, hud == nil else { return }
         let hud = DiagnosticsHUDView(frame: .zero)
         hud.layer.zPosition = Self.hudZ   // above the pointer sprite
+        hud.isHidden = videoOnly
         addSubview(hud)
         self.hud = hud
         // [weak hud]: the view owns the subscriptions, the subscriptions must not own the view.
@@ -225,6 +233,19 @@ final class HEVCDisplayView: UIView {
         placeCursor()
     }
 
+    /// Extended-display mode still needs the Mac's cursor: the host captures it separately from
+    /// the video. Other pure-image modes keep the previous pointer-free presentation.
+    func setVideoOnly(_ enabled: Bool, showCursor: Bool = false) {
+        guard enabled != videoOnly || showCursor != cursorInVideoOnly else { return }
+        videoOnly = enabled
+        cursorInVideoOnly = showCursor
+        #if DEBUG
+        hud?.isHidden = enabled
+        debugFrame?.isHidden = enabled
+        #endif
+        placeCursor()
+    }
+
     #if DEBUG
     /// The layout harness (`-SillPointer`): the frame size the sprite needs, as the host's parameter
     /// sets would give it, for a mock that never streams; and a dim rectangle where that frame is
@@ -235,6 +256,7 @@ final class HEVCDisplayView: UIView {
             let frame = CALayer()
             frame.backgroundColor = UIColor(white: 0.16, alpha: 1).cgColor
             frame.zPosition = Self.cursorZ - 1
+            frame.isHidden = videoOnly
             layer.addSublayer(frame)
             debugFrame = frame
         }
@@ -281,7 +303,7 @@ final class HEVCDisplayView: UIView {
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         let rect = Self.videoRect(in: bounds, videoSize: pointerVideoSize)
-        guard let p = pointer, rect.width > 0, rect.height > 0 else {
+        guard (!videoOnly || cursorInVideoOnly), let p = pointer, rect.width > 0, rect.height > 0 else {
             cursorLayer.isHidden = true
             return
         }
@@ -348,6 +370,8 @@ final class HEVCDisplayView: UIView {
 
 struct StreamView: UIViewRepresentable {
     let client: StreamClient
+    var videoOnly = false
+    var cursorInVideoOnly = false
 
     /// Hosts the client's single display view. SwiftUI may build the new layout's host before it
     /// dismantles the old one, so detach the view from wherever it was first.
@@ -358,6 +382,7 @@ struct StreamView: UIViewRepresentable {
         view.attachDiagnostics(to: client)
         #endif
         wirePointer(view)
+        view.setVideoOnly(videoOnly, showCursor: cursorInVideoOnly)
         return view
     }
 
@@ -379,5 +404,7 @@ struct StreamView: UIViewRepresentable {
         client.renderPointer()
     }
 
-    func updateUIView(_ uiView: HEVCDisplayView, context: Context) {}
+    func updateUIView(_ uiView: HEVCDisplayView, context: Context) {
+        uiView.setVideoOnly(videoOnly, showCursor: cursorInVideoOnly)
+    }
 }

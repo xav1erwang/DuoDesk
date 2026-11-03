@@ -391,6 +391,30 @@ do {
 
 // MARK: The portrait pad's cursor
 
+// Duo's pad can be much wider than it is tall, especially in combined mode. Equal finger travel
+// should cover equal distances on the rendered picture regardless of the pad or video shape.
+do {
+    for width: CGFloat in [360, 500, 640] {
+        for frame in [CGSize(width: 2008, height: 1428), CGSize(width: 1920, height: 1080),
+                      CGSize(width: 1080, height: 1920), CGSize(width: 1000, height: 1000)] {
+            let step = PadCursor.motion(dx: 20, dy: 20, padWidth: width, verticalSpan: 80,
+                                        frameSize: frame)!
+            check(abs(step.x * frame.width - step.y * frame.height) < 1e-9,
+                  "equal finger travel moves equally far on the picture for pad \(width), frame \(frame)")
+            check(abs(step.x - 20 / width) < 1e-12, "Duo keeps the existing horizontal sensitivity")
+        }
+    }
+    for frame: CGSize? in [nil, .zero, CGSize(width: CGFloat.infinity, height: 1080),
+                           CGSize(width: 1920, height: CGFloat.nan)] {
+        let step = PadCursor.motion(dx: -20, dy: 10, padWidth: 500, verticalSpan: 80, frameSize: frame)
+        check(step == pt(-0.04, 0.125), "missing or invalid frame keeps the previous axis scaling")
+    }
+    check(PadCursor.motion(dx: 1, dy: 1, padWidth: 0, verticalSpan: 80, frameSize: .zero) == nil,
+          "zero-width pad cannot produce pointer movement")
+    check(PadCursor.motion(dx: .nan, dy: 1, padWidth: 500, verticalSpan: 80, frameSize: .zero) == nil,
+          "invalid finger motion cannot corrupt the cursor")
+}
+
 do {
     var pad = PadCursor()
     check(pad.cursor == pt(0.5, 0.5) && pad.reseedsSeen == 0, "the pad starts in the middle")

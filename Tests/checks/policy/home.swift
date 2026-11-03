@@ -147,19 +147,19 @@ func homePolicy() {
 
     // The words (§7.7).
     typealias C = DiscoveryPolicy.HomeCopy
-    check("copy: Pairing with Mac mini…, …over the cable…", C.pairing(mac: mini, cable: false) == "Pairing with Mac mini\u{2026}"
-          && C.pairing(mac: mini, cable: true) == "Pairing with Mac mini over the cable\u{2026}")
-    check("copy: Paired with Mac mini over the cable.", C.pairedOverCable(mac: mini) == "Paired with Mac mini over the cable.")
-    check("copy: Mac mini is showing a code. Point this iPad at it.", C.showing(mac: mini, device: "iPad") == "Mac mini is showing a code. Point this iPad at it.")
-    check("copy: openOnMac", C.openOnMac(mac: mini) == "Mac mini didn\u{2019}t show a code. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again.")
-    check("copy: locked", C.locked(mac: mini) == "Unlock Mac mini, then tap it again.")
-    check("copy: removed", C.removed(mac: mini, device: "iPad") == "Mac mini removed this iPad. Tap it to pair again."
-          && C.removed(mac: mini, device: "iPhone") == "Mac mini removed this iPhone. Tap it to pair again.")
-    check("copy: pairingRequired", C.pairingRequired(mac: mini, device: "iPad") == "Mac mini now asks devices to pair. Tap it to pair this iPad.")
-    check("copy: the home card's errors", C.stopped(mac: mini) == "Mac mini stopped pairing after too many wrong codes. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again."
-          && C.expired(mac: mini) == "That code expired. Tap Mac mini for a new one."
-          && C.closed(mac: mini) == "That code no longer works. On the Mac, choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again."
-          && C.proofFailed(mac: mini) == "Pairing didn\u{2019}t finish: Mac mini couldn\u{2019}t show it knows the code. Tap it to try again.")
-    check("copy: no answer", C.noAnswer(mac: mini) == "Mac mini didn\u{2019}t answer. Check that Sill is open on it, then tap it again.")
+    check("copy: Pairing with Mac mini…, …over the cable…", C.pairing(mac: mini, cable: false) == "正在与 Mac mini 配对…"
+          && C.pairing(mac: mini, cable: true) == "正在通过数据线与 Mac mini 配对…")
+    check("copy: Paired with Mac mini over the cable.", C.pairedOverCable(mac: mini) == "已通过数据线与 Mac mini 配对。")
+    check("copy: Mac mini is showing a code. Point this iPad at it.", C.showing(mac: mini, device: "iPad") == "Mac mini 正在显示配对码，请用这台 iPad 扫描。")
+    check("copy: openOnMac", C.openOnMac(mac: mini) == "Mac mini 未显示配对码，请在 Mac 的 DUO你电脑菜单中打开配对，然后再次点按 Mac mini。")
+    check("copy: locked", C.locked(mac: mini) == "请解锁 Mac mini，然后再次点按该 Mac。")
+    check("copy: removed", C.removed(mac: mini, device: "iPad") == "Mac mini 已移除这台 iPad，点按该 Mac 可重新配对。"
+          && C.removed(mac: mini, device: "iPhone") == "Mac mini 已移除这台 iPhone，点按该 Mac 可重新配对。")
+    check("copy: pairingRequired", C.pairingRequired(mac: mini, device: "iPad") == "Mac mini 现在要求设备配对。点按该 Mac 可配对这台 iPad。")
+    check("copy: the home card's errors", C.stopped(mac: mini) == "Mac mini 因多次输入错误而停止配对。请在 Mac 的 DUO你电脑菜单中重新打开配对，然后再次点按 Mac mini。"
+          && C.expired(mac: mini) == "配对码已过期，点按 Mac mini 可获取新配对码。"
+          && C.closed(mac: mini) == "配对码已失效，请在 Mac 的 DUO你电脑菜单中重新打开配对，然后再次点按 Mac mini。"
+          && C.proofFailed(mac: mini) == "配对未完成：无法验证 Mac mini 是否持有配对码。点按该 Mac 可重试。")
+    check("copy: no answer", C.noAnswer(mac: mini) == "Mac mini 没有响应，请检查 Mac 上的 DUO你电脑是否已打开，然后再次点按该 Mac。")
 
 }

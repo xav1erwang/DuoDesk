@@ -20,8 +20,12 @@ extension StreamClient {
     func sendViewport(_ v: Viewport) {
         var v = v
         if v.localCursor == nil { v.localCursor = localCursorState.wanted }
+        v.recoverableDesktopFailure = true
         lastViewport = v
-        send(.viewport, payload: Wire.encode(v))
+        guard let sized = nativeSizedViewport(v) else { return }
+        lastViewport = sized
+        send(.viewport, payload: Wire.encode(sized))
+        nativeViewportWasSent()
     }
 
     /// Say whether this client draws its own pointer: true takes the Mac cursor out of the video,

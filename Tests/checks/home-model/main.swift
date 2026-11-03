@@ -170,8 +170,8 @@ for close in closes { for byThisProof in [true, false] {
     quietAll += 1
     let reason = PairingWindow.closedReason(close, stoppedByThisProof: byThisProof)
     let words = cardWords(reason)
-    let menuFirst = words.contains("choose Pair iPhone or iPad\u{2026} in the Sill menu, then tap Mac mini again")
-    if AskLimits.quiets(close) ? menuFirst : (menuFirst || words.hasSuffix("for a new one.")) { quietHonest += 1 }
+    let menuFirst = words.contains("DUO你电脑菜单中重新打开配对，然后再次点按 Mac mini")
+    if AskLimits.quiets(close) ? menuFirst : (menuFirst || words.hasSuffix("点按 Mac mini 可获取新配对码。")) { quietHonest += 1 }
     else { print("  \(close) (\(byThisProof)): \(reason) → \(words)") }
 } }
 check("every close (\(quietHonest) of \(quietAll)): the card never says a tap alone gets a new code where the Mac keeps the device quiet",
@@ -188,10 +188,10 @@ check("the literals homeRefusal reads are the wire's", PairResult.code == "code"
 // waits for a tap; it ends there with the goodbye's own words, not "…reconnects when it's back".
 let lost = GoodbyePolicy.outcome(nil, mac: "Office", device: "iPad", saved: false)
 let officeBack = P.homeDial(door: .pairingRequired, saved: false, revoked: false, homeTLS: false, debug: true, tap: false)
-check("11 the session lost without a goodbye: its words promise a reconnect", lost.reconnect && lost.text.contains("reconnect"))
+check("11 the session lost without a goodbye: its words promise a reconnect", lost.reconnect && lost.text.contains("重新连接"))
 check("11 the row back with p=1: the reconnect waits for a tap, and ends with \"now asks devices to pair\"",
       officeBack == .waitForTap && P.reconnectEnd(officeBack, saved: false) == .pairingRequired
-      && P.HomeCopy.pairingRequired(mac: "Office", device: "iPad") == "Office now asks devices to pair. Tap it to pair this iPad.")
+      && P.HomeCopy.pairingRequired(mac: "Office", device: "iPad") == "Office 现在要求设备配对。点按该 Mac 可配对这台 iPad。")
 check("11 the same row, still an open door: the reconnect dials it with any key, and nothing ends",
       P.homeDial(door: .open, saved: false, revoked: false, homeTLS: false, debug: true, tap: false) == .anyKey
       && P.reconnectEnd(.anyKey, saved: false) == nil)
