@@ -76,13 +76,15 @@ final class VirtualDisplay {
     }
 
     let name: String
-    let widthPt: Int
-    let heightPt: Int
+    private(set) var widthPt: Int
+    private(set) var heightPt: Int
     let scale: Int
     private(set) var refreshHz: Double
     let vendorID: UInt32
     let productID: UInt32
     let serialNum: UInt32
+    private let maximumPixelWidth: Int
+    private let maximumPixelHeight: Int
 
     /// Zero after `destroy()`.
     private(set) var displayID: CGDirectDisplayID = 0
@@ -118,7 +120,8 @@ final class VirtualDisplay {
          refreshHz: Double = 60,
          vendorID: UInt32 = 0x5111,
          productID: UInt32 = 0x0001,
-         serialNum: UInt32 = 1) throws {
+         serialNum: UInt32 = 1,
+         maximumPixels: CGSize? = nil) throws {
         guard widthPt >= 320, heightPt >= 240, widthPt <= 8192, heightPt <= 8192 else {
             throw Failure.invalidSize("\(widthPt)×\(heightPt) pt is outside 320×240…8192×8192")
         }
@@ -133,12 +136,19 @@ final class VirtualDisplay {
         self.serialNum = serialNum
 
         let pxW = widthPt * scale, pxH = heightPt * scale
+        let capacity = maximumPixels ?? CGSize(width: pxW, height: pxH)
+        guard capacity.width.isFinite, capacity.height.isFinite,
+              let maximumWidth = Int(exactly: capacity.width), let maximumHeight = Int(exactly: capacity.height),
+              maximumWidth >= pxW, maximumHeight >= pxH, maximumWidth <= 16384, maximumHeight <= 16384 else {
+            throw Failure.invalidSize("invalid display capacity")
+        }
+        maximumPixelWidth = maximumWidth; maximumPixelHeight = maximumHeight
 
         // --- Descriptor ---------------------------------------------------------------
         let descriptor = try Runtime.newObject("CGVirtualDisplayDescriptor")
         try Runtime.setObject(descriptor, "setName:", name as NSString)
-        try Runtime.setUInt32(descriptor, "setMaxPixelsWide:", UInt32(pxW))
-        try Runtime.setUInt32(descriptor, "setMaxPixelsHigh:", UInt32(pxH))
+        try Runtime.setUInt32(descriptor, "setMaxPixelsWide:", UInt32(maximumWidth))
+        try Runtime.setUInt32(descriptor, "setMaxPixelsHigh:", UInt32(maximumHeight))
         // Physical size drives the DPI macOS reports. ~110 pt per inch is what Apple's own
         // Retina panels use, which keeps the default "looks like" choice sensible.
         let mm = CGSize(width: Double(widthPt) / 110 * 25.4, height: Double(heightPt) / 110 * 25.4)
@@ -192,6 +202,27 @@ final class VirtualDisplay {
         try Runtime.setUInt32(settings, "setHiDPI:", scale == 2 ? 1 : 0)
         try Runtime.setObject(settings, "setModes:", [mode] as NSArray)
         return settings
+    }
+
+    /// Change only this display's mode table. Its identity and existing mirror/Space stay alive
+    /// while the phone folds, so the desktop is not detached and handed to another monitor.
+    @MainActor
+    func updateSize(width: Int, height: Int) async throws {
+        guard width >= 320, height >= 240, width * scale <= maximumPixelWidth,
+              height * scale <= maximumPixelHeight, let object else { throw Failure.invalidSize("size exceeds display capacity") }
+        guard width != widthPt || height != heightPt else { return }
+        let previous = (widthPt, heightPt)
+        let next = try Self.settings(widthPt: width, heightPt: height, scale: scale, refreshHz: refreshHz)
+        guard try Self.applySettings(next, to: object) else { throw Failure.applySettingsFailed }
+        widthPt = width; heightPt = height
+        guard await waitUntilOnline() else {
+            if let old = try? Self.settings(widthPt: previous.0, heightPt: previous.1, scale: scale, refreshHz: refreshHz),
+               (try? Self.applySettings(old, to: object)) == true {
+                widthPt = previous.0; heightPt = previous.1
+                _ = await waitUntilOnline()
+            }
+            throw Failure.applySettingsFailed
+        }
     }
 
     /// Keep the display identity and mirror group intact across a 60/120 FPS change. Releasing

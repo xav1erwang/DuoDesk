@@ -97,6 +97,22 @@ enum DuoStreamPolicy {
                                  landscape: metrics.windowSize.width > metrics.windowSize.height)
     }
 
+    /// In the normal landscape UI the toolbar and padding sit outside the picture. Match the
+    /// measured picture in render pixels, so keeping the controls visible does not add letterbox.
+    static func landscapePanel(metrics: DuoNativeDisplayMetrics, frame: CGRect, panel: CGSize) -> DuoDesktopResolution? {
+        guard frame.width > frame.height, metrics.windowSize.width > metrics.windowSize.height,
+              let full = extendedDisplay(metrics: metrics),
+              panel.width.isFinite, panel.height.isFinite, panel.width > 0, panel.height > 0,
+              abs(panel.width - (frame.width - 16)) <= 2,
+              panel.height <= frame.height + 2 else { return nil }
+        let sx = Double(full.width) / metrics.windowSize.width
+        let sy = Double(full.height) / metrics.windowSize.height
+        guard abs(sx - sy) < 0.01 else { return nil }
+        let resolution = DuoDesktopResolution(width: Int((panel.width * sx).rounded(.up)),
+                                             height: Int((panel.height * sy).rounded(.up)))
+        return resolution.isValid ? resolution : nil
+    }
+
     static func coherentInnerMetrics(_ metrics: DuoNativeDisplayMetrics, frame: CGRect, fold: CGRect?) -> Bool {
         guard let fold, !frame.isEmpty,
               frame.minX >= -2, frame.minY >= -2,

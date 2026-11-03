@@ -13,6 +13,6 @@ swiftc -O -emit-library -emit-module -module-name StreamProtocol Sources/StreamP
   -emit-module-path "$out/StreamProtocol.swiftmodule" -o "$out/libStreamProtocol.dylib"
 swiftc -O -D DUO_DISPLAY_RESTORE_TESTING -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
   Sources/SillHost/VirtualDisplay.swift Sources/SillHost/DisplayRestoreIdentity.swift \
-  Sources/SillHost/DisplayRecoveryStore.swift Sources/SillHost/DuoDesktopDisplay.swift \
+  Sources/SillHost/DisplayRecoveryStore.swift Sources/SillHost/DuoDesktopDisplay.swift Sources/SillHost/DesktopWindowHandoff.swift Sources/SillHost/WindowSizer.swift Sources/SillHost/WindowRestore.swift \
   Tests/duodesk/display-rejected-restore/main.swift -o "$out/check"
 "$out/check"

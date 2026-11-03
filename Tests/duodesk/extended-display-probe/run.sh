@@ -14,5 +14,5 @@ swiftc -O -emit-library -emit-module -module-name StreamProtocol Sources/StreamP
 swiftc -O -D DUO_DISPLAY_RESTORE_TESTING -I "$out" -L "$out" -lStreamProtocol \
     -Xlinker -rpath -Xlinker "$out" Sources/SillHost/VirtualDisplay.swift \
     Sources/SillHost/DisplayRestoreIdentity.swift Sources/SillHost/DisplayRecoveryStore.swift \
-    Sources/SillHost/DuoDesktopDisplay.swift Tests/duodesk/extended-display-probe/main.swift -o "$out/probe"
+    Sources/SillHost/DuoDesktopDisplay.swift Sources/SillHost/DesktopWindowHandoff.swift Sources/SillHost/WindowSizer.swift Sources/SillHost/WindowRestore.swift Tests/duodesk/extended-display-probe/main.swift -o "$out/probe"
 printf 'Built probe only; execution creates and removes one virtual display.\n'

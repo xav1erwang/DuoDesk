@@ -6,7 +6,8 @@ mkdir -p "$out/PickerFixture.app"
 sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 target=arm64-apple-ios27.0-simulator
 xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$target" -emit-module -emit-library -module-name StreamProtocol \
-  Sources/StreamProtocol/Display.swift -emit-module-path "$out/StreamProtocol.swiftmodule" -o "$out/PickerFixture.app/libStreamProtocol.dylib"
+  Sources/StreamProtocol/Display.swift -emit-module-path "$out/StreamProtocol.swiftmodule" \
+  -Xlinker -install_name -Xlinker @rpath/libStreamProtocol.dylib -o "$out/PickerFixture.app/libStreamProtocol.dylib"
 xcrun --sdk iphonesimulator swiftc -parse-as-library -sdk "$sdk" -target "$target" -I "$out" -L "$out/PickerFixture.app" -lStreamProtocol \
   -Xlinker -rpath -Xlinker @executable_path iOSClient/DisplayPicker.swift Tests/duodesk/display-selection/PickerFixture.swift \
   -o "$out/PickerFixture.app/PickerFixture"

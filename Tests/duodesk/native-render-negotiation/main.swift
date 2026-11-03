@@ -64,4 +64,23 @@ check(DuoStreamPolicy.cachedUpperDisplay(in: defaults, rendered: true) == render
 defaults.set(Data("invalid".utf8), forKey: DuoStreamPolicy.renderedUpperDisplayKey)
 check(DuoStreamPolicy.cachedUpperDisplay(in: defaults, rendered: true) == nil,
       "a corrupt strict cache cannot authorize a request")
-print("Native render sizing: 14 checks passed; no screen or network was used")
+var landscape = rotated
+landscape.windowSize = CGSize(width: 951, height: 669)
+let landscapeFrame = CGRect(x: 0, y: 0, width: 951, height: 669)
+check(DuoStreamPolicy.landscapePanel(metrics: landscape, frame: landscapeFrame,
+                                    panel: CGSize(width: 935, height: 573)) == .init(width: 2805, height: 1719),
+      "landscape matches the measured video panel including the visible toolbar")
+check(DuoStreamPolicy.extendedDisplay(metrics: landscape) == .init(width: 2853, height: 2007),
+      "immersive landscape still uses the complete render canvas")
+check(DuoStreamPolicy.landscapePanel(metrics: landscape, frame: landscapeFrame,
+                                    panel: CGSize(width: 669, height: 475)) == nil,
+      "a stale portrait panel cannot authorize a landscape resize")
+check(DuoStreamPolicy.landscapePanel(metrics: metrics, frame: landscapeFrame,
+                                    panel: CGSize(width: 935, height: 573)) == nil,
+      "stale portrait scene metrics must settle before landscape is requested")
+check(DuoStreamPolicy.landscapePanel(metrics: landscape, frame: landscapeFrame,
+                                    panel: CGSize(width: 935, height: CGFloat.nan)) == nil,
+      "invalid panel measurements cannot authorize a mode")
+check(DuoStreamPolicy.upperDisplay(metrics: metrics, renderedRequired: true) == rendered,
+      "returning to portrait restores the upper display's native canvas")
+print("Native render sizing: 20 checks passed; no screen or network was used")

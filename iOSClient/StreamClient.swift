@@ -475,6 +475,7 @@ final class StreamClient: ObservableObject {
         var frame: CGRect
         var fold: CGRect?
         var fillDisplay: Bool
+        var usesAdaptiveMirrorSize: Bool { fillDisplay || (innerDisplay && frame.width > frame.height) }
     }
     private var nativeSizingContext: NativeSizingContext?
     private var nativeViewportSent = false
@@ -594,8 +595,8 @@ final class StreamClient: ObservableObject {
         guard let rendered = hostRenderedNativeDesktop else { return false }
         if extendedDesktopRequested { return true }
         guard let context = nativeSizingContext else { return false }
-        if rendered, hostResizableMirror, context.fillDisplay {
-            guard let full = fullMirrorResolution(context) else { return false }
+        if rendered, hostResizableMirror, context.usesAdaptiveMirrorSize {
+            guard let full = adaptiveMirrorResolution(context) else { return false }
             return nativeDesktopResolution == full
         }
         let measuredUpper = physicalDesktopFallback?.upper ?? nativeDesktopResolution
@@ -634,8 +635,8 @@ final class StreamClient: ObservableObject {
 
     private func recomputeNativeDesktopResolution() {
         guard !extendedDesktopRequested, let context = nativeSizingContext else { return }
-        if hostRenderedNativeDesktop == true, hostResizableMirror, context.fillDisplay {
-            guard let full = fullMirrorResolution(context) else { return }
+        if hostRenderedNativeDesktop == true, hostResizableMirror, context.usesAdaptiveMirrorSize {
+            guard let full = adaptiveMirrorResolution(context) else { return }
             physicalDesktopFallback = nil
             usingPhysicalDesktopFallback = false
             setNativeDesktopResolution(full)
@@ -672,11 +673,14 @@ final class StreamClient: ObservableObject {
         setNativeDesktopResolution(selected)
     }
 
-    private func fullMirrorResolution(_ context: NativeSizingContext) -> DuoDesktopResolution? {
+    private func adaptiveMirrorResolution(_ context: NativeSizingContext) -> DuoDesktopResolution? {
         guard let metrics = nativeDisplayMetrics else { return nil }
         if context.innerDisplay,
            !DuoStreamPolicy.coherentInnerMetrics(metrics, frame: context.frame, fold: context.fold) { return nil }
-        return DuoStreamPolicy.extendedDisplay(metrics: metrics)
+        if context.fillDisplay { return DuoStreamPolicy.extendedDisplay(metrics: metrics) }
+        guard let viewport = lastViewport else { return nil }
+        return DuoStreamPolicy.landscapePanel(metrics: metrics, frame: context.frame,
+                                             panel: CGSize(width: viewport.width, height: viewport.height))
     }
 
     /// Send the mode change before SwiftUI remeasures. In particular, exit must clear full-screen
@@ -706,7 +710,9 @@ final class StreamClient: ObservableObject {
     /// Called by the viewport sender before the wire handoff. An unknown host or an unmeasured
     /// strict Duo scene holds the message; the latest viewport is flushed once it is ready.
     func nativeSizedViewport(_ viewport: Viewport) -> Viewport? {
-        guard connected, connection != nil, nativeViewportIsReady, !awaitingDisplaySelection else { return nil }
+        guard connected, connection != nil else { return nil }
+        recomputeNativeDesktopResolution()
+        guard nativeViewportIsReady, !awaitingDisplaySelection else { return nil }
         var result = viewport
         result.displayID = selectedDisplayID
         result.desktopResolution = nativeDesktopResolution
