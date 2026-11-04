@@ -62,6 +62,12 @@
 #   (SILL_RELEASE_TAG) and origin is not asked: its checkout keeps no credentials.
 set -euo pipefail
 
+# This upstream script retains Sill's release destinations for historical reference.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    echo 'Use Scripts/release-duodesk.sh for DUO release assets. The inherited Sill publisher is disabled.' >&2
+    exit 2
+fi
+
 usage() {
     cat <<'USAGE'
 usage: Scripts/release.sh [--dry-run | --publish | --check-tag]

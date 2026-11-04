@@ -1,25 +1,23 @@
-name: Bug report
-description: Something in Sill doesn't work as it should.
+name: 问题反馈
+description: 报告 DUO你电脑出现的错误。
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: >-
-        A security problem? Please don't report it here:
-        [SECURITY.md](https://github.com/Saffsanity/sill/security/policy) says how to report it
-        privately. Setting Sill up? The [support page](https://getsill.app/support) has quick
-        fixes for the common problems.
+        安全漏洞请按仓库 SECURITY.md 中的方式报告。
+        附件和日志请先去除设备地址、窗口内容、配对信息及其他个人信息。
   - type: textarea
     id: what
     attributes:
-      label: What happened
-      description: What you did, what you expected, and what Sill did instead.
+      label: 问题现象
+      description: 描述执行了什么操作、预期结果和实际结果。
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: How to make it happen again
+      label: 复现步骤
       placeholder: |
         1.
         2.
@@ -27,54 +25,43 @@ body:
   - type: input
     id: mac
     attributes:
-      label: Your Mac and its macOS
-      placeholder: MacBook Air (M3), macOS 26.1
+      label: Mac 型号和 macOS 版本
     validations:
       required: true
   - type: input
-    id: mac-sill
+    id: mac-version
     attributes:
-      label: Sill for Mac's version
-      description: The line at the foot of Sill's Settings › General, such as "Sill 0.5.1 (563)".
+      label: Mac 端 DUO 版本
+      description: 填写安装包版本或自行构建所用的提交号。
     validations:
       required: true
   - type: input
     id: device
     attributes:
-      label: Your iPhone or iPad and its iOS or iPadOS
-      placeholder: iPad mini (A17 Pro), iPadOS 26.1
+      label: iPhone 或 iPad 型号和系统版本
     validations:
       required: true
   - type: input
-    id: device-sill
+    id: client-version
     attributes:
-      label: The Sill app's version
-      description: >-
-        Settings › General › iPhone Storage (or iPad Storage) › Sill shows it. Sill's log on your
-        Mac names it too, on its "Client hello" line.
+      label: iOS 端 DUO 版本和安装方式
+      description: 填写版本以及 Xcode、自签 IPA 或 TestFlight 等安装方式。
   - type: dropdown
     id: route
     attributes:
-      label: How the device reached the Mac
-      description: The word at the end of your Mac's row on the device.
+      label: 连接方式
       options:
-        - Wi-Fi
-        - Wired (USB cable)
-        - Direct (Direct Wireless Connection)
-        - Remote (Remote Access)
-        - Not paired (it asked to pair)
-        - Update Sill
-        - It didn't connect
-        - I don't know
+        - 同一局域网 Wi-Fi
+        - USB
+        - 直接无线连接
+        - 远程访问
+        - 尚未配对
+        - 不确定
     validations:
       required: true
   - type: textarea
     id: log
     attributes:
-      label: Sill's log on your Mac
-      description: >-
-        Optional. Show Log… in the Sill menu, or ~/Library/Logs/Sill/Sill.log. Paste only the lines
-        around the problem. The log names your windows, your devices and their network addresses,
-        and this issue is public: take out what you don't want to share, or email the lines to
-        support@getsill.app instead.
+      label: 相关日志
+      description: 可选，仅提供问题发生前后的必要片段，并先去除个人信息。
       render: text

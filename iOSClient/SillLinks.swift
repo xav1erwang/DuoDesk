@@ -1,27 +1,29 @@
 // Modified for DUO你电脑, 2026. See NOTICE for upstream attribution.
 import Foundation
 
-/// Where Sill sends people outside the app: Sill's addresses on the web, written once, and its App
-/// Store page. The site is getsill.app (Noah's, confirmed 2026-09-25): change `site` and the
-/// download, support and privacy links and the connect screen's "Get it at …" all follow.
+/// Public links supplied by this distribution's release build.
 enum SillLinks {
-    /// The site. Its host is what the connect screen prints.
-    static let site = URL(string: "https://getsill.app")!
-    /// Where the free Sill for Mac is downloaded (the connect screen's footer).
-    static let download = site.appending(path: "download")
-    /// Help, and how to reach the developer, which guideline 1.5 wants inside the app as well as
-    /// behind App Store Connect's Support URL (the connect screen's footer).
-    static let support = site.appending(path: "support")
-    /// The privacy policy, which guideline 5.1.1(i) wants linked inside the app as well as in
-    /// App Store Connect (the connect screen's footer).
-    static let privacy = site.appending(path: "privacy")
-    /// The site as a person types it: its host alone, "getsill.app".
-    static let siteName = site.host() ?? site.absoluteString
+    /// Omitted in local builds until a public repository is configured.
+    static let repository = repositoryURL(Bundle.main.object(forInfoDictionaryKey: "DUORepositoryURL") as? String)
+    static let download = repository?.appending(path: "releases")
+    static let support = repository?.appending(path: "issues")
+    static let privacy = repository?.appending(path: "blob/HEAD/docs/PRIVACY.md")
 
-    /// Sill's App Store page, https://apps.apple.com/app/id‹Apple ID›: the link under a Mac's update
-    /// notice (a goodbye "update"). The Apple ID is the App Store Connect record's, known once the
-    /// record exists: the release checklist fills it in before the first upload. While the
-    /// placeholder stays, no link shows (the update notice's own words say what to do).
+    static func repositoryURL(_ text: String?) -> URL? {
+        guard let text, let components = URLComponents(string: text),
+              components.scheme == "https", components.host?.lowercased() == "github.com",
+              components.user == nil, components.password == nil, components.port == nil,
+              components.query == nil, components.fragment == nil,
+              components.percentEncodedPath.range(of: "^/[A-Za-z0-9-]+/[A-Za-z0-9_.-]+/?$", options: .regularExpression) != nil
+        else { return nil }
+        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let canonicalPath = path.hasSuffix(".git") ? String(path.dropLast(4)) : path
+        guard let name = canonicalPath.split(separator: "/").last,
+              name != ".", name != "..", canonicalPath.split(separator: "/").count == 2 else { return nil }
+        return URL(string: "https://github.com/\(canonicalPath)")
+    }
+
+    /// Filled only after this distribution has its own App Store listing.
     static let appStoreText = ""
 
     /// An https URL from `appStoreText`, else nil. DEBUG: `-SillAppStoreURL <url>` replaces it.

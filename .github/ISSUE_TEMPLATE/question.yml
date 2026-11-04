@@ -1,13 +1,13 @@
-name: Question
-description: Ask something about Sill that the support page doesn't answer.
+name: 使用问题
+description: 询问 DUO你电脑的安装、配对或使用方法。
 labels: ["question"]
 body:
   - type: markdown
     attributes:
-      value: The [support page](https://getsill.app/support) may already have the answer.
+      value: 请先查看仓库 README 的安装要求和常见问题，并说明你尝试过的操作。
   - type: textarea
     id: question
     attributes:
-      label: Your question
+      label: 你的问题
     validations:
       required: true

@@ -1,17 +1,54 @@
-# DUO你电脑 · DuoDesk
+# DuoMac · DUO你电脑
 
-把 iPhone Duo 折成一台远程 Mac 笔记本。上半屏完整显示 Mac 桌面，下半屏提供拟物键盘和触控板，支持纯键盘、纯触控板、键盘＋触控板三种模式。
+把 iPhone Duo 折成一台远程 Mac 笔记本。上半屏完整显示 Mac 桌面，下半屏提供键盘和触控板，支持纯键盘、纯触控板、键盘＋触控板三种模式。
 
-桌面的比例和分辨率以 Duo 上半屏的原生像素为准：连接时切换 Mac 桌面，正常断开或退出后恢复。编码仅向上对齐偶数像素，不因网络或编码性能不足而自动降低分辨率。
+基于 [Sill](https://github.com/Saffsanity/sill) 的原生捕获、HEVC、TLS 配对和输入链路开发，采用 Apache-2.0 许可证。加密会话优先使用 QUIC，TCP 备用通道执行相同身份校验。桌面保持原生像素，硬件编解码不可用时会报告失败。
 
-原生 iOS 客户端与 Mac 服务端基于 [Sill](https://github.com/Saffsanity/sill) 的 HEVC、TLS 配对和输入链路开发，使用 Apache-2.0 开源许可证。视频会话优先使用 QUIC，TCP 作为受相同身份校验保护的备用通道。采用强制硬件编解码；初版默认请求 60 FPS，也可选择 120 FPS。原生尺寸的编解码与局域网测试图已测到约 120 FPS，但真实桌面尚未证实稳定 120 FPS；真实 Duo 上的 60 FPS、中文输入与跨周期自动续签仍待验收。
+## 下载与安装
 
-- [当前开发状态与验收范围](docs/the development notes)
-- [开发、构建与连接](docs/DUO-DEVELOPMENT.md)
-- [自签名与自动续签](Signing/README.md)
-- [贡献说明](CONTRIBUTING.md)
-- [许可证](LICENSE) · [上游来源与改动](NOTICE)
+前往本仓库的 [Releases](https://github.com/xav1erwang/DuoMac/releases)。首个版本正在准备，公开下载以已发布的 Release 为准。
 
-需要 Xcode 27.1 正式版，iOS 27.1 SDK，Mac 端目标为 macOS 27。运行 `Scripts/build-duodesk-mac.sh` 构建独立 Mac 应用；在 Xcode 打开 `iOSClient/Sill.xcodeproj` 构建手机端。运行 `Tests/duodesk/run.sh` 检查键盘、布局、帧率统计、身份启动和续签状态。
+| 平台 | 下载文件 | 安装方式 |
+| --- | --- | --- |
+| macOS 27 或更新 | `DUO-macOS-universal.dmg` 或 `.zip` | 含 Apple Silicon 与 Intel 可执行文件。复制应用到「应用程序」，未公证版首次启动按系统提示手动放行 |
+| iOS / iPadOS 27.1 或更新 | `DUO-iOS-unsigned.ipa` | 使用自己的 Apple 账号，通过 Sideloadly 或 AltStore Classic 重签安装 |
 
-本项目仍在开发，尚未发布 GitHub 仓库或可供公众安装的版本。[原项目说明](docs/UPSTREAM-README.md) 与旧文档用于追溯来源；本 README 和开发说明描述本分支行为。
+主要适配 iPhone Duo。其他 iPhone、iPad 与 Intel Mac 的实际可用性需要对应设备验证。Mac 与手机均需支持硬件 HEVC。免费 Apple 账号的 iOS 签名有效期通常为 7 天，需要定期续签。[Apple 账号说明](https://developer.apple.com/help/account/basics/about-your-developer-account)
+
+完整步骤见 [安装与首次连接](docs/INSTALL.md)，源码安装及自动续签见 [Signing/README.md](Signing/README.md)。
+
+## 从源码构建
+
+需要安装完整 Xcode 27.1 或更新版本并完成首次启动配置，包含 iOS SDK。当前本机验证工具链为 Xcode 27.2。所需系统框架由 Xcode 提供，Swift Package 依赖均在仓库内。
+
+```sh
+git clone https://github.com/xav1erwang/DuoMac.git
+cd DuoMac
+bash Scripts/build-duodesk-mac.sh
+```
+
+Mac 应用位于 `Build/DUO你电脑 Mac.app`。脚本默认使用本地 ad-hoc 签名，构建时无需 Apple 开发证书。也可一次生成两端发布文件。
+
+```sh
+bash Scripts/release-duodesk.sh
+```
+
+产物位于 `Temp/Release/0.1.0/`，包括 Mac DMG、ZIP、iOS IPA、安装说明及 SHA-256 校验文件。iOS 真机安装仍需用户签名。需要自行在 Xcode 运行时，打开 `iOSClient/Sill.xcodeproj`，选择 `Sill` Scheme、自己的 Team、唯一的 Bundle Identifier 和目标设备，再运行。
+
+```sh
+bash Tests/duodesk/run.sh
+```
+
+更多构建方式与权限说明见 [安装文档](docs/INSTALL.md)，维护者发布流程见 [发布清单](docs/release-checklist.md)。
+
+## 当前验证范围
+
+默认请求 60 FPS，可选择 120 FPS。已有原生尺寸硬件编解码与局域网测试图结果，真实桌面稳定 120 FPS、真实 Duo 当前版本完整操作及跨七天自动续签仍待验收。首次公开版本按预览版准备。具体证据与已知问题见 [开发状态](docs/the development notes)。
+
+## 参与和来源
+
+- [贡献说明](CONTRIBUTING.md) · [安全问题](SECURITY.md) · [隐私说明](docs/PRIVACY.md)
+- [开发说明](docs/DUO-DEVELOPMENT.md) · [上游原始 README](docs/UPSTREAM-README.md)
+- [Apache-2.0 许可证](LICENSE) · [Sill 归属与修改声明](NOTICE)
+
+`site/`、`docs/DEVELOPMENT.md`、旧规划与上游发布记录保留用于溯源。当前安装和发布以本 README、安装文档及 DuoMac 发布清单为准。

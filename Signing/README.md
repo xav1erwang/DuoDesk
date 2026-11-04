@@ -1,5 +1,7 @@
 # 自签名和 Mac 自动续签
 
+下载 Release IPA 后用 Sideloadly 或 AltStore 安装，见 [安装文档](../docs/INSTALL.md)。以下步骤适用于通过 Xcode 从本仓库源码构建、安装和续签。
+
 使用 Xcode 账户中的开发签名，把应用装到自己配对的 iPhone Duo。工具不保存 Apple 账号密码，不上传代码到签名平台，不在手机上放置续签服务。
 
 Apple 免费 Personal Team 的设备描述文件有效期为 7 天，具体以应用内嵌描述文件的 `ExpirationDate` 为准。[Apple 账户说明](https://developer.apple.com/help/account/basics/about-your-developer-account)同时列出了免费账号的应用和设备数量限制。Xcode 自动签名的行为见 [Signing & Capabilities workflow](https://help.apple.com/xcode/mac/current/en.lproj/dev60b6fbbc7.html)。

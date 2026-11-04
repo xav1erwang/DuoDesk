@@ -74,6 +74,12 @@
 #   to it.
 set -euo pipefail
 
+# This upstream script retains Sill's App Store configuration for historical reference.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    echo 'Use Scripts/release-duodesk.sh --platform ios for the DUO IPA. The inherited Sill publisher is disabled.' >&2
+    exit 2
+fi
+
 usage() {
     cat <<'USAGE'
 usage: Scripts/release-ios.sh [--bump] [--upload] [--sign-at-export] [--api-key PATH --api-issuer ID [--api-key-id ID]] [-v]

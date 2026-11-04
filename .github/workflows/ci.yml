@@ -1,37 +1,66 @@
 name: DUO build and checks
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  DUODESK_REPOSITORY_URL: https://github.com/${{ github.repository }}
 concurrency:
   group: duo-ci-${{ github.ref }}
   cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
 jobs:
   build:
+    name: Build ${{ matrix.platform }} from source
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos, ios]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/select-xcode
         with:
           version: '27.1'
           fallback: 'false'
-      - name: Build native Mac host
-        run: swift build -c release --product SillMenuBar
       - name: Check Duo controls and renewal rules
+        if: matrix.platform == 'macos'
         run: Tests/duodesk/run.sh
       - name: Check encrypted transport admission and cleanup
+        if: matrix.platform == 'macos'
         run: Tests/duodesk/quic-admission/run.sh --loopback-only
       - name: Check strict Swift concurrency in the video presenter
+        if: matrix.platform == 'macos'
         run: Tests/duodesk/presenter-lifecycle-probe/run.sh --build-only
+      - name: Build distributable package without signing credentials
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: Scripts/release-duodesk.sh --platform "$PLATFORM" --output Temp/CIRelease
       - name: Build iPhone Duo client
+        if: matrix.platform == 'ios'
         run: >-
           xcodebuild -project iOSClient/Sill.xcodeproj -scheme Sill
           -configuration Release -sdk iphonesimulator
           -destination 'generic/platform=iOS Simulator'
           -derivedDataPath Temp/CI CODE_SIGNING_ALLOWED=NO build
+      - name: Keep installable and re-signable build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DUO-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            Temp/CIRelease/DUO-*.zip
+            Temp/CIRelease/DUO-*.dmg
+            Temp/CIRelease/DUO-*.ipa
+            Temp/CIRelease/SHA256SUMS
+            Temp/CIRelease/INSTALL.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

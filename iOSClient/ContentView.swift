@@ -1270,11 +1270,7 @@ struct ConnectScreen: View {
 
     // MARK: The footer
 
-    /// For someone who found Sill here first, and for App Review: what else it needs, where to get
-    /// it, where to get help, and the privacy policy. Muted and 13 pt like the status line, but it
-    /// follows the text size, up to the Settings panel's cap (the column keeps its fixed sizes); it
-    /// wraps, never truncates. Each link opens in Safari (a Link hands its URL to the environment's
-    /// openURL), and VoiceOver reads it as a link. The addresses are SillLinks'.
+    /// Connection guidance and, when configured for a release, this project's public links.
     private func footer(_ layout: ConnectLayout) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("在 Mac 上运行 DUO你电脑服务端，再配对这台 iPhone Duo。")
@@ -1282,6 +1278,16 @@ struct ConnectScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
             Text("支持局域网与公网直连")
                 .foregroundStyle(Palette.muted)
+            if let download = SillLinks.download {
+                footerLink("下载 Mac 服务端", to: download)
+            }
+            if let support = SillLinks.support, let privacy = SillLinks.privacy {
+                HStack(spacing: 0) {
+                    footerLink("支持", to: support)
+                    linkSeparator
+                    footerLink("隐私政策", to: privacy)
+                }
+            }
         }
         .font(.footnote)
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
@@ -1294,19 +1300,6 @@ struct ConnectScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // Room for the last link's tap area, which then stays on the screen.
         .padding(.bottom, Self.linkReach)
-    }
-
-    private var downloadLink: some View {
-        footerLink("前往 \(SillLinks.siteName) 获取", to: SillLinks.download)
-    }
-
-    /// Support, then the privacy policy, on one line.
-    private var supportAndPrivacy: some View {
-        HStack(spacing: 0) {
-            footerLink("支持", to: SillLinks.support)
-            linkSeparator
-            footerLink("隐私政策", to: SillLinks.privacy)
-        }
     }
 
     /// The dot between two links on a line. VoiceOver skips it.

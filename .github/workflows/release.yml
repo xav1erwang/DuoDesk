@@ -1,0 +1,125 @@
+name: DUO release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: duo-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  DUO_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  DUODESK_REPOSITORY_URL: https://github.com/${{ github.repository }}
+
+jobs:
+  build:
+    name: Build macOS and iOS release packages
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Validate release tag
+        run: |
+          if [[ ! "$DUO_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo '::error::Use a tag in the form v0.1.0 matching both app versions.'
+            exit 1
+          fi
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.DUO_RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/select-xcode
+        with:
+          version: '27.1'
+          fallback: 'false'
+      - name: Check tag and app versions
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$DUO_RELEASE_TAG^{commit}")"
+          Scripts/release-duodesk.sh --check-version --version "${DUO_RELEASE_TAG#v}"
+      - name: Check Duo controls and renewal rules
+        run: Tests/duodesk/run.sh
+      - name: Check encrypted transport admission and cleanup
+        run: Tests/duodesk/quic-admission/run.sh --loopback-only
+      - name: Check strict Swift concurrency in the video presenter
+        run: Tests/duodesk/presenter-lifecycle-probe/run.sh --build-only
+      - name: Build universal Mac app and re-signable iOS IPA
+        run: Scripts/release-duodesk.sh --platform all --version "${DUO_RELEASE_TAG#v}" --output Temp/Release
+      - name: Verify release asset set
+        run: |
+          cd Temp/Release
+          for asset in DUO-macOS-universal.zip DUO-macOS-universal.dmg DUO-iOS-unsigned.ipa SHA256SUMS INSTALL.txt; do
+            test -s "$asset"
+          done
+          shasum -a 256 -c SHA256SUMS
+      - name: Keep release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: |
+            Temp/Release/DUO-macOS-universal.zip
+            Temp/Release/DUO-macOS-universal.dmg
+            Temp/Release/DUO-iOS-unsigned.ipa
+            Temp/Release/SHA256SUMS
+            Temp/Release/INSTALL.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  draft:
+    name: Prepare GitHub Release draft
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: Release
+      - name: Verify downloaded assets
+        run: |
+          cd Release
+          sha256sum -c SHA256SUMS
+      - name: Create or update draft in this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > Release/NOTES.md <<EOF
+          # DuoMac · DUO你电脑 $DUO_RELEASE_TAG
+
+          macOS 下载 DUO-macOS-universal.dmg 或 DUO-macOS-universal.zip，支持 Apple Silicon 与 Intel。当前工作流生成 ad-hoc 签名包，首次打开按 README 的系统安全设置步骤操作。
+
+          iOS 下载 DUO-iOS-unsigned.ipa，使用自己的 Apple 账户和自签工具重新签名安装。也可以用 Xcode 从源码安装。免费账户需要定期续签。
+
+          详细安装要求与步骤见 [README]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$DUO_RELEASE_TAG/README.md) 和附件 INSTALL.txt。下载后可用 SHA256SUMS 校验文件。
+          EOF
+          if gh release view "$DUO_RELEASE_TAG" --json isDraft > Release/existing.json 2> Release/existing-error.txt; then
+            if [ "$(jq -r .isDraft Release/existing.json)" != true ]; then
+              echo '::error::This version is already published. Create a new version tag to release another build.'
+              exit 1
+            fi
+            gh release upload "$DUO_RELEASE_TAG" Release/DUO-* Release/SHA256SUMS Release/INSTALL.txt --clobber
+            gh release edit "$DUO_RELEASE_TAG" --title "DuoMac $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
+          else
+            gh release create "$DUO_RELEASE_TAG" Release/DUO-* Release/SHA256SUMS Release/INSTALL.txt \
+              --verify-tag --draft --title "DuoMac $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
+          fi
+          gh release view "$DUO_RELEASE_TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 out="$PWD/.build/duodesk-checks"
 mkdir -p "$out"
-swiftc -emit-library -emit-module -module-name StreamProtocol Sources/StreamProtocol/Input.swift Sources/StreamProtocol/Viewport.swift Sources/StreamProtocol/StreamMessage.swift Sources/StreamProtocol/VideoDecodeBacklog.swift Sources/StreamProtocol/VideoStreamEpoch.swift \
+swiftc -emit-library -emit-module -module-name StreamProtocol Sources/StreamProtocol/*.swift \
     -emit-module-path "$out/StreamProtocol.swiftmodule" -o "$out/libStreamProtocol.dylib"
 swiftc -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
     iOSClient/DuoControlModel.swift iOSClient/KeyChords.swift Tests/duodesk/main.swift -o "$out/checks"
