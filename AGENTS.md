@@ -1,9 +1,7 @@
-# DUO你电脑 development environment
+# DUO你电脑
 
-Development and validation may run on the current Mac, the connected MacBook Air,
-or an authorized Mac VM as appropriate for the task. The user revoked the prior
-restriction on local development on 2026-11-03.
+按用户当前要求完成任务，不自行增加未要求的限制、强制流程或审批。
 
-Preserve existing validation evidence. Repeat a check only when a relevant code
-change, failure or unresolved concern requires it. Prioritize implementation;
-do not keep rerunning measurements that establish the same known limitation.
+保留现有工作、验证资料和 Sill 的 Apache-2.0 许可与归属。项目协作仓库保持私有，不向 Sill 上游推送，不提交 `Local/`、`Temp/`、密钥、账户凭据或配对材料。
+
+捕捉性能工作关注采样和实际画面交付，保留原生桌面分辨率及物理屏刷新率；帧率以实测结果为准。
