@@ -9,6 +9,9 @@ final class StoreAudit: @unchecked Sendable {
     private var calls: [String] = []
     private var mainReads = 0
     private var writes = 0
+    private let mainActorSignal = DispatchSemaphore(value: 0)
+    private var keyIsWaiting = false
+    private var mainActorResponded = false
 
     func read(_ name: String) {
         lock.withLock {
@@ -17,6 +20,22 @@ final class StoreAudit: @unchecked Sendable {
         }
     }
     func write() { lock.withLock { writes += 1 } }
+    func waitForMainActor() {
+        lock.withLock { keyIsWaiting = true }
+        let responded = mainActorSignal.wait(timeout: .now() + 10) == .success
+        lock.withLock {
+            keyIsWaiting = false
+            mainActorResponded = responded
+        }
+    }
+    func acknowledgeWaitingRead() -> Bool {
+        lock.withLock {
+            guard keyIsWaiting else { return false }
+            mainActorSignal.signal()
+            return true
+        }
+    }
+    var mainActorWasResponsive: Bool { lock.withLock { mainActorResponded } }
     var snapshot: (calls: [String], mainReads: Int, writes: Int) {
         lock.withLock { (calls, mainReads, writes) }
     }
@@ -41,7 +60,7 @@ final class StartupStore: IdentityStore {
     func loadOrCreateKey() throws -> SecKey {
         audit.read("key")
         // Models the synchronous system authorization wait without touching any real keychain.
-        if slowKey { Thread.sleep(forTimeInterval: 0.25) }
+        if slowKey { audit.waitForMainActor() }
         if failure == .key { throw IdentityStoreError("key unavailable") }
         return seed.remote.privateKey
     }
@@ -90,17 +109,16 @@ struct IdentityStartupChecks {
                                   name: "Duo fixture", model: nil, pairedAt: 1, method: "qr")
         let expectedPrefixes = [RemoteIdentity.shortName(Data(repeating: 3, count: 32))]
         let audit = StoreAudit()
-        var heartbeats = 0
         let pulse = Task { @MainActor in
             while !Task.isCancelled {
-                heartbeats += 1
+                if audit.acknowledgeWaitingRead() { return }
                 try? await Task.sleep(for: .milliseconds(5))
             }
         }
         let remote = await RemoteAccess.load(store: StartupStore(seed: seed, audit: audit, devices: [device],
                                                                   record: signedOff, slowKey: true))
         pulse.cancel()
-        check(heartbeats >= 10, "a blocked identity read must leave the main actor responsive")
+        check(audit.mainActorWasResponsive, "a blocked identity read must leave the main actor responsive")
         check(audit.snapshot.mainReads == 0, "every startup store read stays off the main thread")
         check(audit.snapshot.calls == ["key", "recognition", "trust", "policy"], "identity and initial policy both preload")
         check(remote.identity?.fingerprint == seed.fingerprint && remote.identity?.macID == seed.macID,
@@ -145,6 +163,6 @@ struct IdentityStartupChecks {
                                                                   record: signedOn, failure: .save))
         check(denied.saveRequirePairing(false) != nil && denied.storedRequirePairing(),
               "a denied save cannot disable pairing")
-        print("Identity startup: \(checks) checks passed; \(heartbeats) main-actor heartbeats during authorization wait")
+        print("Identity startup: \(checks) checks passed; main actor acknowledged the blocked identity read")
     }
 }
