@@ -192,7 +192,7 @@ struct DuoNativeDisplayMetrics: Equatable {
 struct DuoKey: Identifiable, Equatable {
     enum Action: Equatable {
         case key(UInt16)
-        case modifier(UInt64)
+        case modifier(UInt16)
         case capsLock
         case inputSource
     }
@@ -202,38 +202,56 @@ struct DuoKey: Identifiable, Equatable {
     let action: Action
     var units: Double = 1
     var accessibilityName: String? = nil
+
+    var heldUsage: UInt16? {
+        switch action {
+        case .key(let usage), .modifier(let usage): return usage
+        case .capsLock, .inputSource: return nil
+        }
+    }
 }
 
-/// Tracks modifier fingers independently from one-shot latches. A finger used in a chord must not
-/// turn into a latch when it lifts, and remains effective for further chords until then.
-struct DuoModifierTouches {
-    private struct Touch {
-        let flag: KeyModifiers
-        var used = false
-    }
-
-    private var touches: [String: Touch] = [:]
+/// Tracks each physical key position separately, including left and right modifiers.
+struct DuoKeyboardTouches {
+    private var down: [UInt16] = []
 
     var held: KeyModifiers {
-        touches.values.reduce(into: KeyModifiers()) { $0.formUnion($1.flag) }
+        down.reduce(into: KeyModifiers()) { flags, usage in
+            if let flag = KeyModifiers.flag(forKey: usage) { flags.insert(flag) }
+        }
     }
 
-    mutating func began(_ id: String, flag: KeyModifiers) {
-        guard touches[id] == nil else { return }
-        touches[id] = Touch(flag: flag)
+    func isDown(_ usage: UInt16) -> Bool { down.contains(usage) }
+
+    private func flags(capsLock: Bool) -> UInt64 {
+        var flags = held
+        if capsLock { flags.insert(.capsLock) }
+        return flags.rawValue
     }
 
-    /// An unused tap toggles its latch; a cancelled or already used touch does not.
-    mutating func ended(_ id: String, inside: Bool) -> KeyModifiers? {
-        guard let touch = touches.removeValue(forKey: id), inside, !touch.used else { return nil }
-        return touch.flag
+    mutating func began(_ usage: UInt16, capsLock: Bool) -> InputEvent? {
+        guard !isDown(usage) else { return nil }
+        down.append(usage)
+        return .key(hidUsage: usage, down: true, modifiers: flags(capsLock: capsLock))
     }
 
-    mutating func consume() {
-        for id in touches.keys { touches[id]?.used = true }
+    mutating func ended(_ usage: UInt16, capsLock: Bool) -> InputEvent? {
+        guard let index = down.firstIndex(of: usage) else { return nil }
+        down.remove(at: index)
+        return .key(hidUsage: usage, down: false, modifiers: flags(capsLock: capsLock))
     }
 
-    mutating func reset() { touches.removeAll() }
+    func repeated(_ usage: UInt16, capsLock: Bool) -> InputEvent? {
+        guard isDown(usage), KeyModifiers.flag(forKey: usage) == nil else { return nil }
+        return .key(hidUsage: usage, down: true, modifiers: flags(capsLock: capsLock))
+    }
+
+    mutating func reset(capsLock: Bool) -> [InputEvent] {
+        // Release ordinary keys before modifiers, as when unplugging a physical keyboard.
+        let order = down.filter { KeyModifiers.flag(forKey: $0) == nil }
+            + down.reversed().filter { KeyModifiers.flag(forKey: $0) != nil }
+        return order.compactMap { ended($0, capsLock: capsLock) }
+    }
 }
 
 /// ANSI positions are sent as HID keys, so the Mac's selected input source handles composition.
@@ -260,9 +278,9 @@ enum DuoKeyboardLayout {
         DuoKey(id: "hid-\(usage)", legend: label, shifted: shifted,
                action: .key(usage), units: units, accessibilityName: name)
     }
-    private static func modifier(_ label: String, _ usage: UInt16, _ bit: Int,
+    private static func modifier(_ label: String, _ usage: UInt16,
                                  _ units: Double = 1, name: String) -> DuoKey {
-        DuoKey(id: "modifier-\(usage)", legend: label, action: .modifier(1 << bit),
+        DuoKey(id: "modifier-\(usage)", legend: label, action: .modifier(usage),
                units: units, accessibilityName: name)
     }
     private static func letters(_ text: String) -> [DuoKey] {
@@ -281,13 +299,13 @@ enum DuoKeyboardLayout {
         [DuoKey(id: "caps-lock", legend: "caps lock", action: .capsLock, units: 1.75, accessibilityName: "大写锁定")]
             + letters("asdfghjkl") + [key(";", 0x33, shifted: ":"), key("'", 0x34, shifted: "\""),
                                        key("return", 0x28, 1.75, name: "回车")],
-        [modifier("shift", 0xE1, 17, 2.25, name: "Shift")]
+        [modifier("shift", 0xE1, 2.25, name: "Shift")]
             + letters("zxcvbnm") + [key(",", 0x36, shifted: "<"), key(".", 0x37, shifted: ">"),
-                                       key("/", 0x38, shifted: "?"), modifier("shift", 0xE5, 17, 2.25, name: "右 Shift")],
+                                       key("/", 0x38, shifted: "?"), modifier("shift", 0xE5, 2.25, name: "右 Shift")],
         [DuoKey(id: "input-source", legend: "globe", action: .inputSource, accessibilityName: "切换 Mac 输入法"),
-         modifier("⌃", 0xE0, 18, name: "Control"), modifier("⌥", 0xE2, 19, name: "Option"),
-         modifier("⌘", 0xE3, 20, 1.25, name: "Command"), key("", 0x2C, 4, name: "空格"),
-         modifier("⌘", 0xE7, 20, 1.25, name: "右 Command"), modifier("⌥", 0xE6, 19, name: "右 Option"),
+         modifier("⌃", 0xE0, name: "Control"), modifier("⌥", 0xE2, name: "Option"),
+         modifier("⌘", 0xE3, 1.25, name: "Command"), key("", 0x2C, 4, name: "空格"),
+         modifier("⌘", 0xE7, 1.25, name: "右 Command"), modifier("⌥", 0xE6, name: "右 Option"),
          key("←", 0x50, name: "左箭头"), key("↑", 0x52, name: "上箭头"),
          key("↓", 0x51, name: "下箭头"), key("→", 0x4F, name: "右箭头")]
     ]

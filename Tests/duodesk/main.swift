@@ -134,61 +134,55 @@ check(chord == [.key(hidUsage: 0xE1, down: true, modifiers: 1 << 17),
                 .key(hidUsage: 0xE3, down: false, modifiers: 1 << 17),
                 .key(hidUsage: 0xE1, down: false, modifiers: 0)], "Command Shift S releases every held modifier")
 
-var modifierTouches = DuoModifierTouches()
-var modifierLatch: KeyModifiers = []
-func endModifier(_ id: String, inside: Bool = true) {
-    guard let flag = modifierTouches.ended(id, inside: inside) else { return }
-    if modifierLatch.contains(flag) { modifierLatch.remove(flag) } else { modifierLatch.insert(flag) }
+var touches = DuoKeyboardTouches()
+let modifierCases: [(UInt16, KeyModifiers)] = [
+    (0xE0, .control), (0xE1, .shift), (0xE2, .option), (0xE3, .command),
+    (0xE4, .control), (0xE5, .shift), (0xE6, .option), (0xE7, .command)
+]
+for (usage, flag) in modifierCases {
+    check(touches.began(usage, capsLock: false) == .key(hidUsage: usage, down: true, modifiers: flag.rawValue),
+          "modifier \(usage) goes down immediately")
+    check(touches.ended(usage, capsLock: false) == .key(hidUsage: usage, down: false, modifiers: 0),
+          "modifier \(usage) goes up immediately")
+    check(touches.began(0x1A, capsLock: false) == .key(hidUsage: 0x1A, down: true, modifiers: 0),
+          "W after tapping modifier \(usage) is plain")
+    _ = touches.ended(0x1A, capsLock: false)
 }
-func keyboardChord(_ usage: UInt16) -> [InputEvent] {
-    let events = DuoKeyboardLayout.keyEvents(usage, latched: modifierLatch.union(modifierTouches.held), capsLock: false)
-    modifierTouches.consume()
-    modifierLatch = []
-    return events
+
+check(touches.began(0xE3, capsLock: false) == .key(hidUsage: 0xE3, down: true, modifiers: KeyModifiers.command.rawValue),
+      "Command down precedes the first W")
+for _ in 0..<2 {
+    check(touches.began(0x1A, capsLock: false) == .key(hidUsage: 0x1A, down: true, modifiers: KeyModifiers.command.rawValue),
+          "W goes down with held Command")
+    check(touches.ended(0x1A, capsLock: false) == .key(hidUsage: 0x1A, down: false, modifiers: KeyModifiers.command.rawValue),
+          "W goes up while Command remains held")
 }
+_ = touches.began(0x1A, capsLock: false)
+check(touches.ended(0xE3, capsLock: false) == .key(hidUsage: 0xE3, down: false, modifiers: 0),
+      "Command can be released before W")
+check(touches.ended(0x1A, capsLock: false) == .key(hidUsage: 0x1A, down: false, modifiers: 0),
+      "W still receives its own release")
 
-modifierTouches.began("left-command", flag: .command)
-check(modifierTouches.held == .command, "Command becomes active on touch down")
-let commandW = KeyChord.press(0x1A, with: .command)
-check(keyboardChord(0x1A) == commandW, "first W while Command is held is Command-W")
-check(keyboardChord(0x1A) == commandW, "a held Command applies to another key press too")
-endModifier("left-command")
-check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "releasing a used Command leaves no latch")
-check(keyboardChord(0x1A) == KeyChord.press(0x1A, with: []), "W after releasing Command is plain")
+_ = touches.began(0xE1, capsLock: false)
+_ = touches.began(0xE3, capsLock: false)
+_ = touches.began(0xE7, capsLock: false)
+check(touches.held == [.shift, .command], "different and same-kind modifiers remain held together")
+check(touches.ended(0xE3, capsLock: false) == .key(hidUsage: 0xE3, down: false, modifiers: (KeyModifiers.shift.union(.command)).rawValue),
+      "releasing left Command preserves right Command")
+check(touches.ended(0xE1, capsLock: false) == .key(hidUsage: 0xE1, down: false, modifiers: KeyModifiers.command.rawValue),
+      "releasing Shift preserves right Command")
+_ = touches.ended(0xE7, capsLock: false)
+check(touches.held.isEmpty, "all modifiers released")
 
-modifierTouches.began("left-command", flag: .command)
-endModifier("left-command")
-check(modifierLatch == .command && modifierTouches.held.isEmpty, "a single modifier tap still latches")
-check(keyboardChord(0x1A) == commandW && modifierLatch.isEmpty, "the next key consumes a tapped latch")
-modifierTouches.began("left-command", flag: .command)
-endModifier("left-command")
-modifierTouches.began("left-command", flag: .command)
-endModifier("left-command")
-check(modifierLatch.isEmpty, "tapping a latched modifier again turns it off")
-
-modifierTouches.began("shift", flag: .shift)
-modifierTouches.began("left-command", flag: .command)
-check(keyboardChord(0x1A) == KeyChord.press(0x1A, with: [.shift, .command]), "two held modifiers join the first chord")
-endModifier("shift")
-check(modifierTouches.held == .command && modifierLatch.isEmpty, "lifting one used modifier leaves the other held")
-check(keyboardChord(0x1A) == commandW, "the remaining held modifier still applies")
-endModifier("left-command")
-check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "multiple used modifiers leave nothing latched")
-
-modifierTouches.began("left-command", flag: .command)
-modifierTouches.began("right-command", flag: .command)
-endModifier("left-command", inside: false)
-check(modifierTouches.held == .command && modifierLatch.isEmpty, "cancelling one Command preserves the other finger")
-modifierTouches.consume() // A trackpad click spends a modifier just like a key.
-endModifier("right-command")
-check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "a modified click leaves no latch on release")
-modifierTouches.began("shift", flag: .shift)
-endModifier("shift", inside: false)
-check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "a cancelled modifier does not latch")
-modifierTouches.began("shift", flag: .shift)
-modifierTouches.reset()
-endModifier("shift")
-check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "a reset ignores a late touch-up")
+_ = touches.began(0xE3, capsLock: true)
+_ = touches.began(0x2A, capsLock: true)
+check(touches.repeated(0x2A, capsLock: true) == .key(hidUsage: 0x2A, down: true, modifiers: KeyModifiers.command.union(.capsLock).rawValue),
+      "repeat retains held modifiers and Caps Lock")
+check(touches.reset(capsLock: true) == [.key(hidUsage: 0x2A, down: false, modifiers: KeyModifiers.command.union(.capsLock).rawValue),
+                                       .key(hidUsage: 0xE3, down: false, modifiers: KeyModifiers.capsLock.rawValue)],
+      "reset releases keys before modifiers")
+check(touches.ended(0xE3, capsLock: true) == nil && touches.repeated(0x2A, capsLock: true) == nil,
+      "late touch-up or repeat after reset does nothing")
 
 let laptop = DuoConsoleGeometry(width: 669, height: 951, foldMinY: 455.5, foldMaxY: 495.5)
 check(laptop.pictureHeight == 475.5 && laptop.controlsTop == 495.5, "video uses complete upper half; controls avoid the fold")

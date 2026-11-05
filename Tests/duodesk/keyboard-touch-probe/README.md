@@ -5,7 +5,7 @@ memory; no Mac is connected and no system input is posted.
 
 `python3 Tests/duodesk/keyboard-touch-probe/build.py` builds the UIKit control check. Install the
 resulting app on a simulator and launch `com.duodesk.tests.KeyboardTouch`; its report records the
-hit-tested modifier control, immediate touch delivery, cancellation and accessibility behavior.
+hit-tested keys, immediate touch delivery, cancellation, repeat and accessibility behavior.
 
 `ruby Tests/duodesk/keyboard-touch-probe/project.rb` generates the UI-test project (requires the
 `xcodeproj` Ruby gem). Run its `KeyboardTouch` scheme on a simulator. The fixture sends Command's

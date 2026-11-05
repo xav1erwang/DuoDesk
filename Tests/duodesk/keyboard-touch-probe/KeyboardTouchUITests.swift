@@ -3,7 +3,7 @@ import XCTest
 
 final class KeyboardTouchUITests: XCTestCase {
     @MainActor
-    func testFirstChordAndTapLatch() {
+    func testHeldCommandAndTapRelease() {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-KeyboardTouchUI"]
@@ -24,34 +24,53 @@ final class KeyboardTouchUITests: XCTestCase {
         hold.tap()
         XCTAssertEqual(result.label, "command dispatched")
         XCTAssertTrue(command.isSelected, "Hold must reach the mounted Command control")
-        w.tap()
-        XCTAssertEqual(result.label, "command-w")
         clear.tap()
         w.tap()
-        XCTAssertEqual(result.label, "command-w")
+        XCTAssertEqual(result.label, "26d:1048576,26u:1048576")
+        clear.tap()
+        w.tap()
+        XCTAssertEqual(result.label, "26d:1048576,26u:1048576")
         release.tap()
         clear.tap()
         w.tap()
-        XCTAssertEqual(result.label, "plain-w")
+        XCTAssertEqual(result.label, "26d:0,26u:0")
+
+        hold.tap()
+        clear.tap()
+        app.buttons["duo.key.input-source"].tap()
+        XCTAssertEqual(result.label, "224d:1310720,44d:1310720,44u:1310720,224u:1048576")
+        clear.tap()
+        w.tap()
+        XCTAssertEqual(result.label, "26d:1048576,26u:1048576")
+        release.tap()
+
+        hold.tap()
+        clear.tap()
+        app.buttons["probe.video"].tap()
+        XCTAssertEqual(result.label, "227u:0")
+        app.buttons["probe.video"].tap()
+        release.tap()
 
         clear.tap()
         command.tap()
         w.tap()
-        XCTAssertEqual(result.label, "command-w")
-        clear.tap()
-        w.tap()
-        XCTAssertEqual(result.label, "plain-w")
+        XCTAssertEqual(result.label, "227d:1048576,227u:0,26d:0,26u:0")
 
         hold.tap()
         clear.tap()
         app.buttons["duo.trackpad"].tap()
-        XCTAssertEqual(result.label, "command-click")
+        XCTAssertEqual(result.label, "pointer:leftDown,pointer:leftUp")
         clear.tap()
         w.tap()
-        XCTAssertEqual(result.label, "command-w")
+        XCTAssertEqual(result.label, "26d:1048576,26u:1048576")
         release.tap()
         clear.tap()
         w.tap()
-        XCTAssertEqual(result.label, "plain-w")
+        XCTAssertEqual(result.label, "26d:0,26u:0")
+
+        hold.tap()
+        clear.tap()
+        app.buttons["duo.mode.trackpad"].tap()
+        XCTAssertEqual(result.label, "227u:0")
     }
 }

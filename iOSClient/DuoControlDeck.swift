@@ -13,7 +13,7 @@ struct DuoControlDeck: View {
     @AppStorage("duodesk.controlMode") private var mode: DuoControlMode = .combined
     @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
     @State private var capsLock = false
-    @State private var modifierTouches = DuoModifierTouches()
+    @State private var keyboardTouches = DuoKeyboardTouches()
 
     var body: some View {
         GeometryReader { geometry in
@@ -24,7 +24,7 @@ struct DuoControlDeck: View {
             VStack(spacing: 6) {
                 toolbar
                 if mode.hasKeyboard {
-                    DuoKeyboardView(latched: $latched, capsLock: $capsLock, modifierTouches: $modifierTouches,
+                    DuoKeyboardView(capsLock: $capsLock, keyboardTouches: $keyboardTouches,
                                     inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
                         .frame(height: keyHeight)
                         .accessibilityIdentifier("duo.keyboard")
@@ -47,17 +47,19 @@ struct DuoControlDeck: View {
                 .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.65)).frame(height: 1) }
         }
         .onChange(of: mode) { _, _ in
-            // No modifier may linger when the surface that shows it disappears.
             latched = []
-            modifierTouches.reset()
+            releaseKeyboard()
             UISelectionFeedbackGenerator().selectionChanged()
         }
         .onChange(of: client.hasNativeDesktopVideo, initial: true) { _, _ in
-            // A surface mounted during a reset must not inherit a pre-reset one-shot latch.
             latched = []
-            modifierTouches.reset()
+            releaseKeyboard()
         }
-        .onDisappear { modifierTouches.reset() }
+        .onDisappear { releaseKeyboard() }
+    }
+
+    private func releaseKeyboard() {
+        keyboardTouches.reset(capsLock: capsLock).forEach(client.sendFromKeyRow)
     }
 
     private var toolbar: some View {
@@ -143,10 +145,7 @@ struct DuoControlDeck: View {
                      setPointer: { client.setOwnPointer($0, from: .trackpad) },
                      feed: { let state = client.pointerFeedState; return (state.anchor, state.reseeds) },
                      onFingers: client.trackpadFingers,
-                     latched: latched.union(modifierTouches.held), onModifiersConsumed: {
-                         modifierTouches.consume()
-                         latched = []
-                     },
+                     latched: [], onModifiersConsumed: {},
                      verticalSpan: nil,
                      pointerFrameSize: client.videoSize,
                      sendGesture: { client.sendGesture($0, fingers: $1) })
@@ -180,13 +179,12 @@ struct DuoControlDeck: View {
 }
 
 private struct DuoKeyboardView: View {
-    @Binding var latched: KeyModifiers
     @Binding var capsLock: Bool
-    @Binding var modifierTouches: DuoModifierTouches
+    @Binding var keyboardTouches: DuoKeyboardTouches
     let inputReady: Bool
     let send: (InputEvent) -> Void
 
-    private var activeModifiers: KeyModifiers { latched.union(modifierTouches.held) }
+    private var activeModifiers: KeyModifiers { keyboardTouches.held }
 
     var body: some View {
         GeometryReader { geometry in
@@ -214,18 +212,18 @@ private struct DuoKeyboardView: View {
                                     .frame(width: width, height: rowHeight)
                                     .contentShape(Rectangle())
                                 }
-                                .buttonStyle(DuoKeycapStyle(selected: selected(key)))
-                                .buttonRepeatBehavior(isRepeatable(key) ? .enabled : .disabled)
+                                .buttonStyle(DuoKeycapStyle(selected: selected(key), pressed: isDown(key)))
                                 .accessibilityLabel(Text(key.accessibilityName ?? legend(key)))
                                 .accessibilityAddTraits(selected(key) ? [.isSelected] : [])
                                 .accessibilityIdentifier("duo.key.\(key.id)")
-                                .accessibilityHidden(isModifier(key))
+                                .accessibilityHidden(key.heldUsage != nil)
                                 .overlay {
-                                    if case .modifier(let bits) = key.action {
-                                        DuoModifierTouchView(label: key.accessibilityName ?? key.legend,
+                                    if let usage = key.heldUsage {
+                                        DuoKeyTouchView(label: key.accessibilityName ?? legend(key),
                                             identifier: "duo.key.\(key.id)", selected: selected(key), enabled: inputReady,
-                                            began: { modifierBegan(key, bits: bits) },
-                                            ended: { modifierEnded(key, inside: $0) })
+                                            repeatable: isRepeatable(key),
+                                            began: { keyBegan(usage) }, ended: { keyEnded(usage) },
+                                            repeated: { keyRepeated(usage) })
                                     }
                                 }
                             }
@@ -247,7 +245,7 @@ private struct DuoKeyboardView: View {
     }
     private func selected(_ key: DuoKey) -> Bool {
         switch key.action {
-        case .modifier(let bits): return activeModifiers.contains(KeyModifiers(rawValue: bits))
+        case .modifier(let usage): return keyboardTouches.isDown(usage)
         case .capsLock: return capsLock
         default: return false
         }
@@ -256,64 +254,73 @@ private struct DuoKeyboardView: View {
         if case .key(let usage) = key.action { return usage == 0x2A || (0x4F...0x52).contains(usage) }
         return false
     }
-    private func isModifier(_ key: DuoKey) -> Bool {
-        if case .modifier = key.action { return true }
-        return false
+    private func isDown(_ key: DuoKey) -> Bool {
+        key.heldUsage.map { keyboardTouches.isDown($0) } ?? false
     }
-    private func modifierBegan(_ key: DuoKey, bits: UInt64) {
+    private func keyBegan(_ usage: UInt16) {
         guard inputReady else { return }
-        modifierTouches.began(key.id, flag: KeyModifiers(rawValue: bits))
+        guard let event = keyboardTouches.began(usage, capsLock: capsLock) else { return }
+        send(event)
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.45)
     }
-    private func modifierEnded(_ key: DuoKey, inside: Bool) {
-        guard let flag = modifierTouches.ended(key.id, inside: inside), inputReady else { return }
-        if latched.contains(flag) { latched.remove(flag) } else { latched.insert(flag) }
+    private func keyEnded(_ usage: UInt16) {
+        if let event = keyboardTouches.ended(usage, capsLock: capsLock) { send(event) }
+    }
+    private func keyRepeated(_ usage: UInt16) {
+        guard inputReady, let event = keyboardTouches.repeated(usage, capsLock: capsLock) else { return }
+        send(event)
     }
     private func press(_ key: DuoKey) {
         guard inputReady else { return }
         switch key.action {
-        case .modifier: return
+        case .modifier, .key: return
         case .capsLock:
-            modifierTouches.consume()
             capsLock.toggle()
-            DuoKeyboardLayout.keyEvents(0x39, latched: [], capsLock: capsLock).forEach(send)
+            if let event = keyboardTouches.began(0x39, capsLock: capsLock) { send(event) }
+            if let event = keyboardTouches.ended(0x39, capsLock: capsLock) { send(event) }
         case .inputSource:
-            modifierTouches.consume()
-            KeyChord.press(0x2C, with: .control).forEach(send)
-            latched = []
-        case .key(let usage):
-            DuoKeyboardLayout.keyEvents(usage, latched: activeModifiers, capsLock: capsLock).forEach(send)
-            modifierTouches.consume()
-            latched = []
+            guard !keyboardTouches.isDown(0x2C) else { return }
+            let needsControl = !activeModifiers.contains(.control)
+            if needsControl, let event = keyboardTouches.began(0xE0, capsLock: capsLock) { send(event) }
+            if let event = keyboardTouches.began(0x2C, capsLock: capsLock) { send(event) }
+            if let event = keyboardTouches.ended(0x2C, capsLock: capsLock) { send(event) }
+            if needsControl, let event = keyboardTouches.ended(0xE0, capsLock: capsLock) { send(event) }
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.45)
     }
 }
 
-/// SwiftUI Button actions fire on release; modifiers also need their touch-down for chords.
-private struct DuoModifierTouchView: UIViewRepresentable {
+private struct DuoKeyTouchView: UIViewRepresentable {
     let label: String
     let identifier: String
     let selected: Bool
     let enabled: Bool
+    let repeatable: Bool
     let began: () -> Void
-    let ended: (Bool) -> Void
+    let ended: () -> Void
+    let repeated: () -> Void
 
-    func makeUIView(context: Context) -> DuoModifierTouchControl { DuoModifierTouchControl() }
+    func makeUIView(context: Context) -> DuoKeyTouchControl { DuoKeyTouchControl() }
 
-    func updateUIView(_ view: DuoModifierTouchControl, context: Context) {
+    func updateUIView(_ view: DuoKeyTouchControl, context: Context) {
         view.accessibilityLabel = label
         view.accessibilityIdentifier = identifier
         view.accessibilityTraits = selected ? [.button, .selected] : .button
-        view.isEnabled = enabled
+        view.setKeyEnabled(enabled)
+        view.repeatable = repeatable
         view.began = began
         view.ended = ended
+        view.repeated = repeated
     }
 }
 
-private final class DuoModifierTouchControl: UIControl {
+private final class DuoKeyTouchControl: UIControl {
     var began: () -> Void = {}
-    var ended: (Bool) -> Void = { _ in }
+    var ended: () -> Void = {}
+    var repeated: () -> Void = {}
+    var repeatable = false
+    private var active = false
+    private var repeatTimer: Timer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -325,12 +332,24 @@ private final class DuoModifierTouchControl: UIControl {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    func setKeyEnabled(_ enabled: Bool) {
+        if !enabled {
+            active = false
+            stopRepeating()
+        }
+        isEnabled = enabled
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window == nil {
+            active = false
+            stopRepeating()
+        }
         var ancestor = superview
         while let view = ancestor {
             if let scroll = view as? UIScrollView {
-                // Deliver modifier touches immediately while retaining scroll cancellation.
+                // Deliver key touches immediately while retaining scroll cancellation.
                 scroll.delaysContentTouches = false
                 break
             }
@@ -338,30 +357,58 @@ private final class DuoModifierTouchControl: UIControl {
         }
     }
 
-    @objc private func touchBegan() { began() }
-    @objc private func touchEnded() { ended(true) }
-    @objc private func touchCancelled() { ended(false) }
+    @objc private func touchBegan() {
+        guard !active else { return }
+        active = true
+        began()
+        guard repeatable else { return }
+        let timer = Timer(timeInterval: 0.45, repeats: false) { [weak self] _ in
+            guard let self, self.active else { return }
+            self.repeated()
+            let repeating = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in self?.repeated() }
+            self.repeatTimer = repeating
+            RunLoop.main.add(repeating, forMode: .common)
+        }
+        repeatTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    @objc private func touchEnded() { finishTouch() }
+    @objc private func touchCancelled() { finishTouch() }
+
+    private func stopRepeating() {
+        repeatTimer?.invalidate()
+        repeatTimer = nil
+    }
+
+    private func finishTouch() {
+        guard active else { return }
+        active = false
+        stopRepeating()
+        ended()
+    }
 
     override func accessibilityActivate() -> Bool {
         guard isEnabled else { return false }
         began()
-        ended(true)
+        ended()
         return true
     }
 }
 
 private struct DuoKeycapStyle: ButtonStyle {
     let selected: Bool
+    let pressed: Bool
     func makeBody(configuration: Configuration) -> some View {
+        let pressed = pressed || configuration.isPressed
         configuration.label
             .foregroundStyle(selected ? Color(red: 0.64, green: 0.9, blue: 0.74) : Color(white: 0.96))
             .background {
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(LinearGradient(colors: [Color(white: configuration.isPressed ? 0.09 : 0.24),
+                    .fill(LinearGradient(colors: [Color(white: pressed ? 0.09 : 0.24),
                                                    Color(white: 0.09)], startPoint: .top, endPoint: .bottom))
-                    .shadow(color: .black.opacity(0.9), radius: 0.5, y: configuration.isPressed ? 0 : 2)
+                    .shadow(color: .black.opacity(0.9), radius: 0.5, y: pressed ? 0 : 2)
             }
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(configuration.isPressed ? 0.05 : 0.18), lineWidth: 0.5))
-            .offset(y: configuration.isPressed ? 1 : 0)
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(pressed ? 0.05 : 0.18), lineWidth: 0.5))
+            .offset(y: pressed ? 1 : 0)
     }
 }

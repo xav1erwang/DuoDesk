@@ -15,12 +15,14 @@ final class StreamClient: ObservableObject {
     var events: [InputEvent] = []
     private func record(_ event: InputEvent) {
         events.append(event)
-        if events == KeyChord.press(0x1A, with: .command) { result = "command-w" }
-        else if events == KeyChord.press(0x1A, with: []) { result = "plain-w" }
-        else if events == KeyChord.modifiersDown(.command)
-            + [.pointer(.leftDown, x: 0.5, y: 0.5), .pointer(.leftUp, x: 0.5, y: 0.5)]
-            + KeyChord.modifiersUp(.command) { result = "command-click" }
-        else { result = "events: \(events.count)" }
+        result = events.map { event in
+            switch event {
+            case .key(let usage, let down, let modifiers):
+                return "\(usage)\(down ? "d" : "u"):\(modifiers)"
+            case .pointer(let action, _, _): return "pointer:\(action.rawValue)"
+            default: return "other"
+            }
+        }.joined(separator: ",")
     }
     func sendFromKeyRow(_ event: InputEvent) { record(event) }
     func sendInput(_ event: InputEvent) { record(event) }
@@ -76,6 +78,7 @@ struct Fixture: View {
                     Button("Hold Command", action: holdCommand).accessibilityIdentifier("probe.hold")
                     Button("Release Command", action: releaseCommand).accessibilityIdentifier("probe.release")
                     Button("Clear") { client.events = []; client.result = "empty" }.accessibilityIdentifier("probe.clear")
+                    Button("Video") { client.hasNativeDesktopVideo.toggle() }.accessibilityIdentifier("probe.video")
                 }
                 .padding(.top, 80)
                 Text(client.result).accessibilityIdentifier("probe.result")
@@ -153,16 +156,59 @@ final class ProbeScene: UIResponder, UIWindowSceneDelegate {
         command.sendActions(for: .touchDown)
         await settle()
         check("touch-down selects Command", command.accessibilityTraits.contains(.selected))
+        check("touch-down sends Command down", client.events == [.key(hidUsage: 0xE3, down: true, modifiers: KeyModifiers.command.rawValue)])
         command.sendActions(for: .touchUpInside)
         await settle()
-        check("an unused tap stays latched", command.accessibilityTraits.contains(.selected))
+        check("an unused tap releases Command", !command.accessibilityTraits.contains(.selected)
+              && client.events.last == .key(hidUsage: 0xE3, down: false, modifiers: 0))
+        client.events = []
         check("Command accessibility activation succeeds", command.accessibilityActivate())
         await settle()
-        check("accessibility activation can clear a latch", !command.accessibilityTraits.contains(.selected))
+        check("accessibility activation sends a complete tap", !command.accessibilityTraits.contains(.selected)
+              && client.events == [.key(hidUsage: 0xE3, down: true, modifiers: KeyModifiers.command.rawValue),
+                                   .key(hidUsage: 0xE3, down: false, modifiers: 0)])
+        client.events = []
         command.sendActions(for: .touchDown)
         command.sendActions(for: .touchCancel)
         await settle()
-        check("a cancelled touch leaves no latch", !command.accessibilityTraits.contains(.selected))
+        check("a cancelled touch releases Command", !command.accessibilityTraits.contains(.selected)
+              && client.events.last == .key(hidUsage: 0xE3, down: false, modifiers: 0))
+        for usage: UInt16 in [0xE0, 0xE1, 0xE2, 0xE3, 0xE5, 0xE6, 0xE7] {
+            guard let key = control("duo.key.modifier-\(usage)", in: root),
+                  let flag = KeyModifiers.flag(forKey: usage) else {
+                check("modifier \(usage) is mounted", false)
+                continue
+            }
+            client.events = []
+            key.sendActions(for: .touchDown)
+            key.sendActions(for: .touchUpInside)
+            check("modifier \(usage) has a momentary press", client.events == [
+                .key(hidUsage: usage, down: true, modifiers: flag.rawValue),
+                .key(hidUsage: usage, down: false, modifiers: 0)])
+        }
+        guard let w = control("duo.key.hid-26", in: root),
+              let delete = control("duo.key.hid-42", in: root) else {
+            check("production ordinary key controls are mounted", false)
+            finish()
+            return
+        }
+        client.events = []
+        command.sendActions(for: .touchDown)
+        w.sendActions(for: .touchDown)
+        command.sendActions(for: .touchUpOutside)
+        w.sendActions(for: .touchUpInside)
+        check("keys follow the actual order of finger presses and releases", client.events == [
+            .key(hidUsage: 0xE3, down: true, modifiers: KeyModifiers.command.rawValue),
+            .key(hidUsage: 0x1A, down: true, modifiers: KeyModifiers.command.rawValue),
+            .key(hidUsage: 0xE3, down: false, modifiers: 0),
+            .key(hidUsage: 0x1A, down: false, modifiers: 0)])
+        client.events = []
+        delete.sendActions(for: .touchDown)
+        try? await Task.sleep(for: .milliseconds(650))
+        delete.sendActions(for: .touchUpInside)
+        check("held Delete repeats until its release", client.events.count >= 3
+              && client.events.dropLast().allSatisfy { $0 == .key(hidUsage: 0x2A, down: true, modifiers: 0) }
+              && client.events.last == .key(hidUsage: 0x2A, down: false, modifiers: 0))
         finish()
     }
 

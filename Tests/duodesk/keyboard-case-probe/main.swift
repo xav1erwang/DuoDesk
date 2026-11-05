@@ -61,7 +61,16 @@ do {
         // Exact pre-fix DuoKeyboardView .key action, retained as the failing control.
         let events = KeyChord.press(item.usage, with: item.latched)
         #else
-        let events = DuoKeyboardLayout.keyEvents(item.usage, latched: item.latched, capsLock: item.caps)
+        var touches = DuoKeyboardTouches()
+        var events: [InputEvent] = []
+        for key in item.latched.keys {
+            if let event = touches.began(key.usage, capsLock: item.caps) { events.append(event) }
+        }
+        if let event = touches.began(item.usage, capsLock: item.caps) { events.append(event) }
+        if let event = touches.ended(item.usage, capsLock: item.caps) { events.append(event) }
+        for key in item.latched.keys.reversed() {
+            if let event = touches.ended(key.usage, capsLock: item.caps) { events.append(event) }
+        }
         #endif
         var keys = KeyStrokes()
         var downs: [KeyStroke] = []
@@ -100,13 +109,39 @@ do {
     }
     #if !DUO_LEGACY_CAPS
     for enabled in [true, false] {
-        let events = DuoKeyboardLayout.keyEvents(0x39, latched: [], capsLock: enabled)
+        var touches = DuoKeyboardTouches()
+        let events = [touches.began(0x39, capsLock: enabled), touches.ended(0x39, capsLock: enabled)].compactMap { $0 }
         let carried = events.allSatisfy { event in
             guard case .key(let usage, _, let modifiers) = event else { return false }
             return usage == 0x39 && (modifiers & KeyStrokes.capsLock != 0) == enabled
         }
         rows.append(["case": enabled ? "caps-toggle-on" : "caps-toggle-off", "passed": carried])
         passed = passed && carried
+    }
+    do {
+        var touches = DuoKeyboardTouches()
+        var host = KeyStrokes()
+        var ok = true
+        func deliver(_ event: InputEvent?, held: Set<UInt16>, flags: UInt64) {
+            guard let event, case .key(let usage, let down, let modifiers) = event,
+                  let strokes = host.key(usage: usage, down: down, modifiers: modifiers, from: ObjectIdentifier(device)) else {
+                ok = false
+                return
+            }
+            ok = ok && strokes.count == 1 && Set(host.down.keys) == held && host.heldFlags == flags
+        }
+        let command = KeyModifiers.command.rawValue
+        let shiftCommand = KeyModifiers.shift.union(.command).rawValue
+        deliver(touches.began(0xE3, capsLock: false), held: [0xE3], flags: command)
+        deliver(touches.began(0xE7, capsLock: false), held: [0xE3, 0xE7], flags: command)
+        deliver(touches.began(0xE1, capsLock: false), held: [0xE3, 0xE7, 0xE1], flags: shiftCommand)
+        deliver(touches.began(0x1A, capsLock: false), held: [0xE3, 0xE7, 0xE1, 0x1A], flags: shiftCommand)
+        deliver(touches.ended(0xE3, capsLock: false), held: [0xE7, 0xE1, 0x1A], flags: shiftCommand)
+        deliver(touches.ended(0x1A, capsLock: false), held: [0xE7, 0xE1], flags: shiftCommand)
+        deliver(touches.ended(0xE1, capsLock: false), held: [0xE7], flags: command)
+        deliver(touches.ended(0xE7, capsLock: false), held: [], flags: 0)
+        rows.append(["case": "physical-modifier-lifetimes-on-host", "passed": ok])
+        passed = passed && ok
     }
     #endif
     let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["DUODESK_KEYBOARD_CASE_REPORT"]
