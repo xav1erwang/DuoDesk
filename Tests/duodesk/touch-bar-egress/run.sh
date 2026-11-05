@@ -13,7 +13,7 @@ import sys
 source = Path('Tests/duodesk/own-window-capture/LoopbackVideo.swift').read_text()
 needle = 'case .frame: decoder.enqueue(payload, isKeyframe: header.isKeyframe)\n                default: break'
 assert source.count(needle) == 1
-source = source.replace(needle, 'case .frame: decoder.enqueue(payload, isKeyframe: header.isKeyframe)\n                case .touchBarFrame: TouchBarObserver.shared.receive(payload)\n                default: break')
+source = source.replace(needle, 'case .frame: decoder.enqueue(payload, isKeyframe: header.isKeyframe)\n                case .touchBarFrame: TouchBarObserver.shared.receive(payload)\n                case .goodbye: GoodbyeObserver.shared.receive(payload)\n                default: break')
 if sys.argv[2] in ('--trust-revocation-only', '--trust-regrant-only'):
     replacements = {
         'RemoteTLS.quicOptions(identity: device.tls': 'RemoteTLS.options(identity: device.tls',

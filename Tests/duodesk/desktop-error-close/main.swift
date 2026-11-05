@@ -80,6 +80,17 @@ struct Checks {
         let stop = WindowCapture.Stop(error: WindowCapture.NativeGeometryFailure.frame, generation: generation)
         await host.captureStopped(stop)
 
+        // Leave the peer open briefly, as a phone can still have requests in flight when a
+        // terminal error arrives. An immediate cancel can reset the connection before goodbye.
+        try await Task.sleep(for: .milliseconds(60))
+        let draining = server.queue.sync { server.clients.values.contains { $0.touchBarClosing } }
+        guard draining else { throw CheckFailure(message: "Terminal close cancelled the session before its goodbye could drain") }
+        let late = Viewport(width: 669, height: 476, scale: nil, desktopResolution: .init(width: 2007, height: 1427))
+        client.send(content: StreamMessage(kind: .viewport, timestamp: 0, isKeyframe: false, payload: Wire.encode(late)).serialized(),
+                    completion: .idempotent)
+        try await Task.sleep(for: .milliseconds(60))
+        guard host.viewport == nil else { throw CheckFailure(message: "A closing session accepted a late viewport") }
+
         var goodbye: Goodbye?
         var ended = false
         for _ in 0..<20 {

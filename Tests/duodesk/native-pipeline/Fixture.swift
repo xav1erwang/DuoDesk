@@ -8,6 +8,17 @@ let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 
+func displayConfiguration() -> [String] {
+    var count: UInt32 = 0
+    guard CGGetOnlineDisplayList(0, nil, &count) == .success else { return [] }
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+    guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return [] }
+    return ids.prefix(Int(count)).sorted().map { id in
+        let mode = CGDisplayCopyDisplayMode(id)
+        return "\(id):\(mode?.ioDisplayModeID ?? 0):\(mode?.pixelWidth ?? 0)x\(mode?.pixelHeight ?? 0):\(mode?.refreshRate ?? 0):\(CGDisplayBounds(id)):\(CGDisplayMirrorsDisplay(id)):\(id == CGMainDisplayID())"
+    }
+}
+
 final class InputWindow: NSWindow {
     var mouseEvents: [String] = []
     var downs = 0
@@ -86,7 +97,8 @@ final class InputField: NSView {
                              "focused": window.isKeyWindow && window.firstResponder === field,
                              "text": field.text])
         }
-        let record: [String: Any] = ["main": CGMainDisplayID(), "screens": displays]
+        let record: [String: Any] = ["main": CGMainDisplayID(), "screens": displays,
+                                     "displayConfiguration": displayConfiguration()]
         if let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
             try? data.write(to: output, options: .atomic)
             if data != lastRecord { lastRecord = data; print("FIXTURE STATE " + String(decoding: data, as: UTF8.self)) }

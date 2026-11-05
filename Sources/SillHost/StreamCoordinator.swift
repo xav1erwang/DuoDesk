@@ -30,6 +30,7 @@ package final class StreamCoordinator {
     private var clientFPS: [ObjectIdentifier: Int] = [:]
     private var clientDesktopResolutions: [ObjectIdentifier: DuoDesktopResolution] = [:]
     private var clientExtendedRequests: [ObjectIdentifier: UUID] = [:]
+    private var clientsSelectingDisplays: Set<ObjectIdentifier> = []
     private var clientsPreservingPhysicalMode: Set<ObjectIdentifier> = []
     private var activePreservedPhysicalMode = false
     private var preservePhysicalMode: Bool { !clientsPreservingPhysicalMode.isEmpty }
@@ -39,6 +40,12 @@ package final class StreamCoordinator {
     private var desktopIssueOwner: ObjectIdentifier?
     private var activeExtendedRequest: UUID?
     private var streamingDisplayID: CGDirectDisplayID?
+    private var activeExistingDisplayCapture = false
+    /// A display selection identifies clients that understand the existing-display canvas.
+    private var existingDisplayCapture: Bool {
+        !synthetic && catalog.displayInfos.count > 1 && clientExtendedRequests.isEmpty
+            && clientDesktopResolutions.keys.allSatisfy { clientsSelectingDisplays.contains($0) }
+    }
     private var displayPreviewClients: Set<ObjectIdentifier> = []
     private lazy var extendedDesktopAvailable: Bool = appKitLoop && !synthetic && VirtualDisplay.checkPrivateAPI().isEmpty
     #if DUO_DISPLAY_RESTORE_TESTING
@@ -98,6 +105,14 @@ package final class StreamCoordinator {
     private var desktopResolutionNeedsRestart: Bool {
         guard active == .desktop else { return false }
         if streamingDisplayID != catalog.effectiveDisplayID { return true }
+        let wantsExistingDisplay = desktopResolution != nil && existingDisplayCapture
+        if activeExistingDisplayCapture != wantsExistingDisplay { return true }
+        if wantsExistingDisplay {
+            guard let display = catalog.display, display.displayID == catalog.effectiveDisplayID,
+                  let prepared = try? ExistingDisplayCapture.prepare(display) else { return true }
+            return nativeDesktopCanvas != prepared.canvas
+                || prepared.canvas.encodedWidth != encoderWidth || prepared.canvas.encodedHeight != encoderHeight
+        }
         if duoDesktop.isExtendedLayout != !clientExtendedRequests.isEmpty { return true }
         if activePreservedPhysicalMode != preservePhysicalMode { return true }
         if let requestID = clientExtendedRequests.values.first, activeExtendedRequest != requestID { return true }
@@ -117,7 +132,10 @@ package final class StreamCoordinator {
     /// Keep that clock stable until the session ends and report the actual sampling target.
     private func effectiveFPS(maximum: Int, for source: StreamSource) -> Int {
         let ceiling: Int?
-        if source == .desktop, !synthetic, let native = desktopResolution, duoDesktop.resolution == native {
+        if source == .desktop, desktopResolution != nil, existingDisplayCapture,
+           let mode = CGDisplayCopyDisplayMode(catalog.effectiveDisplayID) {
+            ceiling = DuoDesktopDisplay.samplingCeiling(refreshHz: mode.refreshRate)
+        } else if source == .desktop, !synthetic, let native = desktopResolution, duoDesktop.resolution == native {
             ceiling = duoDesktop.currentSamplingCeiling
         } else { ceiling = nil }
         return StreamSamplingPolicy.target(maximum: maximum, highestRequested: clientFPS.values.max(),
@@ -507,6 +525,7 @@ package final class StreamCoordinator {
                 self.touchBarSession?.clientLeft(connection)
                 self.clientFPS[ObjectIdentifier(connection)] = nil
                 self.clientDesktopResolutions[ObjectIdentifier(connection)] = nil
+                self.clientsSelectingDisplays.remove(ObjectIdentifier(connection))
                 self.clientsPreservingPhysicalMode.remove(ObjectIdentifier(connection))
                 self.clientExtendedRequests[ObjectIdentifier(connection)] = nil
                 self.mirrorResolutionBeforeExtension[ObjectIdentifier(connection)] = nil
@@ -549,6 +568,7 @@ package final class StreamCoordinator {
                 // Nobody is watching: stop capturing and encoding. The next client picks afresh.
                 if count == 0 {
                     self.viewport = nil; self.clientFPS = [:]; self.clientDesktopResolutions = [:]
+                    self.clientsSelectingDisplays.removeAll()
                     self.clientExtendedRequests = [:]; self.mirrorResolutionBeforeExtension = [:]
                     self.clientsWithDesktopRecovery.removeAll(); self.clearDesktopIssue()
                     self.pendingLaunch = nil
@@ -617,7 +637,11 @@ package final class StreamCoordinator {
             self?.server.broadcast(StreamMessage(kind: .thumbnail, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                                                  payload: ImageBlob.encodeThumbnail(windowID: id, jpeg: jpeg)))
         }
-        catalog.onDisplaysChanged = { [weak self] in self?.broadcastList() }
+        catalog.onDisplaysChanged = { [weak self] in
+            guard let self else { return }
+            self.broadcastList()
+            Task { @MainActor in await self.applyViewportToActiveWindow() }
+        }
         catalog.onDisplayThumbnail = { [weak self] id, jpeg in
             guard let self else { return }
             let message = StreamMessage(kind: .displayThumbnail, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
@@ -1175,6 +1199,7 @@ package final class StreamCoordinator {
             queueGesture(gesture, from: deviceName(connection))
         case .viewport:
             guard let v = Wire.decode(Viewport.self, from: message.payload), v.isValid else { return }
+            let advertisedExistingCapture = existingDisplayCapture
             if let displayID = v.displayID {
                 catalog.refreshDisplayInventory()
                 guard catalog.displayInfos.contains(where: { $0.id == displayID }) else { broadcastList(); return }
@@ -1182,6 +1207,8 @@ package final class StreamCoordinator {
                 catalog.selectedDisplayID = displayID
             }
             let id = ObjectIdentifier(connection)
+            if v.displayID != nil { clientsSelectingDisplays.insert(id) }
+            else { clientsSelectingDisplays.remove(id) }
             if v.extendedDesktop == true, let requestID = v.extendedRequestID {
                 guard ExtendedDesktopPolicy.permits(available: extendedDesktopAvailable,
                                                     connectedCount: routes.count, registered: routes[id] != nil) else {
@@ -1209,6 +1236,7 @@ package final class StreamCoordinator {
             viewport = v
             clientFPS[id] = v.fps ?? 60
             clientDesktopResolutions[id] = v.desktopResolution
+            if existingDisplayCapture != advertisedExistingCapture { broadcastList() }
             // Duo always controls the complete desktop. Per-window screenshot work is unused
             // there and competes with the continuous native capture on WindowServer.
             catalog.thumbnailsWanted = desktopResolution == nil
@@ -1320,7 +1348,7 @@ package final class StreamCoordinator {
             // The test pattern with the TEST ONLY scripted pointer: its own space, where a test
             // client's input moves that pointer (a synthetic host posts nothing).
             if synthetic, pointer.hasTestPointer { return Self.testPatternRect }
-            return duoDesktop.captureBounds ?? catalog.display?.frame
+            return activeExistingDisplayCapture ? catalog.display?.frame : (duoDesktop.captureBounds ?? catalog.display?.frame)
         case .window(let id):
             // On the virtual display the video is the captured crop, not the whole window: an app
             // that took a larger size than asked overhangs the display and the overhang is not shown.
@@ -1363,7 +1391,8 @@ package final class StreamCoordinator {
             return nil
         case .desktop:
             if synthetic { return pointer.hasTestPointer ? .rect(Self.testPatternRect) : nil }
-            return (duoDesktop.captureBounds ?? catalog.display?.frame).map {
+            let bounds = activeExistingDisplayCapture ? catalog.display?.frame : (duoDesktop.captureBounds ?? catalog.display?.frame)
+            return bounds.map {
                 if let canvas = nativeDesktopCanvas, canvas.requiresPadding { return .paddedRect($0, canvas) }
                 return .rect($0)
             }
@@ -1488,7 +1517,7 @@ package final class StreamCoordinator {
         }
         if stopped.error is WindowCapture.NativeGeometryFailure {
             server.goodbyeAndCloseAll(Goodbye(reason: "duoResolution", message: stopped.error.localizedDescription,
-                                              reconnect: false), within: 0.1)
+                                              reconnect: false))
         }
         await select(.none)
     }
@@ -1529,9 +1558,11 @@ package final class StreamCoordinator {
         let requestedNative = source == .desktop ? desktopResolution : nil
         let requestedPreservedMode = source == .desktop && preservePhysicalMode
         let requestedDisplayID = catalog.effectiveDisplayID
+        let requestedExistingDisplay = source == .desktop && requestedNative != nil && existingDisplayCapture
         func desktopRequestIsCurrent() -> Bool {
             guard !shuttingDown else { return false }
             guard requestedDisplayID == catalog.effectiveDisplayID else { return false }
+            guard requestedExistingDisplay == (source == .desktop && desktopResolution != nil && existingDisplayCapture) else { return false }
             guard requestedPreservedMode == preservePhysicalMode else { return false }
             guard ExtendedDesktopPolicy.isCurrent(capturedID: extendedAttempt?.value, capturedSize: requestedNative,
                                                    currentIDs: Array(clientExtendedRequests.values),
@@ -1624,6 +1655,7 @@ package final class StreamCoordinator {
         nativeVideoActive = false
         nativeDesktopCanvas = nil
         activePreservedPhysicalMode = false
+        activeExistingDisplayCapture = false
         activeExtendedRequest = nil
         // A newer extension request can arrive while this older stop/window switch is draining.
         // Finish that switch without restoring the mirror's physical mode, then start the newest
@@ -1773,7 +1805,28 @@ package final class StreamCoordinator {
             } else {
                 let d: SCDisplay
                 let nativeCanvas: DuoDesktopCanvas?
-                if let native = requestedNative {
+                if requestedExistingDisplay {
+                    do {
+                        guard restoreDesktopSession() else { throw DuoDesktopDisplay.Failure.restorePending }
+                        await catalog.refreshWindows()
+                        guard desktopRequestIsCurrent() else { retryChangedDesktopRequest(); return }
+                        guard CGPreflightScreenCaptureAccess() else { throw DuoDesktopDisplay.Failure.screenPermission }
+                        guard let display = catalog.display, display.displayID == requestedDisplayID else {
+                            throw DuoDesktopDisplay.Failure.noDisplay
+                        }
+                        let prepared = try ExistingDisplayCapture.prepare(display)
+                        d = prepared.display
+                        nativeCanvas = prepared.canvas
+                    } catch {
+                        guard desktopRequestIsCurrent() else { retryChangedDesktopRequest(); return }
+                        active = .none
+                        print("Selected display unavailable: \(error.localizedDescription)")
+                        broadcastList()
+                        server.goodbyeAndCloseAll(Goodbye(reason: "duoResolution", message: error.localizedDescription,
+                                                          reconnect: false))
+                        return
+                    }
+                } else if let native = requestedNative {
                     do {
                         guard desktopRequestIsCurrent() else { retryChangedDesktopRequest(); return }
                         try await setDesktopLayout(extended: extendedAttempt != nil)
@@ -1830,7 +1883,7 @@ package final class StreamCoordinator {
                         }
                         broadcastList()
                         server.goodbyeAndCloseAll(Goodbye(reason: "duoResolution", message: error.localizedDescription,
-                                                          reconnect: false), within: 0.1)
+                                                          reconnect: false))
                         return
                     }
                 } else {
@@ -1859,7 +1912,7 @@ package final class StreamCoordinator {
                 guard !mustExcludeHostWindows || own != nil else {
                     print("Desktop capture withheld: the host application could not be excluded safely.")
                     active = .none; broadcastList()
-                    server.goodbyeAndCloseAll(Goodbye(reason: "duoPrivacy", message: "Mac 无法安全隐藏主机窗口，桌面共享已停止。", reconnect: false), within: 0.1)
+                    server.goodbyeAndCloseAll(Goodbye(reason: "duoPrivacy", message: "Mac 无法安全隐藏主机窗口，桌面共享已停止。", reconnect: false))
                     return
                 }
                 if let own {
@@ -1886,8 +1939,10 @@ package final class StreamCoordinator {
             streamingDisplayID = source == .desktop ? requestedDisplayID : nil
             try await startPipeline(source: source, filter: filter, sourceRect: sourceRect, width: width, height: height, describe: describe,
                                     title: title, kind: kind, nativeCanvas: selectedNativeCanvas,
+                                    existingDisplayCapture: requestedExistingDisplay,
                                     requestIsCurrent: source == .desktop ? desktopRequestIsCurrent : nil)
             activePreservedPhysicalMode = requestedPreservedMode
+            activeExistingDisplayCapture = requestedExistingDisplay
             if let attempt = extendedAttempt, clientExtendedRequests[attempt.key] == attempt.value,
                let connection = connections[attempt.key] {
                 activeExtendedRequest = attempt.value
@@ -1933,7 +1988,7 @@ package final class StreamCoordinator {
                         broadcastList()
                         return
                     }
-                    server.goodbyeAndCloseAll(Goodbye(reason: "duoStream", message: message, reconnect: false), within: 0.1)
+                    server.goodbyeAndCloseAll(Goodbye(reason: "duoStream", message: message, reconnect: false))
                 }
             }
         }
@@ -1947,6 +2002,7 @@ package final class StreamCoordinator {
     private func startPipeline(source: StreamSource, filter: SCContentFilter?, sourceRect: CGRect?, width: Int, height: Int, describe: String,
                                title: String, kind: HostStatusSnapshot.Stream.Kind,
                                nativeCanvas: DuoDesktopCanvas? = nil,
+                               existingDisplayCapture: Bool = false,
                                requestIsCurrent: (@MainActor () -> Bool)? = nil) async throws {
         #if DUO_DISPLAY_RESTORE_TESTING
         if synthetic, testFailExtendedStart, source == .desktop, !clientExtendedRequests.isEmpty {
@@ -1989,17 +2045,25 @@ package final class StreamCoordinator {
             }
             do {
                 let nativeDesktop = source == .desktop && desktopResolution != nil
+                let selectedRefresh = existingDisplayCapture
+                    ? CGDisplayCopyDisplayMode(catalog.effectiveDisplayID)?.refreshRate : nil
+                let nativeCadence = selectedRefresh.map { abs($0 - Double(fps)) < 0.5 }
+                    ?? duoDesktop.followsNativeCadence
+                let resampleCadence = selectedRefresh.map { $0 > Double(fps) + 0.5 }
+                    ?? duoDesktop.needsCadenceResampling
                 try await CaptureStartupRetry.run(enabled: nativeDesktop,
                                                   isCurrent: { requestIsCurrent?() ?? true }, canRetry: {
                     !self.shuttingDown && self.catalog.clientCount > 0
                         && CGPreflightScreenCaptureAccess()
-                        && self.duoDesktop.activeModeMatches
+                        && (existingDisplayCapture
+                            ? self.catalog.display.flatMap { try? ExistingDisplayCapture.prepare($0).canvas } == nativeCanvas
+                            : self.duoDesktop.activeModeMatches)
                 }) {
                     try await self.capture.start(filter: filter, width: nativeCanvas?.width ?? width,
                                                  height: nativeCanvas?.height ?? height, fps: self.fps,
                                                  showsCursor: false, sourceRect: sourceRect,
-                                                 nativeCadence: nativeDesktop && self.duoDesktop.followsNativeCadence,
-                                                 resampleCadence: nativeDesktop && self.duoDesktop.needsCadenceResampling,
+                                                 nativeCadence: nativeDesktop && nativeCadence,
+                                                 resampleCadence: nativeDesktop && resampleCadence,
                                                  requireNativeGeometry: nativeDesktop,
                                                  pixelFormat: nativeCanvas?.requiresPadding == true
                                                      ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
@@ -2506,7 +2570,7 @@ package final class StreamCoordinator {
         }
         if !enc.software {
             await select(.none)
-            server.goodbyeAndCloseAll(Goodbye(reason: "hardwareEncoder", message: "Mac 硬件编码器暂时不可用，请稍后重新连接。", reconnect: false), within: 0.1)
+            server.goodbyeAndCloseAll(Goodbye(reason: "hardwareEncoder", message: "Mac 硬件编码器暂时不可用，请稍后重新连接。", reconnect: false))
             return
         }
         if enc.software {
@@ -2727,7 +2791,8 @@ package final class StreamCoordinator {
     private func windowsChanged(_ infos: [WindowInfo]) async {
         // The pointer's rectangle follows the catalog: the Desktop's display, a window's bounds.
         defer { pointer.setGeometry(pointerGeometry(), fps: fps) }
-        if active == .desktop, desktopResolution != nil, !synthetic, !duoDesktop.activeModeMatches {
+        if active == .desktop, desktopResolution != nil, !synthetic,
+           (activeExistingDisplayCapture ? desktopResolutionNeedsRestart : !duoDesktop.activeModeMatches) {
             await select(.desktop)
             return
         }
@@ -2952,7 +3017,8 @@ package final class StreamCoordinator {
                                                       renderedNativeDesktop: true,
                                                       resizableMirror: true,
                                                       displays: catalog.displayInfos,
-                                                      selectedDisplayID: active == .desktop ? streamingDisplayID : catalog.effectiveDisplayID)))
+                                                      selectedDisplayID: active == .desktop ? streamingDisplayID : catalog.effectiveDisplayID,
+                                                      existingDisplayCapture: existingDisplayCapture ? true : nil)))
     }
 
     private func broadcastList() { server.broadcast(listMessage()) }

@@ -1121,12 +1121,12 @@ final class StreamServer {
 
     // MARK: Goodbye (kind 22)
 
-    /// Tells one admitted client why it is about to be closed, then closes it once the message is
-    /// handed to the network or `within` has passed, whichever comes first: a registered client,
-    /// whose connection the stream and the catalog share. A connection that was never registered
-    /// closes with `closeWithGoodbye`. On `queue`.
+    /// Finish sending the goodbye and let the existing reader drain the peer until it closes, with
+    /// `within` as a backstop. Immediate cancellation can reset a connection before the peer reads
+    /// the message. A connection that was never registered uses `closeWithGoodbye`. On `queue`.
     func goodbye(_ goodbye: Goodbye, to connection: NWConnection, within: TimeInterval = 0.25) {
         if let client = clients[ObjectIdentifier(connection)] {
+            guard !client.touchBarClosing else { return }
             // Closing or revoking a session stops new side-stream data immediately, before the
             // goodbye's bounded grace period and the connection's eventual unregister.
             client.touchBarSurface = nil; client.touchBarRefreshWanted = false
@@ -1142,14 +1142,16 @@ final class StreamServer {
     private static func sayGoodbye(payload: Data, on connection: NWConnection, queue: DispatchQueue, within: TimeInterval) {
         let data = StreamMessage(kind: .goodbye, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                                  payload: payload).serialized()
-        connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
+        connection.send(content: data, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in
+            if error != nil { connection.cancel() }
+        })
         queue.asyncAfter(deadline: .now() + within) { connection.cancel() }
     }
 
     /// Terminal stream failures must close the connections after their error message. Merely
     /// broadcasting a goodbye revokes each video lane but leaves the sockets registered, so a
     /// client can remain connected forever without being able to receive a later stream.
-    func goodbyeAndCloseAll(_ goodbye: Goodbye, within: TimeInterval = 0.25) {
+    func goodbyeAndCloseAll(_ goodbye: Goodbye, within: TimeInterval = DeviceGate.closeWait) {
         queue.async { [self] in
             let connections = clients.values.map(\.connection)
             for connection in connections { self.goodbye(goodbye, to: connection, within: within) }
@@ -1620,6 +1622,7 @@ final class StreamServer {
             let deliver = { (payload: Data) in
                 guard self.clients[ObjectIdentifier(c)] === client,
                       client.transport?.validate(c.currentPath) != false else { c.cancel(); return }
+                if client.touchBarClosing { self.receiveLoop(client); return }
                 if header.kind == .input {
                     self.lastInputAt = Date().timeIntervalSince1970
                     if self.tickTimer == nil { self.updateTicking() }
@@ -1972,7 +1975,7 @@ final class StreamServer {
 
     private func send(_ data: Data, to client: Client, isFrame: Bool = false, isKeyframe: Bool = false,
                       isTouchBarFrame: Bool = false, transportValidated: Bool = false) {
-        guard transportValidated || transportAllows(client) else { return }
+        guard !client.touchBarClosing, transportValidated || transportAllows(client) else { return }
         let now = Date().timeIntervalSince1970
         let remote = client.route.isRemote
         if isFrame, let oldest = client.oldestUnackedFrameAt,

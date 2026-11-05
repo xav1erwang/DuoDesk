@@ -12,6 +12,7 @@ import time
 root = Path(__file__).resolve().parents[3]
 os.chdir(root)
 out, client_app, udid = Path(sys.argv[1]).absolute(), Path(sys.argv[2]).absolute(), sys.argv[3]
+existing_display = '--existing-display' in sys.argv[4:]
 out.mkdir(parents=True, exist_ok=False)
 simctl = '/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl'
 processes = []
@@ -50,8 +51,11 @@ try:
     data = Path(subprocess.check_output([simctl, 'get_app_container', udid, 'com.duodesk.tests.NativePipeline', 'data'], text=True).strip())
     result_file = data / 'Documents/pipeline-result.json'
     if result_file.exists(): result_file.rename(out / 'previous-client-result.json')
-    client = subprocess.Popen([simctl, 'launch', '--console', udid, 'com.duodesk.tests.NativePipeline',
-        '-PipelinePort', str(port), '-PipelineFixture', str(out / 'fixture.json'), '-DuoSimulatorSoftwareDecode', 'YES'],
+    client_args = [simctl, 'launch', '--console', udid, 'com.duodesk.tests.NativePipeline',
+        '-PipelinePort', str(port), '-PipelineFixture', str(out / 'fixture.json'), '-DuoSimulatorSoftwareDecode', 'YES']
+    if existing_display:
+        client_args += ['-PipelineExistingDisplay', 'YES']
+    client = subprocess.Popen(client_args,
         stdout=(out / 'client.log').open('wb'), stderr=subprocess.STDOUT)
     processes.append(client)
     limit = time.monotonic() + 240
@@ -63,6 +67,19 @@ try:
     result.update(json.loads(result_file.read_text()))
     (out / 'client-result.json').write_text(result_file.read_text())
     assert result['passed'], result.get('error')
+    if existing_display:
+        log = (out / 'host.log').read_text(errors='replace')
+        starts = len(re.findall(r'^Streaming the whole desktop at ', log, re.M))
+        assert 3 <= starts <= 5, f'Posture changes or repeated viewports restarted capture unexpectedly: {starts} starts'
+        assert 'Duo desktop handoff recorded' not in log, 'existing-display capture attempted a desktop handoff'
+        assert result['displayConfigurationUnchanged'], 'physical display configuration changed'
+        assert before['displayConfiguration'] == json.loads((out / 'fixture.json').read_text())['displayConfiguration'], \
+            'physical display configuration changed during the test'
+        result['captureStarts'] = starts
+except BaseException as error:
+    result['passed'] = False
+    result['harnessError'] = str(error)
+    raise
 finally:
     for process in reversed(processes):
         if process.poll() is None:

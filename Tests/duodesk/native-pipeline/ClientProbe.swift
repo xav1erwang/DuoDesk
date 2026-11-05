@@ -18,6 +18,8 @@ final class ProbeScene: UIResponder, UIWindowSceneDelegate {
     let client = StreamClient()
     var stages: [[String: Any]] = []
     var initialMain: UInt32 = 0
+    var originalDisplayConfiguration: [String] = []
+    var existingDisplay: Bool { UserDefaults.standard.bool(forKey: "PipelineExistingDisplay") }
     var fixtureCache: [String: Any]?
     var fixtureFeed: Task<Void, Never>?
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
@@ -62,12 +64,15 @@ final class ProbeScene: UIResponder, UIWindowSceneDelegate {
     @MainActor func input(on id: UInt32, label: String) async throws {
         try await wait("fixture matches the current native canvas", seconds: 5) {
             guard let bounds = self.screen(id)?["bounds"] as? [Double], let size = self.client.nativeDesktopResolution else { return false }
-            return Int(bounds[2] * 2) == size.encodedWidth && Int(bounds[3] * 2) == size.encodedHeight
-                && self.screen(id)?["topmost"] as? Bool == true
+            let matchingCanvas = self.existingDisplay || (Int(bounds[2] * 2) == size.encodedWidth && Int(bounds[3] * 2) == size.encodedHeight)
+            return matchingCanvas && self.screen(id)?["topmost"] as? Bool == true
         }
+        let selected = client.remoteDisplays.first { $0.id == id }
+        let canvas = existingDisplay ? selected.map { DuoDesktopResolution(width: $0.pixelWidth, height: $0.pixelHeight) }
+                                     : client.nativeDesktopResolution
         guard let before = screen(id), let point = before["point"] as? [Double], let bounds = before["bounds"] as? [Double],
               before["visible"] as? Bool == true, before["topmost"] as? Bool == true,
-              let size = client.nativeDesktopResolution else { throw PipelineFailure.failed("owned input fixture unavailable") }
+              let size = canvas else { throw PipelineFailure.failed("owned input fixture unavailable") }
         let x = (point[0] - bounds[0]) / bounds[2] * Double(size.width) / Double(size.encodedWidth)
         let y = (point[1] - bounds[1]) / bounds[3] * Double(size.height) / Double(size.encodedHeight)
         guard (0.05...0.95).contains(x), (0.05...0.95).contains(y) else { throw PipelineFailure.failed("owned input target outside capture") }
@@ -96,7 +101,17 @@ final class ProbeScene: UIResponder, UIWindowSceneDelegate {
         if id != initialMain, (fixture()?["main"] as? NSNumber)?.uint32Value != initialMain { throw PipelineFailure.failed("choosing secondary changed the physical primary") }
         let panel = client.displayView.bounds
         let fit = AVMakeRect(aspectRatio: client.videoSize, insideRect: panel)
-        guard abs(fit.width - panel.width) <= 1 && abs(fit.height - panel.height) <= 1 else { throw PipelineFailure.failed("native frame does not fill video panel") }
+        if existingDisplay {
+            guard let display = client.remoteDisplays.first(where: { $0.id == id }),
+                  Int(client.videoSize.width) == (display.pixelWidth + 1) & ~1,
+                  Int(client.videoSize.height) == (display.pixelHeight + 1) & ~1,
+                  fit.width <= panel.width + 1, fit.height <= panel.height + 1,
+                  fixture()?["displayConfiguration"] as? [String] == originalDisplayConfiguration else {
+                throw PipelineFailure.failed("selected physical canvas or display configuration changed")
+            }
+        } else if abs(fit.width - panel.width) > 1 || abs(fit.height - panel.height) > 1 {
+            throw PipelineFailure.failed("native frame does not fill video panel")
+        }
         stages.append(["display": id, "stage": label, "video": [client.videoSize.width, client.videoSize.height],
                        "currentImage": client.displayView.hasCurrentImage, "pointerAndText": true])
         print("PASS PIPELINE: \(id) \(label) \(client.videoSize), decoded, presented, pointer/text")
@@ -115,6 +130,8 @@ final class ProbeScene: UIResponder, UIWindowSceneDelegate {
             }
             try await wait("owned fixture before connection", seconds: 5) { self.fixture() != nil }
             initialMain = (fixture()!["main"] as! NSNumber).uint32Value
+            originalDisplayConfiguration = fixture()?["displayConfiguration"] as? [String] ?? []
+            guard !originalDisplayConfiguration.isEmpty else { throw PipelineFailure.failed("display configuration unavailable") }
             if let name = UserDefaults.standard.string(forKey: "PipelineName") {
                 client.startBrowsing()
                 try await wait("paired Bonjour host") { self.client.macs.contains { $0.name == name && $0.savedID != nil && $0.route == .network } }
@@ -142,6 +159,7 @@ final class ProbeScene: UIResponder, UIWindowSceneDelegate {
         try? await Task.sleep(for: .seconds(2))
         let result: [String: Any] = ["passed": problem == nil, "error": problem ?? "", "stages": stages,
             "realScreenCapture": true, "realHostEncoder": true, "productionClient": true,
+            "existingDisplay": existingDisplay, "displayConfigurationUnchanged": fixture()?["displayConfiguration"] as? [String] == originalDisplayConfiguration,
             "controlledPostureMeasurements": true, "simulatorSoftwareDecode": HardwareHEVCDecoder.simulatorSoftwareEnabled]
         let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("pipeline-result.json")
         try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: path)

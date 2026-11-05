@@ -15,6 +15,13 @@ final class TouchBarObserver: @unchecked Sendable {
     func set(_ value: ((Data) -> Void)?) { lock.withLock { callback = value } }
     func receive(_ data: Data) { let value = lock.withLock { callback }; value?(data) }
 }
+final class GoodbyeObserver: @unchecked Sendable {
+    static let shared = GoodbyeObserver()
+    private let lock = NSLock()
+    private var message: Goodbye?
+    func receive(_ data: Data) { lock.withLock { message = Wire.decode(Goodbye.self, from: data) } }
+    var received: Goodbye? { lock.withLock { message } }
+}
 final class Results: @unchecked Sendable {
     private let lock = NSLock()
     private var source: UUID
@@ -231,10 +238,15 @@ func frame(_ brightness: Int) throws -> CVPixelBuffer {
         loop.server.setTouchBarSubscription(second, for: connection)
         loop.server.queue.sync { }
         let removed = loop.server.queue.sync { () -> Bool in
-            loop.server.goodbye(Goodbye(reason: "test"), to: connection)
+            loop.server.goodbye(Goodbye(reason: "duoResolution", message: "Desktop unavailable", reconnect: false), to: connection)
             return client.touchBarSurface == nil && !client.touchBarRefreshWanted
         }
         guard removed else { throw Failure.invalid("goodbye retained subscription") }
+        try await waitFor("terminal goodbye over QUIC") { GoodbyeObserver.shared.received != nil }
+        guard let goodbye = GoodbyeObserver.shared.received, goodbye.reason == "duoResolution",
+              goodbye.message == "Desktop unavailable", goodbye.reconnect == false else {
+            throw Failure.invalid("terminal goodbye did not reach the client")
+        }
         print("TOUCH BAR EGRESS PASS: paired TLS/QUIC on 127.0.0.1, hardware HEVC, unpaired-route refusal, bounded latest frame, source fencing, backpressure refresh, unsubscribe and goodbye; luma=\(results.state.luma)")
         print("SCOPE: synthetic frames, simulated unpaired route and in-flight stall; no Touch Bar capture, actual input, real Duo, WAN or FPS acceptance")
     }
