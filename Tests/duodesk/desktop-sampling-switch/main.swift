@@ -99,6 +99,15 @@ import Foundation
             guard passed else { fatalError(label) }
             print("PASS: \(label)")
         }
+        let preview = CGRect(x: 15, y: 195, width: 146, height: 141)
+        let actual = CGRect(x: 15, y: 30, width: 1493, height: 820)
+        guard DesktopWindowHandoff.isScaledPreview(preview, accessibilityFrame: actual),
+              !DesktopWindowHandoff.isScaledPreview(actual, accessibilityFrame: actual),
+              !DesktopWindowHandoff.isScaledPreview(CGRect(x: 200, y: 300, width: 1493, height: 820), accessibilityFrame: actual),
+              !DesktopWindowHandoff.isScaledPreview(.zero, accessibilityFrame: actual) else {
+            fatalError("scaled Stage Manager previews must not be treated as movable windows")
+        }
+        print("PASS: scaled Stage Manager previews are excluded while normal or moved windows remain eligible")
         guard let extensionWrites = DuoDesktopDisplay.inspectExtendedModeWritesForTesting(), extensionWrites.count == 4 else {
             fatalError("read-only extended display fixture could not inspect the current mode")
         }

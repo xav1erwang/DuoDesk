@@ -42,6 +42,9 @@ final class DesktopWindowHandoff {
                 // be repositioned by this handoff and must not prevent the desktop from streaming.
                 continue
             }
+            // Stage Manager can expose a scaled preview under the real window's title and ID.
+            // Its AX element describes the full window, so moving it cannot move this preview.
+            if Self.isScaledPreview(liveFrame, accessibilityFrame: matched.originalFrame) { continue }
             // AX geometry can lag a just-restored mirror. Save the actual WindowServer frame,
             // or a fast reconnect can treat the former virtual bounds as the window's home.
             let placement = matched.homed(at: liveFrame)
@@ -222,6 +225,10 @@ final class DesktopWindowHandoff {
             && abs(a.width - b.width) <= 3 && abs(a.height - b.height) <= 3
     }
     private func contains(_ container: CGRect, _ rect: CGRect) -> Bool { container.insetBy(dx: -3, dy: -3).contains(rect) }
+    nonisolated static func isScaledPreview(_ frame: CGRect, accessibilityFrame: CGRect) -> Bool {
+        frame.width > 0 && frame.height > 0 && accessibilityFrame.width > frame.width * 1.5
+            && accessibilityFrame.height > frame.height * 1.5
+    }
     private func reachable(_ frame: CGRect, on display: CGRect) -> Bool {
         contains(display, CGRect(origin: frame.origin, size: CGSize(width: min(40, frame.width), height: min(28, frame.height))))
     }

@@ -84,9 +84,10 @@ final class ProbeScene: UIResponder, UIWindowSceneDelegate {
         guard let landed = screen(id)?["lastPoint"] as? [Double], abs(landed[0] - 180) < 2, abs(landed[1] - 105) < 2 else {
             throw PipelineFailure.failed("pointer coordinates did not reach the displayed field")
         }
+        let priorText = before["text"] as? String ?? ""
         let nonce = "DUO\(id)\(label)"
         client.sendInput(.text(nonce))
-        try await wait("text reached chosen fixture", seconds: 5) { (self.screen(id)?["text"] as? String)?.contains(nonce) == true }
+        try await wait("text reached chosen fixture", seconds: 5) { self.screen(id)?["text"] as? String == priorText + nonce }
     }
     @MainActor func stage(_ id: UInt32, _ label: String) async throws {
         configure(label)
