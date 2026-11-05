@@ -204,8 +204,40 @@ struct DuoKey: Identifiable, Equatable {
     var accessibilityName: String? = nil
 }
 
+/// Tracks modifier fingers independently from one-shot latches. A finger used in a chord must not
+/// turn into a latch when it lifts, and remains effective for further chords until then.
+struct DuoModifierTouches {
+    private struct Touch {
+        let flag: KeyModifiers
+        var used = false
+    }
+
+    private var touches: [String: Touch] = [:]
+
+    var held: KeyModifiers {
+        touches.values.reduce(into: KeyModifiers()) { $0.formUnion($1.flag) }
+    }
+
+    mutating func began(_ id: String, flag: KeyModifiers) {
+        guard touches[id] == nil else { return }
+        touches[id] = Touch(flag: flag)
+    }
+
+    /// An unused tap toggles its latch; a cancelled or already used touch does not.
+    mutating func ended(_ id: String, inside: Bool) -> KeyModifiers? {
+        guard let touch = touches.removeValue(forKey: id), inside, !touch.used else { return nil }
+        return touch.flag
+    }
+
+    mutating func consume() {
+        for id in touches.keys { touches[id]?.used = true }
+    }
+
+    mutating func reset() { touches.removeAll() }
+}
+
 /// ANSI positions are sent as HID keys, so the Mac's selected input source handles composition.
-/// Modifiers are one-shot latches; KeyChord releases every modifier after the key or pointer action.
+/// KeyChord releases each modifier after the key or pointer action.
 enum DuoKeyboardLayout {
     /// Caps Lock is per-key metadata too: a green keycap alone cannot change what the Mac types.
     /// Keep HID input so the Mac's own layout/input source performs the character translation.

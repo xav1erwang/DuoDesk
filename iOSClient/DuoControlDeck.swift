@@ -13,6 +13,7 @@ struct DuoControlDeck: View {
     @AppStorage("duodesk.controlMode") private var mode: DuoControlMode = .combined
     @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
     @State private var capsLock = false
+    @State private var modifierTouches = DuoModifierTouches()
 
     var body: some View {
         GeometryReader { geometry in
@@ -23,7 +24,7 @@ struct DuoControlDeck: View {
             VStack(spacing: 6) {
                 toolbar
                 if mode.hasKeyboard {
-                    DuoKeyboardView(latched: $latched, capsLock: $capsLock,
+                    DuoKeyboardView(latched: $latched, capsLock: $capsLock, modifierTouches: $modifierTouches,
                                     inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
                         .frame(height: keyHeight)
                         .accessibilityIdentifier("duo.keyboard")
@@ -48,12 +49,15 @@ struct DuoControlDeck: View {
         .onChange(of: mode) { _, _ in
             // No modifier may linger when the surface that shows it disappears.
             latched = []
+            modifierTouches.reset()
             UISelectionFeedbackGenerator().selectionChanged()
         }
         .onChange(of: client.hasNativeDesktopVideo, initial: true) { _, _ in
             // A surface mounted during a reset must not inherit a pre-reset one-shot latch.
             latched = []
+            modifierTouches.reset()
         }
+        .onDisappear { modifierTouches.reset() }
     }
 
     private var toolbar: some View {
@@ -139,7 +143,10 @@ struct DuoControlDeck: View {
                      setPointer: { client.setOwnPointer($0, from: .trackpad) },
                      feed: { let state = client.pointerFeedState; return (state.anchor, state.reseeds) },
                      onFingers: client.trackpadFingers,
-                     latched: latched, onModifiersConsumed: { latched = [] },
+                     latched: latched.union(modifierTouches.held), onModifiersConsumed: {
+                         modifierTouches.consume()
+                         latched = []
+                     },
                      verticalSpan: nil,
                      pointerFrameSize: client.videoSize,
                      sendGesture: { client.sendGesture($0, fingers: $1) })
@@ -175,8 +182,11 @@ struct DuoControlDeck: View {
 private struct DuoKeyboardView: View {
     @Binding var latched: KeyModifiers
     @Binding var capsLock: Bool
+    @Binding var modifierTouches: DuoModifierTouches
     let inputReady: Bool
     let send: (InputEvent) -> Void
+
+    private var activeModifiers: KeyModifiers { latched.union(modifierTouches.held) }
 
     var body: some View {
         GeometryReader { geometry in
@@ -209,6 +219,15 @@ private struct DuoKeyboardView: View {
                                 .accessibilityLabel(Text(key.accessibilityName ?? legend(key)))
                                 .accessibilityAddTraits(selected(key) ? [.isSelected] : [])
                                 .accessibilityIdentifier("duo.key.\(key.id)")
+                                .accessibilityHidden(isModifier(key))
+                                .overlay {
+                                    if case .modifier(let bits) = key.action {
+                                        DuoModifierTouchView(label: key.accessibilityName ?? key.legend,
+                                            identifier: "duo.key.\(key.id)", selected: selected(key), enabled: inputReady,
+                                            began: { modifierBegan(key, bits: bits) },
+                                            ended: { modifierEnded(key, inside: $0) })
+                                    }
+                                }
                             }
                         }
                     }
@@ -224,11 +243,11 @@ private struct DuoKeyboardView: View {
     }
 
     private func legend(_ key: DuoKey) -> String {
-        DuoKeyboardLayout.legend(for: key, latched: latched, capsLock: capsLock)
+        DuoKeyboardLayout.legend(for: key, latched: activeModifiers, capsLock: capsLock)
     }
     private func selected(_ key: DuoKey) -> Bool {
         switch key.action {
-        case .modifier(let bits): return latched.contains(KeyModifiers(rawValue: bits))
+        case .modifier(let bits): return activeModifiers.contains(KeyModifiers(rawValue: bits))
         case .capsLock: return capsLock
         default: return false
         }
@@ -237,23 +256,97 @@ private struct DuoKeyboardView: View {
         if case .key(let usage) = key.action { return usage == 0x2A || (0x4F...0x52).contains(usage) }
         return false
     }
+    private func isModifier(_ key: DuoKey) -> Bool {
+        if case .modifier = key.action { return true }
+        return false
+    }
+    private func modifierBegan(_ key: DuoKey, bits: UInt64) {
+        guard inputReady else { return }
+        modifierTouches.began(key.id, flag: KeyModifiers(rawValue: bits))
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.45)
+    }
+    private func modifierEnded(_ key: DuoKey, inside: Bool) {
+        guard let flag = modifierTouches.ended(key.id, inside: inside), inputReady else { return }
+        if latched.contains(flag) { latched.remove(flag) } else { latched.insert(flag) }
+    }
     private func press(_ key: DuoKey) {
         guard inputReady else { return }
         switch key.action {
-        case .modifier(let bits):
-            let flag = KeyModifiers(rawValue: bits)
-            if latched.contains(flag) { latched.remove(flag) } else { latched.insert(flag) }
+        case .modifier: return
         case .capsLock:
+            modifierTouches.consume()
             capsLock.toggle()
             DuoKeyboardLayout.keyEvents(0x39, latched: [], capsLock: capsLock).forEach(send)
         case .inputSource:
+            modifierTouches.consume()
             KeyChord.press(0x2C, with: .control).forEach(send)
             latched = []
         case .key(let usage):
-            DuoKeyboardLayout.keyEvents(usage, latched: latched, capsLock: capsLock).forEach(send)
+            DuoKeyboardLayout.keyEvents(usage, latched: activeModifiers, capsLock: capsLock).forEach(send)
+            modifierTouches.consume()
             latched = []
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.45)
+    }
+}
+
+/// SwiftUI Button actions fire on release; modifiers also need their touch-down for chords.
+private struct DuoModifierTouchView: UIViewRepresentable {
+    let label: String
+    let identifier: String
+    let selected: Bool
+    let enabled: Bool
+    let began: () -> Void
+    let ended: (Bool) -> Void
+
+    func makeUIView(context: Context) -> DuoModifierTouchControl { DuoModifierTouchControl() }
+
+    func updateUIView(_ view: DuoModifierTouchControl, context: Context) {
+        view.accessibilityLabel = label
+        view.accessibilityIdentifier = identifier
+        view.accessibilityTraits = selected ? [.button, .selected] : .button
+        view.isEnabled = enabled
+        view.began = began
+        view.ended = ended
+    }
+}
+
+private final class DuoModifierTouchControl: UIControl {
+    var began: () -> Void = {}
+    var ended: (Bool) -> Void = { _ in }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isAccessibilityElement = true
+        addTarget(self, action: #selector(touchBegan), for: .touchDown)
+        addTarget(self, action: #selector(touchEnded), for: .touchUpInside)
+        addTarget(self, action: #selector(touchCancelled), for: [.touchUpOutside, .touchCancel])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        var ancestor = superview
+        while let view = ancestor {
+            if let scroll = view as? UIScrollView {
+                // Deliver modifier touches immediately while retaining scroll cancellation.
+                scroll.delaysContentTouches = false
+                break
+            }
+            ancestor = view.superview
+        }
+    }
+
+    @objc private func touchBegan() { began() }
+    @objc private func touchEnded() { ended(true) }
+    @objc private func touchCancelled() { ended(false) }
+
+    override func accessibilityActivate() -> Bool {
+        guard isEnabled else { return false }
+        began()
+        ended(true)
+        return true
     }
 }
 

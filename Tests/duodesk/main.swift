@@ -133,6 +133,63 @@ check(chord == [.key(hidUsage: 0xE1, down: true, modifiers: 1 << 17),
                 .key(hidUsage: 0x16, down: false, modifiers: (1 << 17) | (1 << 20)),
                 .key(hidUsage: 0xE3, down: false, modifiers: 1 << 17),
                 .key(hidUsage: 0xE1, down: false, modifiers: 0)], "Command Shift S releases every held modifier")
+
+var modifierTouches = DuoModifierTouches()
+var modifierLatch: KeyModifiers = []
+func endModifier(_ id: String, inside: Bool = true) {
+    guard let flag = modifierTouches.ended(id, inside: inside) else { return }
+    if modifierLatch.contains(flag) { modifierLatch.remove(flag) } else { modifierLatch.insert(flag) }
+}
+func keyboardChord(_ usage: UInt16) -> [InputEvent] {
+    let events = DuoKeyboardLayout.keyEvents(usage, latched: modifierLatch.union(modifierTouches.held), capsLock: false)
+    modifierTouches.consume()
+    modifierLatch = []
+    return events
+}
+
+modifierTouches.began("left-command", flag: .command)
+check(modifierTouches.held == .command, "Command becomes active on touch down")
+let commandW = KeyChord.press(0x1A, with: .command)
+check(keyboardChord(0x1A) == commandW, "first W while Command is held is Command-W")
+check(keyboardChord(0x1A) == commandW, "a held Command applies to another key press too")
+endModifier("left-command")
+check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "releasing a used Command leaves no latch")
+check(keyboardChord(0x1A) == KeyChord.press(0x1A, with: []), "W after releasing Command is plain")
+
+modifierTouches.began("left-command", flag: .command)
+endModifier("left-command")
+check(modifierLatch == .command && modifierTouches.held.isEmpty, "a single modifier tap still latches")
+check(keyboardChord(0x1A) == commandW && modifierLatch.isEmpty, "the next key consumes a tapped latch")
+modifierTouches.began("left-command", flag: .command)
+endModifier("left-command")
+modifierTouches.began("left-command", flag: .command)
+endModifier("left-command")
+check(modifierLatch.isEmpty, "tapping a latched modifier again turns it off")
+
+modifierTouches.began("shift", flag: .shift)
+modifierTouches.began("left-command", flag: .command)
+check(keyboardChord(0x1A) == KeyChord.press(0x1A, with: [.shift, .command]), "two held modifiers join the first chord")
+endModifier("shift")
+check(modifierTouches.held == .command && modifierLatch.isEmpty, "lifting one used modifier leaves the other held")
+check(keyboardChord(0x1A) == commandW, "the remaining held modifier still applies")
+endModifier("left-command")
+check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "multiple used modifiers leave nothing latched")
+
+modifierTouches.began("left-command", flag: .command)
+modifierTouches.began("right-command", flag: .command)
+endModifier("left-command", inside: false)
+check(modifierTouches.held == .command && modifierLatch.isEmpty, "cancelling one Command preserves the other finger")
+modifierTouches.consume() // A trackpad click spends a modifier just like a key.
+endModifier("right-command")
+check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "a modified click leaves no latch on release")
+modifierTouches.began("shift", flag: .shift)
+endModifier("shift", inside: false)
+check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "a cancelled modifier does not latch")
+modifierTouches.began("shift", flag: .shift)
+modifierTouches.reset()
+endModifier("shift")
+check(modifierTouches.held.isEmpty && modifierLatch.isEmpty, "a reset ignores a late touch-up")
+
 let laptop = DuoConsoleGeometry(width: 669, height: 951, foldMinY: 455.5, foldMaxY: 495.5)
 check(laptop.pictureHeight == 475.5 && laptop.controlsTop == 495.5, "video uses complete upper half; controls avoid the fold")
 let asymmetric = DuoConsoleGeometry(width: 669, height: 951, foldMinY: 420, foldMaxY: 460)

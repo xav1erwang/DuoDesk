@@ -1,6 +1,6 @@
 # DuoMac 发布清单
 
-公开目标为 `xav1erwang/DuoMac`。现有协作仓库保持私有，GitHub 仓库先以私有状态完成构建和版本验收。旧版 Sill 发布记录完整保存在 [上游发布记录](UPSTREAM-RELEASE-CHECKLIST.md)。
+项目仓库为 [xav1erwang/DuoMac](https://github.com/xav1erwang/DuoMac)。旧版 Sill 发布记录完整保存在 [上游发布记录](UPSTREAM-RELEASE-CHECKLIST.md)。
 
 ## 当前发行方式
 
