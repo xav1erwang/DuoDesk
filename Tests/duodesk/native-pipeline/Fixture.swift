@@ -5,7 +5,7 @@ import Foundation
 setbuf(stdout, nil)
 
 let app = NSApplication.shared
-app.setActivationPolicy(.regular)
+app.setActivationPolicy(.accessory)
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 
 func displayConfiguration() -> [String] {
@@ -59,9 +59,10 @@ final class InputField: NSView {
     var lastRecord: Data?
     func report() {
         let rows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, 0) as? [[String: Any]] ?? []
+        let allRows = CGWindowListCopyWindowInfo(.optionAll, 0) as? [[String: Any]] ?? []
         var displays: [[String: Any]] = []
         for (id, window) in windows {
-            guard let row = rows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == window.windowNumber }),
+            guard let row = allRows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == window.windowNumber }),
                   let data = row[kCGWindowBounds as String] as? [String: Any],
                   let frame = CGRect(dictionaryRepresentation: data as CFDictionary), let field = fields[id] else { continue }
             let source = CGDisplayMirrorsDisplay(id) == 0 ? id : CGDisplayMirrorsDisplay(id)
@@ -74,7 +75,11 @@ final class InputField: NSView {
                 // NSWindow coordinates use AppKit's first screen, which can be the physical
                 // mirror endpoint while CGMainDisplayID names the virtual capture endpoint.
                 let mainHeight = NSScreen.screens.first?.frame.height ?? CGDisplayBounds(CGMainDisplayID()).height
-                window.setFrameOrigin(CGPoint(x: bounds.minX + 80, y: mainHeight - bounds.minY - 300))
+                let target = CGPoint(x: bounds.minX + 80, y: mainHeight - bounds.minY - 300)
+                if !oldCoherent && oldCocoa.origin == target {
+                    window.setFrameOrigin(CGPoint(x: target.x + 1, y: target.y))
+                }
+                window.setFrameOrigin(target)
                 window.orderFrontRegardless()
             }
             let point = CGPoint(x: frame.minX + field.frame.midX, y: frame.maxY - field.frame.midY)
@@ -112,13 +117,15 @@ final class InputField: NSView {
             window.setFrameOrigin(rect.origin)
             window.isReleasedWhenClosed = false; window.isRestorable = false
             window.level = .floating
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.backgroundColor = id == CGMainDisplayID() ? .systemBlue : .systemOrange
             window.title = "DUO owned input fixture \(id)"
             let field = InputField(frame: CGRect(x: 20, y: 85, width: 320, height: 40))
             window.contentView?.addSubview(field); window.orderFrontRegardless()
             windows[id] = window; fields[id] = field
         }
+        app.activate()
+        windows[CGMainDisplayID()]?.makeKeyAndOrderFront(nil)
+        for window in windows.values { window.orderFrontRegardless() }
         timer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.report() } }
         report()
     }

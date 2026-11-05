@@ -31,10 +31,18 @@ try:
     fixture = subprocess.Popen([str(root / '.build/native-pipeline/Fixture'), str(out / 'fixture.json')],
                                stdout=(out / 'fixture.log').open('wb'), stderr=subprocess.STDOUT)
     processes.append(fixture)
+    before = None
     for _ in range(100):
-        if (out / 'fixture.json').exists(): break
+        try:
+            candidate = json.loads((out / 'fixture.json').read_text())
+            screens = candidate.get('screens', [])
+            if len(screens) >= 2 and all(row.get('visible') and row.get('topmost') for row in screens):
+                before = candidate
+                break
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
         time.sleep(.05)
-    before = json.loads((out / 'fixture.json').read_text())
+    assert before is not None, 'fixture windows were not visible on both displays'
     host = subprocess.Popen([str(root / '.build/native-pipeline/Host')], env=dict(os.environ, SILL_TEST_LOOPBACK='1'),
                             stdout=(out / 'host.log').open('wb'), stderr=subprocess.STDOUT)
     processes.append(host)
@@ -67,14 +75,14 @@ try:
     result.update(json.loads(result_file.read_text()))
     (out / 'client-result.json').write_text(result_file.read_text())
     assert result['passed'], result.get('error')
+    assert result['displayConfigurationUnchanged'], 'physical display configuration changed'
+    assert before['displayConfiguration'] == json.loads((out / 'fixture.json').read_text())['displayConfiguration'], \
+        'physical display configuration changed during the test'
     if existing_display:
         log = (out / 'host.log').read_text(errors='replace')
         starts = len(re.findall(r'^Streaming the whole desktop at ', log, re.M))
         assert 3 <= starts <= 5, f'Posture changes or repeated viewports restarted capture unexpectedly: {starts} starts'
         assert 'Duo desktop handoff recorded' not in log, 'existing-display capture attempted a desktop handoff'
-        assert result['displayConfigurationUnchanged'], 'physical display configuration changed'
-        assert before['displayConfiguration'] == json.loads((out / 'fixture.json').read_text())['displayConfiguration'], \
-            'physical display configuration changed during the test'
         result['captureStarts'] = starts
 except BaseException as error:
     result['passed'] = False

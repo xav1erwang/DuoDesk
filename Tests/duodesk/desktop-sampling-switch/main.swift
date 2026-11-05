@@ -89,11 +89,12 @@ import Foundation
             guard passed else { fatalError(label) }
             print("PASS: \(label)")
         }
-        guard let mirror = DuoDesktopDisplay.inspectPinnedMirrorForTesting(), mirror.count == 4 else {
+        guard let mirror = DuoDesktopDisplay.inspectPinnedMirrorForTesting(), mirror.count == 5 else {
             fatalError("read-only pinned-mirror fixture could not inspect the current mode")
         }
-        let mirrorLabels = ["mirror accepts only a uniform rebase and rejects changed topology", "mirror restores source and unrelated origins without writing unrelated modes",
-                            "candidate stops staging at the first failure", "invalid mirror identifiers cause no operations"]
+        let mirrorLabels = ["mirror accepts a uniform rebase and rejects changed topology", "mirror restores source and unrelated origins without writing unrelated modes",
+                            "candidate stops staging at the first failure", "invalid mirror identifiers cause no operations",
+                            "only an exact virtual insertion permits temporary adjacent-screen movement"]
         for (passed, label) in zip(mirror, mirrorLabels) {
             guard passed else { fatalError(label) }
             print("PASS: \(label)")

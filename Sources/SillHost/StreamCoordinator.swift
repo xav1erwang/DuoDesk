@@ -41,9 +41,10 @@ package final class StreamCoordinator {
     private var activeExtendedRequest: UUID?
     private var streamingDisplayID: CGDirectDisplayID?
     private var activeExistingDisplayCapture = false
-    /// A display selection identifies clients that understand the existing-display canvas.
+    /// Use the existing display only for an explicit physical-mode fallback. Otherwise a Duo
+    /// desktop needs its requested canvas, even when the Mac has several displays.
     private var existingDisplayCapture: Bool {
-        !synthetic && catalog.displayInfos.count > 1 && clientExtendedRequests.isEmpty
+        !synthetic && preservePhysicalMode && catalog.displayInfos.count > 1 && clientExtendedRequests.isEmpty
             && clientDesktopResolutions.keys.allSatisfy { clientsSelectingDisplays.contains($0) }
     }
     private var displayPreviewClients: Set<ObjectIdentifier> = []

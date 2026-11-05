@@ -30,7 +30,8 @@ for phase_id in target['buildPhases']:
             ref = objects[objects[file_id]['fileRef']]
             if ref['path'] != 'SillApp.swift':
                 sources.append(str(root / 'iOSClient' / ref['path']))
-common = ['swiftc', '-Onone', '-D', 'DEBUG', '-sdk', sdk, '-target', 'arm64-apple-ios27.1' + ('' if device else '-simulator')]
+common = ['swiftc', '-Onone', '-D', 'DEBUG', '-D', 'DUO_NATIVE_PIPELINE_TESTING',
+          '-sdk', sdk, '-target', 'arm64-apple-ios27.1' + ('' if device else '-simulator')]
 library = out / 'libStreamProtocol.a' if device else app / 'libStreamProtocol.dylib'
 subprocess.run(common + ['-emit-library', *(['-static'] if device else []), '-emit-module', '-module-name', 'StreamProtocol',
     *map(str, sorted((root / 'Sources/StreamProtocol').glob('*.swift'))),

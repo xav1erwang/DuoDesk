@@ -654,7 +654,10 @@ final class DuoDesktopDisplay {
               }) else { throw Failure.topologyChanging }
         try configure { config in
             var result = CGConfigureDisplayMirrorOfDisplay(config, home.id, display.displayID)
-            guard result == .success else { return result }
+            guard result == .success else {
+                print("Duo early mirror attachment rejected: \(result.rawValue)")
+                return result
+            }
             for old in originals where old.id != home.id && old.mirror == kCGNullDirectDisplay {
                 result = CGConfigureDisplayOrigin(config, old.id, Int32(old.origin.x), Int32(old.origin.y))
                 guard result == .success else { return result }
@@ -676,11 +679,15 @@ final class DuoDesktopDisplay {
                                                originalSystemMain: originalSystemMainID,
                                                currentSystemMain: CGMainDisplayID(), virtualID: display.displayID,
                                                virtualIdentity: DisplayRestoreIdentity(vendor: display.vendorID,
-                                                   model: display.productID, serial: display.serialNum, builtIn: false)) else {
+                                                   model: display.productID, serial: display.serialNum, builtIn: false),
+                                               allowInsertedMirror: true) else {
                 print("Duo mirror topology rejected: expected main \(originalSystemMainID), current \(CGMainDisplayID()), source \(originalMainID)/\(mainDisplay()), virtual \(display.displayID)")
                 for old in originals {
                     let mode = CGDisplayCopyDisplayMode(old.id)
                     print("Duo mirror source \(old.id): mode \(old.mode.ioDisplayModeID)→\(mode?.ioDisplayModeID ?? 0), pixels \(old.mode.pixelWidth)×\(old.mode.pixelHeight)→\(mode?.pixelWidth ?? 0)×\(mode?.pixelHeight ?? 0), Hz \(old.mode.refreshRate)→\(mode?.refreshRate ?? 0), origin \(old.origin)→\(CGDisplayBounds(old.id).origin), mirror \(old.mirror)→\(CGDisplayMirrorsDisplay(old.id))")
+                }
+                if let added = (try? snapshot())?.first(where: { $0.id == display.displayID }) {
+                    print("Duo mirror virtual \(added.id): origin \(added.origin), points \(added.mode.width)×\(added.mode.height), pixels \(added.mode.pixelWidth)×\(added.mode.pixelHeight), mirror \(added.mirror)")
                 }
                 return .failure
             }
@@ -742,7 +749,8 @@ final class DuoDesktopDisplay {
                                                 originalSystemMain: CGDirectDisplayID,
                                                 currentSystemMain: CGDirectDisplayID,
                                                 virtualID: CGDirectDisplayID,
-                                                virtualIdentity: DisplayRestoreIdentity) -> Bool {
+                                                virtualIdentity: DisplayRestoreIdentity,
+                                                allowInsertedMirror: Bool = false) -> Bool {
         let ids = Set(originals.map(\.id))
         guard !ids.isEmpty, ids.count == originals.count, !ids.contains(virtualID),
               virtualID != kCGNullDirectDisplay,
@@ -752,22 +760,69 @@ final class DuoDesktopDisplay {
               virtual.mirror == kCGNullDirectDisplay, virtual.identity == virtualIdentity else { return false }
         guard let anchor = originals.first,
               let currentAnchor = current.first(where: { $0.id == anchor.id }) else { return false }
-        // Adding a display can make WindowServer rebase the entire desktop onto a left-hand
-        // screen. Accept only a uniform translation with identical modes, identities and mirror
-        // relationships. The transaction below restores the saved arrangement atomically.
+        // Adding a display can rebase the entire desktop. Check that case first, then separately
+        // recognize the exact insertion of the owned mirror between otherwise unchanged screens.
         let translation = CGPoint(x: currentAnchor.origin.x - anchor.origin.x,
                                   y: currentAnchor.origin.y - anchor.origin.y)
-        if originalSystemMain != currentSystemMain {
-            guard translation != .zero, ids.contains(currentSystemMain),
-                  current.first(where: { $0.id == currentSystemMain })?.origin == .zero else { return false }
-        }
-        return originals.allSatisfy { original in
+        let endpointsUnchanged = originals.allSatisfy { original in
             guard original.mode.refreshRate.isFinite, original.mode.refreshRate > 0,
                   let now = current.first(where: { $0.id == original.id }) else { return false }
             return sameRestoredMode(now.mode, original.mode)
-                && now.origin == CGPoint(x: original.origin.x + translation.x, y: original.origin.y + translation.y)
                 && now.mirror == original.mirror && now.identity == original.identity
         }
+        guard endpointsUnchanged else { return false }
+        let uniformlyRebased = originals.allSatisfy { original in
+            current.first(where: { $0.id == original.id })?.origin
+                == CGPoint(x: original.origin.x + translation.x, y: original.origin.y + translation.y)
+        }
+        if uniformlyRebased {
+            return originalSystemMain == currentSystemMain
+                || (translation != .zero && ids.contains(currentSystemMain)
+                    && current.first(where: { $0.id == currentSystemMain })?.origin == .zero)
+        }
+        guard allowInsertedMirror, originalSystemMain == currentSystemMain,
+              let main = originals.first(where: { $0.id == originalSystemMain }),
+              current.first(where: { $0.id == main.id })?.origin == main.origin else { return false }
+        return insertedMirrorExplainsOrigins(originals: originals, current: current, virtual: virtual)
+    }
+
+    /// WindowServer can insert the new display between touching screens before the mirror is
+    /// attached. Accept only an exact virtual-sized displacement with both edges still touching.
+    private static func insertedMirrorExplainsOrigins(originals: [Original], current: [Original], virtual: Original) -> Bool {
+        let inserted = CGRect(origin: virtual.origin, size: CGSize(width: virtual.mode.width, height: virtual.mode.height))
+        guard inserted.width > 0, inserted.height > 0 else { return false }
+        let endpoints = originals.compactMap { old -> (CGRect, CGRect)? in
+            guard let now = current.first(where: { $0.id == old.id }) else { return nil }
+            let size = CGSize(width: old.mode.width, height: old.mode.height)
+            return (CGRect(origin: old.origin, size: size), CGRect(origin: now.origin, size: size))
+        }
+        guard endpoints.count == originals.count else { return false }
+        func overlapsY(_ rect: CGRect) -> Bool { max(rect.minY, inserted.minY) < min(rect.maxY, inserted.maxY) }
+        func overlapsX(_ rect: CGRect) -> Bool { max(rect.minX, inserted.minX) < min(rect.maxX, inserted.maxX) }
+        let shifts = [CGPoint(x: -inserted.width, y: 0), CGPoint(x: inserted.width, y: 0),
+                      CGPoint(x: 0, y: -inserted.height), CGPoint(x: 0, y: inserted.height)]
+        for shift in shifts {
+            let moved = endpoints.filter { $0.1.origin == CGPoint(x: $0.0.minX + shift.x, y: $0.0.minY + shift.y) }
+            let stationary = endpoints.filter { $0.0.origin == $0.1.origin }
+            guard !moved.isEmpty, !stationary.isEmpty, moved.count + stationary.count == endpoints.count else { continue }
+            if shift.x < 0,
+               moved.allSatisfy({ $0.0.maxX <= inserted.maxX && $0.1.maxX <= inserted.minX }),
+               moved.contains(where: { $0.1.maxX == inserted.minX && overlapsY($0.1) }),
+               stationary.contains(where: { $0.1.minX == inserted.maxX && overlapsY($0.1) }) { return true }
+            if shift.x > 0,
+               moved.allSatisfy({ $0.0.minX >= inserted.minX && $0.1.minX >= inserted.maxX }),
+               moved.contains(where: { $0.1.minX == inserted.maxX && overlapsY($0.1) }),
+               stationary.contains(where: { $0.1.maxX == inserted.minX && overlapsY($0.1) }) { return true }
+            if shift.y < 0,
+               moved.allSatisfy({ $0.0.maxY <= inserted.maxY && $0.1.maxY <= inserted.minY }),
+               moved.contains(where: { $0.1.maxY == inserted.minY && overlapsX($0.1) }),
+               stationary.contains(where: { $0.1.minY == inserted.maxY && overlapsX($0.1) }) { return true }
+            if shift.y > 0,
+               moved.allSatisfy({ $0.0.minY >= inserted.minY && $0.1.minY >= inserted.maxY }),
+               moved.contains(where: { $0.1.minY == inserted.maxY && overlapsX($0.1) }),
+               stationary.contains(where: { $0.1.maxY == inserted.minY && overlapsX($0.1) }) { return true }
+        }
+        return false
     }
 
     /// Stage the mirror mode and restore the other displays' origins. Reapplying unchanged
@@ -1432,6 +1487,26 @@ final class DuoDesktopDisplay {
         let rebasedHome = Original(id: main, mode: mode, origin: CGPoint(x: -300, y: 0), mirror: 0, identity: homeIdentity)
         let rebasedOther = Original(id: peer, mode: mode, origin: .zero, mirror: 0, identity: peerIdentity)
         let rebasingAccepted = unchanged([rebasedHome, rebasedOther, virtual], mainID: peer)
+        let w = CGFloat(mode.width), h = CGFloat(mode.height)
+        func inserted(_ oldOrigin: CGPoint, _ newOrigin: CGPoint, _ virtualOrigin: CGPoint,
+                      allow: Bool = true, mainOrigin: CGPoint = .zero) -> Bool {
+            let oldPeer = Original(id: peer, mode: mode, origin: oldOrigin, mirror: 0, identity: peerIdentity)
+            let newPeer = Original(id: peer, mode: mode, origin: newOrigin, mirror: 0, identity: peerIdentity)
+            let newHome = Original(id: main, mode: mode, origin: mainOrigin, mirror: 0, identity: homeIdentity)
+            let added = Original(id: virtualID, mode: mode, origin: virtualOrigin, mirror: 0, identity: virtualIdentity)
+            return mirrorSnapshotUnchanged(originals: [home, oldPeer], current: [newHome, newPeer, added],
+                                           originalSystemMain: main, currentSystemMain: main,
+                                           virtualID: virtualID, virtualIdentity: virtualIdentity,
+                                           allowInsertedMirror: allow)
+        }
+        let insertionChecks = inserted(CGPoint(x: -w, y: 0), CGPoint(x: -2 * w, y: 0), CGPoint(x: -w, y: 0))
+            && inserted(CGPoint(x: w, y: 0), CGPoint(x: 2 * w, y: 0), CGPoint(x: w, y: 0))
+            && inserted(CGPoint(x: 0, y: -h), CGPoint(x: 0, y: -2 * h), CGPoint(x: 0, y: -h))
+            && inserted(CGPoint(x: 0, y: h), CGPoint(x: 0, y: 2 * h), CGPoint(x: 0, y: h))
+            && !inserted(CGPoint(x: -w, y: 0), CGPoint(x: -2 * w, y: 0), CGPoint(x: -w, y: 0), allow: false)
+            && !inserted(CGPoint(x: -w, y: 0), CGPoint(x: -2 * w - 1, y: 0), CGPoint(x: -w, y: 0))
+            && !inserted(CGPoint(x: -w, y: 0), CGPoint(x: -2 * w, y: 0), CGPoint(x: -w - 1, y: 0))
+            && !inserted(CGPoint(x: -w, y: 0), CGPoint(x: -2 * w, y: 0), CGPoint(x: -w, y: 0), mainOrigin: CGPoint(x: 1, y: 0))
         let expected = ["mirror:\(main):\(virtualID)", "mode:\(virtualID)",
                         "origin:\(peer):300:0", "origin:\(virtualID):0:0"]
         func attempt(failAt: Int?) -> (CGError, [String]) {
@@ -1464,7 +1539,7 @@ final class DuoDesktopDisplay {
             setMirror: { _, _ in invoked = true; return .success },
             setMode: { _, _ in invoked = true; return .success })
         return [topologyChecks && rebasingAccepted, ordered, shortCircuits,
-                invalid == .illegalArgument && invalidHome == .illegalArgument && !invoked]
+                invalid == .illegalArgument && invalidHome == .illegalArgument && !invoked, insertionChecks]
     }
 
     /// Exercise the production replay sequence with synthetic records and intercepted writes.

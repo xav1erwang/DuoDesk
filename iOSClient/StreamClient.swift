@@ -720,6 +720,9 @@ final class StreamClient: ObservableObject {
             result.extendedDesktop = extendedDesktopRequested ? true : nil
             result.extendedRequestID = extendedDesktopRequested ? extendedRequestID : nil
             result.preservePhysicalMode = physicalDesktopFallback != nil && !extendedDesktopRequested ? true : nil
+            #if DUO_NATIVE_PIPELINE_TESTING
+            if UserDefaults.standard.bool(forKey: "PipelineExistingDisplay") { result.preservePhysicalMode = true }
+            #endif
         }
         return result
     }

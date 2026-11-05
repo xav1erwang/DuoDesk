@@ -8,7 +8,7 @@
     <key>CFBundleName</key><string>DUO你电脑 Mac</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>2026110501</string>
+    <key>CFBundleVersion</key><string>2026110502</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>27.0</string>
     <key>LSUIElement</key><true/>
