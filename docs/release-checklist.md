@@ -1,6 +1,6 @@
-# DuoMac 发布清单
+# DUO你电脑发布清单
 
-项目仓库为 [xav1erwang/DuoMac](https://github.com/xav1erwang/DuoMac)。旧版 Sill 发布记录完整保存在 [上游发布记录](UPSTREAM-RELEASE-CHECKLIST.md)。
+项目仓库为 [xav1erwang/DuoDesk](https://github.com/xav1erwang/DuoDesk)。旧版 Sill 发布记录完整保存在 [上游发布记录](UPSTREAM-RELEASE-CHECKLIST.md)。
 
 ## 当前发行方式
 
@@ -12,7 +12,7 @@
 
 ```sh
 bash Scripts/release-duodesk.sh --check-version
-DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoMac \
+DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoDesk \
   bash Scripts/release-duodesk.sh --version 0.1.0
 ```
 
@@ -36,7 +36,7 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoMac \
 
 ## 首次公开前
 
-- [ ] 确认新仓库归属为 `xav1erwang`，名称为 `DuoMac`，公开范围符合维护者决定。
+- [ ] 确认仓库归属为 `xav1erwang`，名称为 `DuoDesk`，公开范围符合维护者决定。
 - [ ] 推送准备好的源码，确认下载源码包和干净 clone 都可构建。
 - [ ] 运行 GitHub CI，确认 Mac、iOS 与现有检查全部通过。
 - [ ] 使用本次下载的 Mac 包，在另一台 Mac 或新用户下完成安装、手动放行、权限授权与启动。
@@ -64,7 +64,7 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoMac \
 
 ```sh
 DUODESK_SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
-DUODESK_NOTARY_PROFILE='duomac-notary' \
+DUODESK_NOTARY_PROFILE='duodesk-notary' \
   bash Scripts/release-duodesk.sh --platform macos --notarize
 ```
 

@@ -1,8 +1,8 @@
-# DuoMac · DUO你电脑
+# DuoDesk · DUO你电脑
 
 把 iPhone Duo 折成一台远程 Mac 笔记本。上半屏显示完整 Mac 桌面，下半屏提供键盘和触控板，支持纯键盘、纯触控板、键盘＋触控板三种模式。
 
-![DuoMac 折叠使用示意](docs/images/duomac-overview.png)
+![DUO你电脑折叠使用示意](docs/images/duomac-overview.png)
 
 | 键盘与触控板 | 连接你的 Mac |
 | --- | --- |
@@ -12,7 +12,7 @@
 
 ## 下载与安装
 
-安装包见 [Releases](https://github.com/xav1erwang/DuoMac/releases)。
+安装包见 [Releases](https://github.com/xav1erwang/DuoDesk/releases)。
 
 | 平台 | 下载文件 | 安装方式 |
 | --- | --- | --- |
@@ -28,8 +28,8 @@
 需要完整 Xcode 27.1 或更新版本。
 
 ```sh
-git clone https://github.com/xav1erwang/DuoMac.git
-cd DuoMac
+git clone https://github.com/xav1erwang/DuoDesk.git
+cd DuoDesk
 bash Scripts/build-duodesk-mac.sh
 ```
 
@@ -37,6 +37,6 @@ Mac 应用生成在 `Build/DUO你电脑 Mac.app`。iOS 端打开 `iOSClient/Sill
 
 ## 开源与贡献
 
-DuoMac 基于 [Sill](https://github.com/Saffsanity/sill) 开发，采用 [Apache-2.0 许可证](LICENSE)，上游归属与修改说明见 [NOTICE](NOTICE)。
+DUO你电脑基于 [Sill](https://github.com/Saffsanity/sill) 开发，采用 [Apache-2.0 许可证](LICENSE)，上游归属与修改说明见 [NOTICE](NOTICE)。
 
 [贡献说明](CONTRIBUTING.md) · [安全问题](SECURITY.md) · [隐私说明](docs/PRIVACY.md)

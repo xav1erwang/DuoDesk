@@ -1,6 +1,6 @@
-# DuoMac 隐私说明
+# DUO你电脑隐私说明
 
-更新于 2026 年 11 月 4 日。本说明适用于本仓库提供的 DuoMac／DUO你电脑应用。
+更新于 2026 年 11 月 4 日。本说明适用于本仓库提供的 DUO你电脑应用。
 
 ## 设备之间的数据
 
@@ -26,4 +26,4 @@ Xcode 签名、Sideloadly、AltStore 与 Apple 账号登录由相应提供方处
 
 ## 联系
 
-一般隐私问题可在 [DuoMac Issues](https://github.com/xav1erwang/DuoMac/issues) 提出。涉及密钥、配对码、账号或安全漏洞时，请依照 [安全报告说明](../SECURITY.md) 使用维护者的私人报告渠道。
+一般隐私问题可在 [DuoDesk Issues](https://github.com/xav1erwang/DuoDesk/issues) 提出。涉及密钥、配对码、账号或安全漏洞时，请依照 [安全报告说明](../SECURITY.md) 使用维护者的私人报告渠道。

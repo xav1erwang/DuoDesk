@@ -103,7 +103,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           cat > Release/NOTES.md <<EOF
-          # DuoMac · DUO你电脑 $DUO_RELEASE_TAG
+          # DuoDesk · DUO你电脑 $DUO_RELEASE_TAG
 
           macOS 下载 DUO-macOS-universal.dmg 或 DUO-macOS-universal.zip，支持 Apple Silicon 与 Intel。当前工作流生成 ad-hoc 签名包，首次打开按 README 的系统安全设置步骤操作。
 
@@ -117,9 +117,9 @@ jobs:
               exit 1
             fi
             gh release upload "$DUO_RELEASE_TAG" Release/DUO-* Release/SHA256SUMS Release/INSTALL.txt --clobber
-            gh release edit "$DUO_RELEASE_TAG" --title "DuoMac $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
+            gh release edit "$DUO_RELEASE_TAG" --title "DuoDesk $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
           else
             gh release create "$DUO_RELEASE_TAG" Release/DUO-* Release/SHA256SUMS Release/INSTALL.txt \
-              --verify-tag --draft --title "DuoMac $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
+              --verify-tag --draft --title "DuoDesk $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
           fi
           gh release view "$DUO_RELEASE_TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

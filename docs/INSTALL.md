@@ -8,7 +8,7 @@ Mac 应用要求 macOS 27 或更新版本，iOS 客户端要求 iOS / iPadOS 27.
 
 ## macOS
 
-1. 在本仓库 [Releases](https://github.com/xav1erwang/DuoMac/releases) 下载 `DUO-macOS-universal.dmg`。
+1. 在本仓库 [Releases](https://github.com/xav1erwang/DuoDesk/releases) 下载 `DUO-macOS-universal.dmg`。
 2. 打开磁盘映像，将「DUO你电脑 Mac」拖入「应用程序」，再从「应用程序」启动。
 3. 当前免费账号发布包使用 ad-hoc 签名。若系统阻止启动，先尝试打开一次，再进入「系统设置 → 隐私与安全性」，为这一个应用选择「仍要打开」。系统提示的具体措辞取决于 macOS 版本。[Apple 打开受阻应用说明](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac)
 4. 按应用指引授予屏幕录制、辅助功能和本地网络权限，必要时退出并重新打开应用。
@@ -39,7 +39,7 @@ ZIP 是同一应用的另一种封装，解压后将应用移入「应用程序�
 
 1. 克隆仓库，打开 `iOSClient/Sill.xcodeproj`，选择 `Sill` Scheme。
 2. 在 Xcode Settings → Accounts 登录自己的账号。
-3. 在 Target 的 Signing & Capabilities 中选择自己的 Team，并将 Bundle Identifier 改为你可用的唯一标识，例如 `com.yourname.duomac`。
+3. 在 Target 的 Signing & Capabilities 中选择自己的 Team，并将 Bundle Identifier 改为你可用的唯一标识，例如 `com.yourname.duodesk`。
 4. 连接手机，选择目标设备，开启开发者模式后运行。
 
 本地持续续签工具的配置、启停与失败处理见 [Signing/README.md](../Signing/README.md)。跨到期自动续签仍需真机验收。
