@@ -129,7 +129,7 @@ if [ "$platform" != ios ]; then
     if [ "${DUODESK_SIGN_IDENTITY:--}" != - ]; then signing_options+=(--release); fi
     bash Scripts/build-duodesk-mac.sh --arch "$architecture" --output "$work/mac" \
         --version "$version" --build "$build" ${signing_options[@]+"${signing_options[@]}"}
-    app="$work/mac/DUO你电脑 Mac.app"
+    app="$work/mac/DUO你电脑.app"
     executable="$app/Contents/MacOS/DuoDeskHost"
     if [ "$architecture" = universal ]; then
         lipo "$executable" -verify_arch arm64
@@ -149,7 +149,7 @@ if [ "$platform" != ios ]; then
         ditto -c -k --sequesterRsrc --keepParent "$app" "$work/$zip_name"
     fi
     mkdir "$work/dmg"
-    ditto "$app" "$work/dmg/DUO你电脑 Mac.app"
+    ditto "$app" "$work/dmg/DUO你电脑.app"
     ln -s /Applications "$work/dmg/Applications"
     hdiutil create -quiet -volname 'DUO你电脑' -srcfolder "$work/dmg" -format UDZO "$work/$dmg_name"
     if [ "${DUODESK_SIGN_IDENTITY:--}" != - ]; then
@@ -164,10 +164,10 @@ if [ "$platform" != ios ]; then
     hdiutil verify "$work/$dmg_name"
     mkdir "$work/unpacked-mac"
     ditto -x -k "$work/$zip_name" "$work/unpacked-mac"
-    codesign --verify --deep --strict "$work/unpacked-mac/DUO你电脑 Mac.app"
+    codesign --verify --deep --strict "$work/unpacked-mac/DUO你电脑.app"
     if [ "$notarization" = 1 ]; then
-        xcrun stapler validate "$work/unpacked-mac/DUO你电脑 Mac.app"
-        spctl --assess --type execute --verbose=2 "$work/unpacked-mac/DUO你电脑 Mac.app"
+        xcrun stapler validate "$work/unpacked-mac/DUO你电脑.app"
+        spctl --assess --type execute --verbose=2 "$work/unpacked-mac/DUO你电脑.app"
     fi
     assets+=("$zip_name" "$dmg_name")
 fi
@@ -203,7 +203,7 @@ fi
 cat > "$work/INSTALL.txt" <<EOF
 DUO你电脑 $version ($build)
 
-macOS requires macOS 27 or later. Copy DUO你电脑 Mac.app to Applications.
+macOS requires macOS 27 or later. Copy DUO你电脑.app to Applications.
 Apple notarization performed for this package: $notarization (1=yes, 0=no).
 For an unnotarized build, macOS may require Open Anyway in System Settings > Privacy & Security.
 Grant Screen Recording and Accessibility when prompted, then pair with the iOS app.
