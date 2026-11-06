@@ -922,6 +922,8 @@ struct ConnectScreen: View {
     @State private var typed: Bool
     /// A field of the card has the keyboard.
     @State private var editing = false
+    /// The toolbar's settings button opened the app's own settings sheet.
+    @State private var showSettings = false
     /// The DEBUG harness's stand-in for the camera (the simulator has none); nil on a device.
     let scannerOverride: CodeScanner.Mode?
     @AccessibilityFocusState private var titleFocused: Bool
@@ -975,6 +977,7 @@ struct ConnectScreen: View {
             // keeps its header and foot. One scroll view whatever the fit, so a fit that changes
             // (the card's words folding while a field has the keyboard, a row more) never builds
             // the column anew: the card keeps its fields and its camera.
+            HStack(spacing: 0) {
             VStack(spacing: 0) {
                 ScrollView(.vertical) {
                     ColumnOverFooter(
@@ -988,7 +991,7 @@ struct ConnectScreen: View {
                         visibleHeight: geo.size.height, scrollHeight: layout.roomAboveFold,
                         gap: Self.footerGap, atTop: toTop) {
                         column(layout)
-                            .frame(width: carded && layout.short && !typed ? layout.sideBySideWidth : layout.columnWidth,
+                            .frame(width: columnWidth(carded: carded, layout: layout, typed: typed),
                                    alignment: .leading)
                             // Placed by its leading edge, not centred: the side-by-side card is wider
                             // than the rows, and centring it moved the title sideways as the card
@@ -1027,10 +1030,15 @@ struct ConnectScreen: View {
                         .accessibilityHidden(true)
                 }
             }
+            if layout.usesToolbarStrip { connectToolbar }
+            }
             .background(PageBackground())
             .duoLog(posture, size: geo.size, screen: "connect screen")
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .sheet(isPresented: $showSettings) {
+            AppSettingsView()
+        }
         .onChange(of: client.pairing) { old, new in
             // Paired but no session came (10 s): the card closes, and the Mac is a saved row.
             if case .paired = old, new == .idle, !client.connected { fold() }
@@ -1060,6 +1068,13 @@ struct ConnectScreen: View {
     private func announce(_ line: String) {
         guard !line.isEmpty, line != StreamClient.lookingOnNetwork, line != StreamClient.lookingNearby else { return }
         AccessibilityNotification.Announcement(line).post()
+    }
+
+    /// The column's width: the side-by-side card on a short screen, the wide grid when
+    /// landscape is showing cards, the design's 380 pt otherwise.
+    private func columnWidth(carded: Bool, layout: ConnectLayout, typed: Bool) -> CGFloat {
+        if carded { return layout.short && !typed ? layout.sideBySideWidth : layout.columnWidth }
+        return layout.landscape ? layout.gridWidth : layout.columnWidth
     }
 
     private func column(_ layout: ConnectLayout) -> some View {
@@ -1094,6 +1109,13 @@ struct ConnectScreen: View {
                         .accessibilityAddTraits(.isHeader)
                         .accessibilityFocused($titleFocused)
                 }
+                if !carded && client.pendingLink == nil && !layout.usesToolbarStrip {
+                    Spacer(minLength: 8)
+                    HStack(spacing: 8) {
+                        addMacButton(34)
+                        settingsButton(34)
+                    }
+                }
             }
             .padding(.horizontal, 10)
             .padding(.bottom, carded ? 0 : 8)
@@ -1121,12 +1143,12 @@ struct ConnectScreen: View {
                     .padding(.top, 4)
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             } else {
-                rows
+                macList(layout)
             }
         }
     }
 
-    @ViewBuilder private var rows: some View {
+    @ViewBuilder private func macList(_ layout: ConnectLayout) -> some View {
         Text(connectionStatus)
             .font(.system(size: 13))
             .foregroundStyle(Palette.muted)
@@ -1150,7 +1172,9 @@ struct ConnectScreen: View {
             .accessibilityHint("打开 App Store。")
         }
 
-        VStack(spacing: 2) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12),
+                                 count: layout.cardColumns),
+                  spacing: 12) {
         ForEach(client.macs) { mac in
             // The kind of link, never the Wi-Fi network's name: that needs Location access, which
             // Sill does not ask for (DiscoveryPolicy.method); "Remote" for a saved Mac dialed away
@@ -1158,24 +1182,18 @@ struct ConnectScreen: View {
             // the cable) or cannot connect ("Update Sill"), with VoiceOver's label and hint for it
             // (DiscoveryPolicy.RowWord). The row a tap's ask is waiting on is lit, as the drawer
             // lights the app on screen, while the status line says "Pairing with…".
-            DrawerRow(height: 50, highlighted: client.homeAsk.map { $0.phase == .asking && $0.target.row == mac.id } ?? false,
-                      title: mac.name, trailing: mac.word,
-                      action: { client.connect(to: mac) }) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.iconFallback)
-                    Image(systemName: "desktopcomputer")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 32, height: 32)
-            }
-            .accessibilityLabel(mac.rowAccessibilityLabel)
-            .accessibilityHint(mac.rowAccessibilityHint(device: device))
-            .contextMenu { menu(for: mac) }
+            MacCard(name: mac.name, word: mac.word,
+                    saved: mac.macID.map { client.savedMac($0) != nil } ?? false,
+                    highlighted: client.homeAsk.map { $0.phase == .asking && $0.target.row == mac.id } ?? false,
+                    dimmed: mac.macID == nil,
+                    action: { client.connect(to: mac) })
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(mac.rowAccessibilityLabel)
+                .accessibilityHint(mac.rowAccessibilityHint(device: device))
+                .accessibilityAddTraits(.isButton)
+                .contextMenu { menu(for: mac) }
         }
         }
-        .padding(6)
-        .glassPanel(22)
 
         if client.showsNearbyHint {
             Text("Mac 需与这台 \(device) 连接同一 Wi-Fi 网络，或在 DUO你电脑中开启无线直连。在外使用时，请先用 Mac 上的配对码添加。")
@@ -1210,17 +1228,62 @@ struct ConnectScreen: View {
             }
         }
 
-        // Always the last line, from the first frame, so nothing moves when it is needed.
+    }
+
+    /// The toolbar's +: pairing lives off the main surface now (design/deep-blue-ui/connect-redesign.html).
+    private func addMacButton(_ size: CGFloat = 38) -> some View {
         Button(action: unfold) {
-            Label("添加 Mac", systemImage: "plus")
-                .font(.system(size: 15, weight: .semibold))
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Palette.accent)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .padding(.horizontal, 10)
-                .contentShape(Rectangle())
+                .frame(width: size, height: size)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.control))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Palette.stroke, lineWidth: 1)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("添加 Mac")
         .accessibilityHint("使用 Mac 上的配对码建立连接")
+    }
+
+    /// The toolbar's settings button, at the far end from the +.
+    private func settingsButton(_ size: CGFloat = 38) -> some View {
+        Button { showSettings = true } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Palette.text)
+                .frame(width: size, height: size)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.control))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Palette.stroke, lineWidth: 1)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("设置")
+    }
+
+    /// Landscape: a vertical strip down the trailing edge, + at the top and settings at the
+    /// bottom, the way the design draft lays it out.
+    private var connectToolbar: some View {
+        VStack(spacing: 10) {
+            addMacButton()
+            Spacer(minLength: 0)
+            settingsButton()
+        }
+        .padding(.vertical, 14)
+        .frame(width: 58)
+        .background {
+            LinearGradient(colors: [Palette.strokeSoft, .clear],
+                           startPoint: .top, endPoint: .bottom).opacity(0.5)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(Palette.divider).frame(width: 1)
+                }
+        }
     }
 
     private var connectionStatus: String {

@@ -11,6 +11,8 @@
 | `board.html` / `board.css` | 设计板：深色 A–F、浅色 A′–F′、字标 G、两套色板、对照表、规则 |
 | `build-board.py` | 生成 `board.html` 的脚本（手工改 `board.html` 会被覆盖） |
 | `renders/board-full.png` | 整板位图，3200 × 8342 |
+| `connect-redesign.html` | 连接页改版稿：横屏卡片 + 右侧工具栏 + 设置入口 |
+| `renders/connect-redesign.png` | 上面这稿的位图 |
 | `demo/` | 模拟器预览 App（SwiftUI，`build.sh` 出 `.app`） |
 | `renders/sim/` | 模拟器实拍截图（8 张 + 拼版 `all.png`） |
 | `fonts/` | Montserrat Black 与 OFL 许可证（VisionTec 字标用） |

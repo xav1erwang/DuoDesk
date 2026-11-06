@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<title>连接页改版 · 横屏卡片 + 工具栏</title>
+<link rel="stylesheet" href="board.css">
+<style>
+  /* ==== 这一页只讲连接页的改版：卡片、右侧工具栏、设置入口 ==== */
+  .sheet { display: flex; flex-direction: column; gap: 14px; }
+  .sheet .mocks { align-items: flex-start; }
+
+  .cn { position: relative; display: flex; overflow: hidden; }
+  .cn-main { flex: 1; min-width: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .cn-toolbar {
+    flex: none; width: 58px; display: flex; flex-direction: column; align-items: center;
+    gap: 10px; padding: 14px 0; border-left: 1px solid var(--stroke-soft, rgba(105,180,255,.14));
+    background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,0));
+  }
+  .screen.light .cn-toolbar { border-left-color: rgba(11,99,198,.12); }
+
+  .tool {
+    width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+    background: var(--chip, #0C2440); border: 1px solid var(--stroke, rgba(105,180,255,.24));
+    color: var(--text, #F2F7FF);
+  }
+  .tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+  .tool.accent { color: var(--cyan, #2BD6FF); border-color: color-mix(in srgb, var(--cyan, #2BD6FF) 55%, transparent); }
+  .tool.spacer { visibility: hidden; }
+  .cn-toolbar .push { margin-top: auto; }
+
+  .cn-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .cn-grid.one { grid-template-columns: minmax(0, 1fr); }
+
+  .mac-card {
+    position: relative; border-radius: 20px; padding: 14px;
+    background: linear-gradient(150deg, rgba(14,46,82,.62), rgba(2,10,22,.5));
+    border: 1px solid var(--stroke, rgba(105,180,255,.24));
+    display: flex; flex-direction: column; gap: 10px; min-height: 108px;
+  }
+  .screen.light .mac-card { background: #fff; border-color: rgba(11,99,198,.16); }
+  .mac-card.on { border-color: color-mix(in srgb, var(--cyan, #2BD6FF) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--cyan,#2BD6FF) 35%, transparent), 0 12px 30px rgba(0,0,0,.35); }
+
+  .mc-top { display: flex; align-items: center; gap: 10px; }
+  .mc-tile {
+    width: 34px; height: 34px; border-radius: 10px; flex: none; display: grid; place-items: center;
+    background: rgba(23,58,92,.9); border: 1px solid var(--stroke, rgba(105,180,255,.24));
+  }
+  .screen.light .mc-tile { background: #DCE9F7; }
+  .mc-tile svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+  .mc-name { font-size: 14px; font-weight: 600; color: var(--text, #F2F7FF); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .screen.light .mc-name { color: #0C1A2A; }
+  .mc-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+  .mc-sub { font-size: 11px; color: var(--muted, #8FA7C2); }
+  .screen.light .mc-sub { color: #4C6076; }
+
+  .page-head .statusline { margin-top: 2px; }
+  .ver { font-size: 11px; color: var(--muted, #8FA7C2); }
+
+  .settings-sheet { border-radius: 22px; overflow: hidden; }
+  .ss-head { display: flex; align-items: center; padding: 16px 18px 10px; }
+  .ss-head h3 { margin: 0; font-size: 17px; color: var(--text, #F2F7FF); }
+  .screen.light .ss-head h3 { color: #0C1A2A; }
+  .ss-rows { padding: 6px 10px 12px; display: flex; flex-direction: column; }
+  .ss-row { display: flex; align-items: center; gap: 12px; padding: 11px 10px; border-radius: 12px; font-size: 14px; color: var(--text, #F2F7FF); }
+  .screen.light .ss-row { color: #0C1A2A; }
+  .ss-row .k { flex: 1; }
+  .ss-row .v { color: var(--muted, #8FA7C2); font-size: 12.5px; }
+  .screen.light .ss-row .v { color: #4C6076; }
+  .ss-row + .ss-row { box-shadow: inset 0 1px 0 var(--stroke-soft, rgba(105,180,255,.14)); }
+  .ss-group { padding: 14px 12px 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted, #8FA7C2); }
+</style>
+</head>
+<body class="board">
+<div class="board-head">
+  <div class="board-kicker">DUO 你电脑 · UI DIRECTION · 连接页改版</div>
+  <h1>横屏卡片 · 右侧工具栏 · 设置入口</h1>
+  <div class="board-sub">「添加 Mac」从主屏面上移到工具栏的 + ；工具栏最下面是设置。横屏把 Mac 从列表改成卡片。</div>
+</div>
+
+<!-- A：横屏（Duo 内屏） -->
+<div class="stage" style="margin-top:48px">
+  <div class="mocks">
+    <div class="mock">
+      <div class="mock-cap"><b>深色</b> · 两台 Mac · 一张卡片处于当前态</div>
+      <div class="screen dark" style="width:840px;height:592px">
+        <div class="ambient"></div>
+        <div class="cn">
+          <div class="cn-main">
+            <div class="page-head">
+              <div class="app-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+              <div>
+                <div class="kicker">DUO 你电脑</div>
+                <h2>连接 Mac</h2>
+                <div class="statusline"><span class="dot"></span>正在搜索局域网中的 Mac…</div>
+              </div>
+            </div>
+            <div class="cn-grid">
+              <div class="mac-card on">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Studio Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill cyan">Wi-Fi</span><span class="mc-sub">上次连接 · 今天 20:41</span></div>
+              </div>
+              <div class="mac-card">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Office Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill">有线</span><span class="mc-sub">已保存</span></div>
+              </div>
+              <div class="mac-card">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Noah 的 MacBook Air</div>
+                </div>
+                <div class="mc-foot"><span class="pill">远程</span><span class="mc-sub">公网直连</span></div>
+              </div>
+              <div class="mac-card" style="opacity:.55">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Mac mini</div>
+                </div>
+                <div class="mc-foot"><span class="pill">Wi-Fi</span><span class="mc-sub">未配对</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="cn-toolbar">
+            <div class="tool accent"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+            <div class="tool"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/></svg></div>
+            <div class="tool push"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M4.6 12H6.8M17.2 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"/></svg></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="mock">
+      <div class="mock-cap"><b>浅色</b> · 同一屏</div>
+      <div class="screen light" style="width:840px;height:592px">
+        <div class="ambient"></div>
+        <div class="cn">
+          <div class="cn-main">
+            <div class="page-head">
+              <div class="app-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+              <div>
+                <div class="kicker">DUO 你电脑</div>
+                <h2>连接 Mac</h2>
+                <div class="statusline"><span class="dot"></span>正在搜索局域网中的 Mac…</div>
+              </div>
+            </div>
+            <div class="cn-grid">
+              <div class="mac-card on">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Studio Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill cyan">Wi-Fi</span><span class="mc-sub">上次连接 · 今天 20:41</span></div>
+              </div>
+              <div class="mac-card">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Office Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill">有线</span><span class="mc-sub">已保存</span></div>
+              </div>
+              <div class="mac-card">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Noah 的 MacBook Air</div>
+                </div>
+                <div class="mc-foot"><span class="pill">远程</span><span class="mc-sub">公网直连</span></div>
+              </div>
+              <div class="mac-card" style="opacity:.55">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Mac mini</div>
+                </div>
+                <div class="mc-foot"><span class="pill">Wi-Fi</span><span class="mc-sub">未配对</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="cn-toolbar">
+            <div class="tool accent"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+            <div class="tool"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/></svg></div>
+            <div class="tool push"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M4.6 12H6.8M17.2 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"/></svg></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  <aside class="notes">
+    <h2>A · 横屏（Duo 内屏 951 × 669 pt）</h2>
+    <div class="note"><span class="pin">1</span><p>卡片两列自适应，右侧 58 pt 竖工具栏：<code>+</code> 在顶、<b>设置在最下面</b>，中间空着。</p></div>
+    <div class="note"><span class="pin">2</span><p>当前态用青色描边 + 外发光；未配对的一档降到 55% 不透明度，仍可点。</p></div>
+    <div class="note"><span class="pin">3</span><p>主屏面不再有「添加 Mac」那一行虚线按钮。</p></div>
+  </aside>
+</div>
+
+<!-- B：竖屏 -->
+<div class="stage" style="margin-top:48px">
+  <div class="mocks">
+    <div class="mock">
+      <div class="mock-cap"><b>深色</b></div>
+      <div class="screen dark" style="width:360px;height:640px">
+        <div class="ambient"></div>
+        <div class="cn">
+          <div class="cn-main" style="padding:16px">
+            <div class="page-head" style="align-items:flex-start">
+              <div class="app-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+              <div style="flex:1">
+                <div class="kicker">DUO 你电脑</div>
+                <h2>连接 Mac</h2>
+              </div>
+              <div style="display:flex;gap:8px">
+                <div class="tool accent" style="width:34px;height:34px"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+                <div class="tool" style="width:34px;height:34px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M4.6 12H6.8M17.2 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"/></svg></div>
+              </div>
+            </div>
+            <div class="statusline" style="padding-left:2px"><span class="dot"></span>正在搜索局域网中的 Mac…</div>
+            <div class="cn-grid one">
+              <div class="mac-card on">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Studio Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill cyan">Wi-Fi</span><span class="mc-sub">上次连接 · 今天 20:41</span></div>
+              </div>
+              <div class="mac-card">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Office Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill">有线</span><span class="mc-sub">已保存</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="mock">
+      <div class="mock-cap"><b>浅色</b></div>
+      <div class="screen light" style="width:360px;height:640px">
+        <div class="ambient"></div>
+        <div class="cn">
+          <div class="cn-main" style="padding:16px">
+            <div class="page-head" style="align-items:flex-start">
+              <div class="app-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+              <div style="flex:1">
+                <div class="kicker">DUO 你电脑</div>
+                <h2>连接 Mac</h2>
+              </div>
+              <div style="display:flex;gap:8px">
+                <div class="tool accent" style="width:34px;height:34px"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+                <div class="tool" style="width:34px;height:34px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M4.6 12H6.8M17.2 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"/></svg></div>
+              </div>
+            </div>
+            <div class="statusline" style="padding-left:2px"><span class="dot"></span>正在搜索局域网中的 Mac…</div>
+            <div class="cn-grid one">
+              <div class="mac-card on">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Studio Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill cyan">Wi-Fi</span><span class="mc-sub">上次连接 · 今天 20:41</span></div>
+              </div>
+              <div class="mac-card">
+                <div class="mc-top">
+                  <div class="mc-tile"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M2 19h20"/></svg></div>
+                  <div class="mc-name">Office Mac</div>
+                </div>
+                <div class="mc-foot"><span class="pill">有线</span><span class="mc-sub">已保存</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  <aside class="notes">
+    <h2>B · 竖屏（Duo 外屏 382 × 678 pt）</h2>
+    <div class="note"><span class="pin">1</span><p>工具栏收成标题右侧的两个圆按钮，顺序与横屏一致：先 <code>+</code>，后设置。</p></div>
+    <div class="note"><span class="pin">2</span><p>卡片一列，规则与横屏相同；字数超出时名字中段截断。</p></div>
+  </aside>
+</div>
+
+<!-- C：设置页 -->
+<div class="stage" style="margin-top:48px">
+  <div class="mocks">
+    <div class="mock">
+      <div class="mock-cap"><b>深色</b></div>
+      <div class="screen dark" style="width:360px;height:520px">
+        <div class="ambient"></div>
+        <div class="settings-sheet glass" style="margin:16px">
+          <div class="ss-head">
+            <h3 style="flex:1">设置</h3>
+            <div class="tool" style="width:28px;height:28px"><svg viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M7 7l10 10M17 7L7 17"/></svg></div>
+          </div>
+          <div class="ss-rows">
+            <div class="ss-group">连接</div>
+            <div class="ss-row"><span class="k">三指手势</span><span class="v">开</span></div>
+            <div class="ss-row"><span class="k">更宽视野</span><span class="v">关</span></div>
+            <div class="ss-group">Mac 服务端</div>
+            <div class="ss-row"><span class="k">下载 Mac 服务端</span><span class="v">›</span></div>
+            <div class="ss-group">关于</div>
+            <div class="ss-row"><span class="k">支持</span><span class="v">›</span></div>
+            <div class="ss-row"><span class="k">隐私政策</span><span class="v">›</span></div>
+            <div class="ss-row"><span class="k">版本</span><span class="v">0.1.0 (2026110503)</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="mock">
+      <div class="mock-cap"><b>浅色</b></div>
+      <div class="screen light" style="width:360px;height:520px">
+        <div class="ambient"></div>
+        <div class="settings-sheet glass" style="margin:16px">
+          <div class="ss-head">
+            <h3 style="flex:1">设置</h3>
+            <div class="tool" style="width:28px;height:28px"><svg viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M7 7l10 10M17 7L7 17"/></svg></div>
+          </div>
+          <div class="ss-rows">
+            <div class="ss-group">连接</div>
+            <div class="ss-row"><span class="k">三指手势</span><span class="v">开</span></div>
+            <div class="ss-row"><span class="k">更宽视野</span><span class="v">关</span></div>
+            <div class="ss-group">Mac 服务端</div>
+            <div class="ss-row"><span class="k">下载 Mac 服务端</span><span class="v">›</span></div>
+            <div class="ss-group">关于</div>
+            <div class="ss-row"><span class="k">支持</span><span class="v">›</span></div>
+            <div class="ss-row"><span class="k">隐私政策</span><span class="v">›</span></div>
+            <div class="ss-row"><span class="k">版本</span><span class="v">0.1.0 (2026110503)</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  <aside class="notes">
+    <h2>C · 设置页</h2>
+    <div class="note"><span class="pin">1</span><p>只放基本项：连接（三指手势、更宽视野）、Mac 服务端下载、支持与隐私、版本。</p></div>
+    <div class="note"><span class="pin">2</span><p>App Review 要的下载／支持／隐私链接搬到这里，连接页就不必再挂说明文字。</p></div>
+  </aside>
+</div>
+
+<!-- D：说明 -->
+<div class="notes">
+  <h2>这版改了什么</h2>
+  <div class="note"><span class="pin">1</span><p><b>「添加 Mac」离开主屏面。</b>它变成工具栏最上面的 <code>+</code>，主屏面不再有那一行虚线按钮，屏幕多出来的高度留给卡片。</p></div>
+  <div class="note"><span class="pin">2</span><p><b>工具栏最下面是设置。</b>横屏是右侧竖条（<code>+</code> 顶、设置 底，中间留空），竖屏收成标题右侧的两个圆按钮，位置与顺序一致。</p></div>
+  <div class="note"><span class="pin">3</span><p><b>横屏用卡片，不用列表。</b>两列自适应网格，卡片给出「名字 + 链路 + 上一次连接」，当前态用青色描边，不能用的一档降到 55% 不透明度。竖屏沿用一列卡片，规则相同。</p></div>
+  <div class="note"><span class="pin">4</span><p><b>文案。</b>列表行的「3 个窗口」这类计数不再出现在卡片上（连接前没有窗口可数）；链路词保持 DiscoveryPolicy 的 <code>Wi-Fi</code> / <code>有线</code> / <code>远程</code>，正是用户要认的那一个词。</p></div>
+</div>
+</body>
+</html>

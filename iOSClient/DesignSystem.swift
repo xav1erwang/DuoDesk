@@ -54,6 +54,12 @@ enum Palette {
                                       light: 0xFFFFFF, lightAlpha: 0.92)
     static let groupQuiet = Color.adaptive(dark: 0x081E34, darkAlpha: 0.45,
                                            light: 0xF5FAFE, lightAlpha: 1)
+    /// A Mac card on the connect screen: a gradient rather than the blur, because a
+    /// screenful of them would stack a screenful of blur.
+    static let cardTop = Color.adaptive(dark: 0x0E2E52, darkAlpha: 0.62,
+                                        light: 0xFFFFFF, lightAlpha: 1)
+    static let cardBottom = Color.adaptive(dark: 0x020A16, darkAlpha: 0.50,
+                                           light: 0xF5F9FD, lightAlpha: 1)
 
     // Ink
     static let text = Color.adaptive(dark: 0xF2F7FF, light: 0x0C1A2A)
@@ -261,5 +267,94 @@ struct VisionTecWordmark: View {
             .lineLimit(1)
             .fixedSize()
             .accessibilityLabel("VisionTec")
+    }
+}
+
+
+// MARK: - A Mac on the connect screen
+
+/// One Mac, as a card (design/deep-blue-ui/connect-redesign.html). The list row it
+/// replaces showed the same two facts — the name and the kind of link — with the
+/// window count a Mac only has once you are connected.
+struct MacCard: View {
+    let name: String
+    /// The link word: Wi-Fi, 有线, 远程, 未配对… (DiscoveryPolicy.RowWord). Nil when
+    /// this Mac has no word for it yet.
+    let word: String?
+    let saved: Bool
+    /// The row a tap is waiting on, lit as the drawer lights the app on screen.
+    let highlighted: Bool
+    /// Nothing to connect to yet: dimmed, still tappable.
+    let dimmed: Bool
+    let action: () -> Void
+
+    @Environment(\.duoGlow) private var glow
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Palette.iconTile)
+                        Image(systemName: "desktopcomputer")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Palette.text)
+                    }
+                    .frame(width: 34, height: 34)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Palette.stroke, lineWidth: 1)
+                    }
+
+                    Text(name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Palette.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 8) {
+                    if let word {
+                    Text(word)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(highlighted ? Palette.current : Palette.muted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(highlighted ? Palette.controlOpen : Palette.control))
+                        .overlay {
+                            Capsule().strokeBorder(highlighted ? Palette.current.opacity(0.55) : Palette.stroke,
+                                                   lineWidth: 1)
+                        }
+                    }
+                    if saved, word != "已保存" {
+                        Text("已保存")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Palette.muted)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(LinearGradient(colors: [Palette.cardTop, Palette.cardBottom],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(highlighted ? Palette.current.opacity(0.6) : Palette.stroke,
+                                          lineWidth: 1)
+                    }
+                    .shadow(color: glow && highlighted ? Palette.current.opacity(0.22) : .clear, radius: 14)
+                    .shadow(color: .black.opacity(glow ? 0.32 : 0.06),
+                            radius: glow ? 12 : 8, y: glow ? 8 : 4)
+            }
+            .opacity(dimmed ? 0.55 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 }
