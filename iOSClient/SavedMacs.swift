@@ -50,6 +50,8 @@ struct SavedMac: Codable, Hashable, Identifiable {
     /// asks with any key, the Mac proving itself with its code; the pairing that follows replaces
     /// this record (`replacingNewKey`). Optional, so a record from before it decodes.
     var newKey: Bool?
+    /// Only addresses from signed, pinned host information are kept.
+    var wakeTargets: [WakeTarget]?
 
     var id: String { macID }
     var fingerprintData: Data? { Base64URL.decode(fingerprint).flatMap { $0.count == 32 ? $0 : nil } }
@@ -140,6 +142,10 @@ enum SavedMacs {
         if (1...65535).contains(info.remotePort) { next.remotePort = info.remotePort }
         let addresses = filtered(info.addresses, allowLoopback: allowLoopback)
         if info.remoteAccess, !addresses.isEmpty { next.addresses = addresses }
+        if let targets = info.wakeTargets {
+            let valid = Array(targets.filter { $0.validAddress && $0.packet != nil }.prefix(8))
+            if !valid.isEmpty { next.wakeTargets = valid }
+        }
         next.infoIssuedAt = info.issuedAt
         return next
     }

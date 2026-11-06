@@ -45,6 +45,7 @@ final class HostSettings {
         static let askedScreenRecording = "askedScreenRecording", askedAccessibility = "askedAccessibility"
         static let logShowsStats = "logShowsStats"
         static let updateCheck = "updateCheck"
+        static let keepAvailable = "keepAvailable"
         static let shareClipboard = "shareClipboard"
     }
 
@@ -91,6 +92,16 @@ final class HostSettings {
     }
     @ObservationIgnored var onUpdateCheckChange: (@MainActor () -> Void)?
 
+    /// Keep the host reachable during idle sleep while the app is running.
+    var keepAvailable: Bool {
+        didSet {
+            guard keepAvailable != oldValue else { return }
+            defaults.set(keepAvailable, forKey: Key.keepAvailable)
+            onKeepAvailableChange?()
+        }
+    }
+    @ObservationIgnored var onKeepAvailableChange: (@MainActor () -> Void)?
+
     @ObservationIgnored private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -119,6 +130,7 @@ final class HostSettings {
             Key.internetAccess: standard.internetAccess,
             Key.remoteAddressName: "",
             Key.updateCheck: Bundle.main.bundleIdentifier != "com.duodesk.host",
+            Key.keepAvailable: Bundle.main.bundleIdentifier == "com.duodesk.host",
             // On, like the CLI: each device has its own switch, and a password manager's copies never go.
             Key.shareClipboard: standard.shareClipboard,
         ])
@@ -140,6 +152,7 @@ final class HostSettings {
                             shareClipboard: defaults.bool(forKey: Key.shareClipboard)).validated()
         remoteAddressName = defaults.string(forKey: Key.remoteAddressName) ?? ""
         updateCheck = defaults.bool(forKey: Key.updateCheck)
+        keepAvailable = defaults.bool(forKey: Key.keepAvailable)
         settingsTab = defaults.string(forKey: Key.settingsTab).flatMap(SettingsTab.init(rawValue:)) ?? .general
         permissionsOnboardingDismissed = defaults.bool(forKey: Key.permissionsOnboardingDismissed)
         askedScreenRecording = defaults.bool(forKey: Key.askedScreenRecording)

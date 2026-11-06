@@ -67,7 +67,7 @@ struct FoundMac: Identifiable, Hashable {
     /// The connect screen's route and pairing state. Keep the policy's enum separate from the
     /// user-facing words so changing presentation does not change connection decisions.
     var word: String? {
-        if route == .remote { return "远程" }
+        if route == .remote { return "已保存" }
         switch homeWord {
         case .method(.wired): return "有线"
         case .method(.wifi): return "Wi\u{2011}Fi"
@@ -82,7 +82,7 @@ struct FoundMac: Identifiable, Hashable {
     var rowAccessibilityLabel: String { word.map { "\(name)，\($0)" } ?? name }
 
     func rowAccessibilityHint(device: String) -> String {
-        if route == .remote { return "通过 VPN 或公网连接。" }
+        if route == .remote { return "连接这台已配对的 Mac。" }
         switch homeWord {
         case .method: return direct ? "无需共用 Wi-Fi 网络即可连接。" : ""
         case .notPaired: return "\(name) 会显示配对码，配对后连接。"
@@ -1261,6 +1261,15 @@ final class StreamClient: ObservableObject {
         var lastRowDialAt: Double?
     }
     var reconnect: Reconnect?
+    struct SavedLocalAttempt {
+        let id: UUID
+        let macID: String
+        let why: DialReason
+    }
+    /// A saved service lookup in flight, including its QUIC-to-TCP retry.
+    var savedLocalAttempt: SavedLocalAttempt?
+    /// Rate-limit wake packets across the reconnect timer's attempts.
+    var lastLocalWake: [String: TimeInterval] = [:]
     /// The reconnect's retry timer chain now running (`scheduleReconnectRetry`).
     private var reconnectRetryChain = 0
     /// The dial in flight, remote or pairing: one at a time each.
@@ -1877,14 +1886,16 @@ final class StreamClient: ObservableObject {
         if mockDiscovery {
             switch mac.route {
             case .direct: status = "正在直连 \(mac.name)…"
-            case .remote: status = "正在远程连接 \(mac.name)…"
+            case .remote: status = "正在连接 \(mac.name)…"
             case .network: status = "正在连接 \(mac.name)…"
             }
             return
         }
         #endif
         reconnect = nil      // a tap starts afresh
+        savedLocalAttempt = nil
         cancelHomeAsk()      // …and so does an ask still under way
+        if let id = mac.savedID, let saved = savedMac(id) { _ = sendLocalWake(to: saved) }
         if mac.route == .remote, let id = mac.macID {
             dialSaved(id, why: .tap)
             return
@@ -1994,7 +2005,8 @@ final class StreamClient: ObservableObject {
     /// none can be made (the status says so).
     @discardableResult
     func connect(to endpoint: NWEndpoint, name: String, peerToPeer: Bool = false, macID: String? = nil, fallback: NWEndpoint? = nil,
-                 trust: DiscoveryPolicy.HomeTrust = .plain, row: HomeRow? = nil, preferQUIC: Bool = true) -> Bool {
+                 trust: DiscoveryPolicy.HomeTrust = .plain, row: HomeRow? = nil, preferQUIC: Bool = true,
+                 savedLocalID: UUID? = nil) -> Bool {
         // A TLS dial's parameters need this device's key, made now at its first one. A pin refused
         // (-9808) ends the dial as its `.waiting` would have: a Bonjour row's connection never says
         // so itself, it prepares again and again (DeviceTLS.options), and the tap's "Connecting to…"
@@ -2017,6 +2029,7 @@ final class StreamClient: ObservableObject {
                 c.cancel()
             }
         }) else { return false }
+        if savedLocalAttempt?.id != savedLocalID { savedLocalAttempt = nil }
         // One connection at a time. A tap on the connect screen racing the reconnect timer used to
         // open two: both then read from whichever `connection` pointed at, interleaving headers
         // and payloads, while the other was never read and the host evicted it after 4 s.
@@ -2036,7 +2049,8 @@ final class StreamClient: ObservableObject {
         hostName = name
         var bonjourName: String?
         if case .service(let service, _, _, _) = endpoint { bonjourName = service }
-        session = Session(route: peerToPeer ? .direct : .network, macID: macID, bonjourName: bonjourName, home: trust, row: row,
+        session = Session(route: peerToPeer ? .direct : .network, macID: macID, bonjourName: bonjourName,
+                          why: savedLocalID == nil ? nil : savedLocalAttempt?.why, home: trust, row: row,
                           endpoint: endpoint)
         goodbye = nil
         status = peerToPeer ? "正在直连 \(name)…" : "正在连接 \(name)…"
@@ -2054,12 +2068,12 @@ final class StreamClient: ObservableObject {
             print("home: retrying unavailable QUIC over TCP with the same pin")
             #endif
             _ = self.connect(to: endpoint, name: name, peerToPeer: peerToPeer, macID: macID, fallback: fallback,
-                             trust: pinnedTrust, row: row, preferQUIC: false)
+                             trust: pinnedTrust, row: row, preferQUIC: false, savedLocalID: savedLocalID)
         }
         if useQUIC {
             session?.retryHomeTCP = { [weak self] pinnedTrust in
                 _ = self?.connect(to: endpoint, name: name, peerToPeer: peerToPeer, macID: macID, fallback: fallback,
-                                  trust: pinnedTrust, row: row, preferQUIC: false)
+                                  trust: pinnedTrust, row: row, preferQUIC: false, savedLocalID: savedLocalID)
             }
         }
         // The hello first, written to `c` before it becomes the session's connection below: from
@@ -2174,7 +2188,7 @@ final class StreamClient: ObservableObject {
             // with the same pin, and pairing proofs themselves are never raced or replayed.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: retryTCP)
         }
-        if reconnect == nil {
+        if reconnect == nil && savedLocalID == nil {
             // Not the automatic reconnect's dial (a tap's, the session after a pairing, `-SillConnect`):
             // its first window list within DiscoveryPolicy.tapDialDeadline, or it ends with words, so
             // "Connecting to…" never stays (a wired dial's fallback counts afresh from its own dial).
@@ -2194,7 +2208,7 @@ final class StreamClient: ObservableObject {
                 self?.dialUnconstrained(after: c, fallback, name: name, macID: macID, trust: trust, row: row,
                                         why: "did not connect in \(DiscoveryPolicy.wiredWait) s")
             }
-        } else if reconnect != nil {
+        } else if reconnect != nil && savedLocalID == nil {
             // The automatic reconnect's dial (a tap clears `reconnect` first) must get ready. Every
             // look of the reconnect needs `connection == nil` (its remote dial too), so a dial that
             // never does would hold it for good, and one can: a row dialed as its registration goes
@@ -2227,6 +2241,7 @@ final class StreamClient: ObservableObject {
     /// search stops, and a session over AWDL or on Wi-Fi with the cable listed may move at once. Main
     /// thread.
     func markConnected(endpoint: NWEndpoint?, name: String) {
+        savedLocalAttempt = nil
         startTourSession(reconnected: reconnect != nil)
         reconnect = nil
         // Connected: no ask is left waiting (a pairing through a link's addresses leaves one), so the
@@ -3601,6 +3616,7 @@ final class StreamClient: ObservableObject {
     /// The user chose to leave. No reconnect.
     func disconnect() {
         reconnect = nil
+        savedLocalAttempt = nil
         cancelRemoteDial()
         let c = connection
         connection = nil

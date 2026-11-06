@@ -413,6 +413,7 @@ extension StreamClient {
 
     func startAsk(_ start: HomeAsk, busyRetried: Bool = false) {
         guard let identity = deviceIdentity() else { return }
+        savedLocalAttempt = nil
         homeDialer?.cancel()
         pairingDial?.cancel()
         pairingDial = nil

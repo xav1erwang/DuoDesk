@@ -424,7 +424,7 @@ enum DebugHooks {
         }
         for sample in remotePaneSamples() {
             let pane = RemoteAccessPane(status: sample.status, remoteAccess: .constant(sample.status.remoteAccess),
-                                        internetAccess: .constant(sample.status.internetAccess), port: 7455,
+                                        internetAccess: .constant(sample.status.internetAccess), keepAvailable: .constant(true), port: 7455,
                                         addressName: sample.status.addressName, actions: RemoteAccessPane.Actions())
                 .formStyle(.grouped)
                 .frame(width: 520)

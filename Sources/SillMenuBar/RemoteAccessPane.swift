@@ -13,6 +13,7 @@ struct LiveRemoteAccessPane: View {
         RemoteAccessPane(status: model.coordinator?.status.snapshot.remote ?? RemoteStatus(),
                          remoteAccess: $settings.config.remoteAccess,
                          internetAccess: $settings.config.internetAccess,
+                         keepAvailable: $settings.keepAvailable,
                          port: settings.config.remotePort,
                          addressName: settings.remoteAddressName,
                          actions: RemoteAccessPane.Actions(
@@ -37,6 +38,7 @@ struct RemoteAccessPane: View {
     let status: RemoteStatus
     @Binding var remoteAccess: Bool
     @Binding var internetAccess: Bool
+    @Binding var keepAvailable: Bool
     /// The configured port (the app's is never 0).
     let port: Int
     /// The address name setting, as saved.
@@ -69,11 +71,12 @@ struct RemoteAccessPane: View {
             pairedDevices
             if on { internet }
             Section {
+                Toggle("空闲时保持 Mac 可连接", isOn: $keepAvailable)
                 LabeledContent {
                     Button("打开电源设置…") { Self.openEnergySettings() }
                 } label: {
                     Text("睡眠")
-                    Text("Mac 睡眠时无法连接。远程设备连接期间，应用会防止 Mac 自动睡眠。")
+                    Text("开启后，应用运行时会阻止自动睡眠，屏幕仍可熄灭；使用电池时会增加耗电。合盖或手动睡眠仍由 macOS 管理。")
                 }
             }
         }
@@ -284,29 +287,33 @@ struct RemoteAccessPane: View {
 
     @ViewBuilder private var addressNameRow: some View {
         LabeledContent {
-            TextField("地址名称", text: Binding(get: { nameText ?? addressName }, set: { nameText = $0; nameProblem = nil }),
-                      prompt: Text("home.example.net"))
-                .labelsHidden()
-                .frame(width: 220)
-                .onSubmit { saveAddressName() }
+            HStack {
+                TextField("公网地址或域名", text: Binding(get: { nameText ?? addressName }, set: { nameText = $0; nameProblem = nil }),
+                          prompt: Text("公网 IP 或域名"))
+                    .labelsHidden()
+                    .frame(width: 180)
+                    .onSubmit { saveAddressName() }
+                Button("保存") { saveAddressName() }
+            }
         } label: {
-            Text("地址名称（可选）")
-            Text("如果路由器使用动态 DNS，请输入域名，以便公网地址变化后设备仍能找到此 Mac。若外部端口不同，请在后面添加 :端口。")
+            Text("公网地址或域名（可选）")
+            Text("若未自动获取公网地址，可输入路由器的公网 IP；动态 DNS 域名也可使用。若外部端口不同，请在后面添加 :端口。")
         }
         if let nameProblem { Warning(nameProblem) }
     }
 
     private func saveAddressName() {
         let text = (nameText ?? addressName).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { nameProblem = nil; actions.setAddressName(""); return }
+        guard !text.isEmpty else { nameProblem = nil; actions.setAddressName(""); nameText = nil; return }
         switch AddressParser.parse(text) {
         case .success:
             nameProblem = nil
             actions.setAddressName(text)
+            nameText = nil
         case .failure(.zone):
             nameProblem = "请移除 % 及其后面的内容；该部分只在本地网络有效。"
         case .failure:
-            nameProblem = "地址格式无效，请尝试 home.example.net 或 home.example.net:17455。"
+            nameProblem = "地址格式无效，请输入公网 IP、域名或地址:端口。"
         }
     }
 

@@ -34,6 +34,51 @@ public struct MacAddress: Codable, Hashable, Sendable {
     public static let vpn = "vpn", lan = "lan", internet = "internet"
 }
 
+/// A local interface, carried only inside the signed host information.
+public struct WakeTarget: Codable, Hashable, Sendable {
+    public var address: String
+    public var hardwareAddress: String
+
+    public init(address: String, hardwareAddress: String) {
+        self.address = address
+        self.hardwareAddress = hardwareAddress
+    }
+
+    /// Wake-on-LAN's six 0xff bytes followed by sixteen copies of the six-byte address.
+    public var packet: Data? {
+        let parts = hardwareAddress.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 6, parts.allSatisfy({ $0.count == 2 && $0.allSatisfy(\.isHexDigit) }),
+              let first = UInt8(parts[0], radix: 16), first & 1 == 0 else { return nil }
+        let bytes = parts.compactMap { UInt8($0, radix: 16) }
+        guard bytes.count == 6, bytes.contains(where: { $0 != 0 }) else { return nil }
+        return Data(repeating: 0xff, count: 6) + Data(Array(repeating: bytes, count: 16).flatMap { $0 })
+    }
+
+    public var validAddress: Bool {
+        guard case .success(let parsed) = AddressParser.parse(address), parsed.kind == .ipv4,
+              parsed.port == nil, parsed.host == address,
+              let first = address.split(separator: ".").first.flatMap({ UInt8($0) }) else { return false }
+        return first != 0 && first != 127 && first < 224 && !address.hasPrefix("169.254.")
+    }
+
+    /// A directed unicast address on a real local subnet, not its network or broadcast address.
+    public func isLocalUnicast(on local: [UInt8], prefix: Int) -> Bool {
+        guard validAddress, packet != nil, (8...30).contains(prefix), local.count == 4 else { return false }
+        let address = self.address.split(separator: ".").compactMap { UInt8($0) }
+        guard address.count == 4, address != local else { return false }
+        var networkAddress = true
+        var broadcastAddress = true
+        for index in 0..<4 {
+            let bits = min(8, max(0, prefix - index * 8))
+            let hostMask: UInt8 = bits == 8 ? 0 : UInt8(0xff >> bits)
+            guard address[index] & ~hostMask == local[index] & ~hostMask else { return false }
+            if address[index] & hostMask != 0 { networkAddress = false }
+            if address[index] & hostMask != hostMask { broadcastAddress = false }
+        }
+        return !networkAddress && !broadcastAddress
+    }
+}
+
 /// Inside kind 18: who this Mac is and how to reach it from afar. Nothing here is secret: whoever
 /// can connect at all already shares a network with the Mac.
 public struct MacInfo: Codable, Hashable, Sendable {
@@ -53,12 +98,15 @@ public struct MacInfo: Codable, Hashable, Sendable {
     public var internet: Bool
     /// In dial order; empty while Remote Access is off and no pairing window is open.
     public var addresses: [MacAddress]
+    /// Local IPv4 interfaces that can receive a wake packet; absent on older hosts.
+    public var wakeTargets: [WakeTarget]?
 
     public init(v: Int = 1, macID: String, name: String, issuedAt: Double, remoteAccess: Bool, remotePort: Int,
-                internet: Bool, addresses: [MacAddress]) {
+                internet: Bool, addresses: [MacAddress], wakeTargets: [WakeTarget]? = nil) {
         self.v = v; self.macID = macID; self.name = name; self.issuedAt = issuedAt
         self.remoteAccess = remoteAccess; self.remotePort = remotePort; self.internet = internet
         self.addresses = addresses
+        self.wakeTargets = wakeTargets
     }
 }
 

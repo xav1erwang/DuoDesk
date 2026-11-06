@@ -128,7 +128,8 @@ enum RemoteCopy {
             if let c = candidate, c.kind == MacAddress.internet, !c.isName {
                 return "\(mac) 在 \(at) 没有响应。如果家中公网地址已更改，可在同一网络中连接一次更新地址，或在 Mac 上添加域名。"
             }
-            return vpnName.map { "\(mac) 没有响应，可能已睡眠，或 Mac 上的 \($0) 未开启。" } ?? "\(mac) 没有响应，可能已睡眠。"
+            return vpnName.map { "\(mac) 没有响应，请检查 Mac 和 \($0) 的网络连接。" }
+                ?? "无法连接 \(mac)，请检查 Mac 上的 DUO你电脑和网络连接。"
         }
     }
 
@@ -208,7 +209,7 @@ extension StreamClient {
     /// dial as Add a Mac… and a Remote row would, without the link's confirmation: `-SillPairURL`
     /// pairs at the link's own addresses only, where a confirmed link tries the home rows first
     /// (`confirmPendingLink`); `-SillDialSaved remotely` dials the first saved Mac as Connect
-    /// Remotely does (a session that never moves home).
+    /// Remotely does (a session that never moves home); `local` taps the saved row.
     func startRemote() {
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "SillForgetMacs") {
@@ -236,6 +237,8 @@ extension StreamClient {
         } else if d.string(forKey: "SillDialSaved") == "remotely", let first = savedMacs.first {
             // As Connect Remotely dials it: a session that never moves home (S5).
             dialSaved(first.macID, why: .connectRemotely)
+        } else if d.string(forKey: "SillDialSaved") == "local", let first = savedMacs.first {
+            connect(to: FoundMac(name: displayName(first.macID), endpoint: nil, route: .remote, macID: first.macID))
         } else if d.bool(forKey: "SillDialSaved"), let first = savedMacs.first {
             dialSaved(first.macID, why: .launchArgument)
         }
@@ -268,7 +271,7 @@ extension StreamClient {
 
     /// This device's IPv4 networks (address and prefix), for the dial order's "a subnet this device
     /// shares".
-    static func localIPv4Networks() -> [(address: [UInt8], prefix: Int)] {
+    static func localIPv4Networks(wakeOnly: Bool = false) -> [(address: [UInt8], prefix: Int)] {
         var out: [(address: [UInt8], prefix: Int)] = []
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return [] }
@@ -277,6 +280,10 @@ extension StreamClient {
             let i = entry.pointee
             guard let addr = i.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET), let mask = i.ifa_netmask,
                   i.ifa_flags & UInt32(IFF_UP) != 0, i.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else { continue }
+            if wakeOnly {
+                guard String(cString: i.ifa_name).hasPrefix("en"), i.ifa_flags & UInt32(IFF_RUNNING) != 0,
+                      i.ifa_flags & UInt32(IFF_POINTOPOINT) == 0 else { continue }
+            }
             let a = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr.s_addr }
             let m = mask.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr.s_addr }
             let bytes = withUnsafeBytes(of: a) { Array($0) }
@@ -285,13 +292,104 @@ extension StreamClient {
         return out
     }
 
+    /// Only send to a previously authenticated Mac on this device's current local subnet.
+    func localWakeTargets(for mac: SavedMac) -> [WakeTarget] {
+        guard mac.revoked != true, mac.newKey != true, mac.fingerprintData != nil else { return [] }
+        let networks = Self.localIPv4Networks(wakeOnly: true)
+        return (mac.wakeTargets ?? []).prefix(8).filter { target in
+            networks.contains { target.isLocalUnicast(on: $0.address, prefix: $0.prefix) }
+        }
+    }
+
+    func sendLocalWake(to mac: SavedMac) -> Bool {
+        let targets = localWakeTargets(for: mac)
+        guard !targets.isEmpty else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - (lastLocalWake[mac.macID] ?? -60) >= 5 else { return true }
+        lastLocalWake[mac.macID] = now
+        for target in targets {
+            guard let packet = target.packet else { continue }
+            let connection = NWConnection(host: NWEndpoint.Host(target.address), port: 9, using: .udp)
+            connection.stateUpdateHandler = { [queue] state in
+                switch state {
+                case .ready:
+                    connection.stateUpdateHandler = nil
+                    for delay in [0.0, 0.3, 0.6] {
+                        queue.asyncAfter(deadline: .now() + delay) {
+                            connection.send(content: packet, completion: .contentProcessed { _ in })
+                        }
+                    }
+                case .failed, .cancelled:
+                    connection.stateUpdateHandler = nil
+                    connection.cancel()
+                default: break
+                }
+            }
+            connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + 3) { connection.cancel() }
+        }
+        return true
+    }
+
+    /// Resolve the last authenticated service even when the browser missed its listing. A name is
+    /// only a hint: the existing Mac pin is required, and a name collision cannot change the record.
+    func beginSavedLocalLookup(_ mac: SavedMac, why: DialReason) -> Bool {
+        guard !connected, !localNetworkDenied, mac.revoked != true, mac.newKey != true,
+              let service = mac.bonjourName, !service.isEmpty, let pin = mac.fingerprintData else { return false }
+        let attempt = SavedLocalAttempt(id: UUID(), macID: mac.macID, why: why)
+        savedLocalAttempt = attempt
+        #if DEBUG
+        print("saved lookup: trying the saved local service for \(displayName(mac.macID)) with its pin")
+        #endif
+        let endpoint = NWEndpoint.service(name: service, type: Self.serviceType, domain: "local.", interface: nil)
+        guard connect(to: endpoint, name: displayName(mac.macID), macID: mac.macID,
+                      trust: .saved(pin: pin), savedLocalID: attempt.id) else {
+            savedLocalAttempt = nil
+            return false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            self?.finishSavedLocalLookup(attempt.id)
+        }
+        return true
+    }
+
+    /// The lookup failed or timed out. Continue to saved remote addresses at most once.
+    func finishSavedLocalLookup(_ id: UUID) {
+        guard let attempt = savedLocalAttempt, attempt.id == id, !connected else { return }
+        #if DEBUG
+        print("saved lookup: local service did not connect; trying saved addresses if available")
+        #endif
+        savedLocalAttempt = nil
+        let c = connection
+        connection = nil
+        c?.cancel()
+        tearDown(status: status, restartSearch: false)
+        guard let mac = savedMac(attempt.macID) else { return }
+        if mac.allAddresses.isEmpty {
+            if attempt.why == .automatic {
+                remoteDialFailed(macID: mac.macID, why: .automatic, failure: .noAnswer, candidate: nil)
+            } else {
+                status = RemoteCopy.dialFailure(.noAnswer, mac: displayName(mac.macID), candidate: nil,
+                                                vpnName: nil, device: Self.deviceWord)
+                updateDiscovery()
+            }
+        } else {
+            dialSaved(mac.macID, why: attempt.why, skipLocalLookup: true)
+        }
+    }
+
     // MARK: Remote dials
 
     /// Dials a saved Mac at its saved addresses (§7.5). A tap on its Remote row, Connect Remotely
     /// on its network row, the session after a pairing, the automatic reconnect, `-SillDialSaved`.
     func dialSaved(_ macID: String, why: DialReason,
-                   retryTCP: (candidate: RemoteDialPolicy.Candidate, pin: Data)? = nil) {
+                   retryTCP: (candidate: RemoteDialPolicy.Candidate, pin: Data)? = nil,
+                   skipLocalLookup: Bool = false) {
         guard let mac = savedMac(macID), let pin = mac.fingerprintData else { return }
+        if retryTCP == nil, (why == .tap || why == .automatic) {
+            _ = sendLocalWake(to: mac)
+            if !skipLocalLookup, beginSavedLocalLookup(mac, why: why) { return }
+        }
         if let retryTCP, retryTCP.pin != pin {
             remoteDialFailed(macID: macID, why: why, failure: .wrongMac, candidate: retryTCP.candidate)
             return
@@ -485,6 +583,7 @@ extension StreamClient {
         let saved = s?.macID.flatMap { savedMac($0) }
         let name = saved.map { displayName($0.macID) } ?? hostName
         if let goodbye, GoodbyePolicy.isNotice(goodbye) {
+            savedLocalAttempt = nil
             endWithNotice(goodbye, session: s, saved: saved, name: name)
             return
         }
@@ -510,9 +609,22 @@ extension StreamClient {
             remoteDialFailed(macID: id, why: s.why ?? .tap, failure: failure, candidate: s.candidate)
             return
         }
+        if let attempt = savedLocalAttempt, !connected, s?.macID == attempt.macID {
+            let localEnd = DiscoveryPolicy.homeEnd(trust: s?.home, goodbye: goodbye?.reason,
+                                                   tls: error.flatMap { RemoteTLS.status(of: $0) })
+            if localEnd == .wrongKey {
+                finishSavedLocalLookup(attempt.id)
+                return
+            }
+            if localEnd != .other { savedLocalAttempt = nil }
+        }
         // At home over TLS: removed, pairing now required, or another key as the saved Mac
         // (StreamClient+Home). Every other end goes on below.
         if homeSessionEnded(s, error: error, goodbye: goodbye?.reason, terminalEnd: end) { return }
+        if let attempt = savedLocalAttempt, !connected, s?.macID == attempt.macID {
+            finishSavedLocalLookup(attempt.id)
+            return
+        }
         // The automatic reconnect's own dial of a row ended before it connected, without a goodbye
         // (it waited 5 s, failed, or brought no window list): one dial of the listing that did not
         // connect, not a session's end. The reconnect keeps what it was (its loss, its remote dials'
@@ -671,6 +783,7 @@ extension StreamClient {
                 r.rowDials += 1
                 r.lastRowDialAt = now
                 reconnect = r        // kept until the row's connection is ready (a TLS one's: its first window list)
+                if let id, let saved = savedMac(id) { _ = sendLocalWake(to: saved) }
                 #if DEBUG
                 lastRedialNote = nil
                 print("reconnect: dialing \(mac.name) (dial \(r.rowDials) of this listing)")
@@ -730,6 +843,7 @@ extension StreamClient {
     /// the VPN path.
     func connectRemotely(_ macID: String) {
         reconnect = nil
+        savedLocalAttempt = nil
         dialSaved(macID, why: .connectRemotely)
     }
 
@@ -900,6 +1014,15 @@ extension StreamClient {
     private func startPairing(candidates: [RemoteDialPolicy.Candidate], pin: Data?, key: @escaping (Data) -> SymmetricKey?,
                               method: String, macName: String?, port: Int, addresses: [MacAddress], typed: MacAddress?,
                               overlay: Bool, scannedSecret: Data?, busyRetried: Bool) {
+        if savedLocalAttempt != nil {
+            savedLocalAttempt = nil
+            if !connected {
+                let old = connection
+                connection = nil
+                old?.cancel()
+                tearDown(status: status, restartSearch: false)
+            }
+        }
         lastScannedSecret = scannedSecret
         pairingAttempt += 1
         let attempt = pairingAttempt

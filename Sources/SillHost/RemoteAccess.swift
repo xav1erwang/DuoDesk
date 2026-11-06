@@ -970,7 +970,8 @@ package final class RemoteAccess {
     private func currentInfo() -> MacInfo? {
         guard let identity else { return nil }
         return MacInfo(macID: identity.macID, name: macName, issuedAt: 0, remoteAccess: remoteAccess,
-                       remotePort: doorPort ?? remotePort, internet: internetAccess, addresses: reach == nil ? [] : addresses())
+                       remotePort: doorPort ?? remotePort, internet: internetAccess, addresses: reach == nil ? [] : addresses(),
+                       wakeTargets: WakeInterfaces.read())
     }
 
     /// Kind 18, signed, issued now: in every catalog right after kind 16.

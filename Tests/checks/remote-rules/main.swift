@@ -178,6 +178,30 @@ check("refresh: a list with nothing keepable (link-local, loopback in Release) k
 check("refresh: a list with something in it replaces the saved one (Remote Access on)",
       SavedMacs.refreshed(m1, info: { var i = info; i.addresses = [a("100.101.102.103", "vpn", "Tailscale")]; i.issuedAt = 73; return i }(),
                           fingerprint: key(1), allowLoopback: false)?.addresses.map(\.host) == ["100.101.102.103"])
+
+// A wake packet and its destination must come from the pinned, signed host information.
+let wakeTarget = WakeTarget(address: "192.168.1.20", hardwareAddress: "02:12:34:56:78:9a")
+let expectedPacket = Data(repeating: 0xff, count: 6)
+    + Data(Array(repeating: [UInt8(0x02), 0x12, 0x34, 0x56, 0x78, 0x9a], count: 16).flatMap { $0 })
+check("wake: magic packet contains the exact hardware address sixteen times", wakeTarget.packet == expectedPacket)
+check("wake: only unicast hardware addresses are accepted", ["00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff", "01:00:5e:00:00:01", "02:12:34:56:78", "02:12:34:56:78:gg"].allSatisfy {
+    WakeTarget(address: wakeTarget.address, hardwareAddress: $0).packet == nil
+})
+check("wake: only local unicast addresses are eligible", wakeTarget.isLocalUnicast(on: [192, 168, 1, 77], prefix: 24)
+      && !wakeTarget.isLocalUnicast(on: [192, 168, 2, 77], prefix: 24)
+      && !wakeTarget.isLocalUnicast(on: [192, 168, 1, 20], prefix: 24)
+      && !wakeTarget.isLocalUnicast(on: [192, 168, 1, 77], prefix: 32)
+      && !WakeTarget(address: "192.168.1.255", hardwareAddress: wakeTarget.hardwareAddress).isLocalUnicast(on: [192, 168, 1, 77], prefix: 24)
+      && !WakeTarget(address: "192.168.1.0", hardwareAddress: wakeTarget.hardwareAddress).isLocalUnicast(on: [192, 168, 1, 77], prefix: 24))
+let wakeInfo = { () -> MacInfo in var i = info; i.wakeTargets = [wakeTarget]; return i }()
+let wakeSaved = SavedMacs.refreshed(m1, info: wakeInfo, fingerprint: key(1), allowLoopback: false)
+check("wake: signed host data survives saved-Mac encoding", wakeSaved?.wakeTargets == [wakeTarget]
+      && wakeSaved.map { SavedMacs.decode(SavedMacs.encode([$0])).first?.wakeTargets == [wakeTarget] } == true)
+check("wake: another fingerprint cannot replace the saved targets",
+      SavedMacs.refreshed(m1, info: wakeInfo, fingerprint: key(2), allowLoopback: false) == nil)
+let oldHostInfo = { () -> MacInfo in var i = wakeInfo; i.wakeTargets = nil; i.issuedAt = 61; return i }()
+check("wake: an older host's missing field preserves known targets",
+      wakeSaved.flatMap { SavedMacs.refreshed($0, info: oldHostInfo, fingerprint: key(1), allowLoopback: false) }?.wakeTargets == [wakeTarget])
 // Then a pairing made over the overlay's typed path (no addresses but the typed one), refreshed by
 // this session's kind 18: the Mac's own list, the typed one kept.
 var typedOnly = savedMac(1); typedOnly.addresses = []; typedOnly.infoIssuedAt = 0

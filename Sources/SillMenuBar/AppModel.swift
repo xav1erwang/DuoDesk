@@ -62,7 +62,7 @@ final class AppModel {
 
     @ObservationIgnored private var loggedStatus: String?
     @ObservationIgnored private var napActivity: NSObjectProtocol?
-    @ObservationIgnored private var napHold = NapHold.none
+    @ObservationIgnored private var napHold = HostSleepPolicy.Hold.none
     /// Recomputes the presentation when a menu item that lasts a while runs out with nothing else
     /// changing then (the older-device item's 10 minutes).
     @ObservationIgnored private var presentationExpiry: Task<Void, Never>?
@@ -85,6 +85,7 @@ final class AppModel {
         presentation = StatusText.present(snapshot: HostStatusSnapshot(),
                                           permissions: PermissionState(screenRecording: true, accessibility: true),
                                           startupError: nil, hasCoordinator: false)
+        settings.onKeepAvailableChange = { [weak self] in self?.updateSleepActivity() }
     }
 
     static var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev" }
@@ -373,37 +374,26 @@ final class AppModel {
             print("Status: \(line)")
         }
         let snapshot = coordinator?.status.snapshot
-        holdAppNapOff(devices: snapshot?.devices.count ?? 0, remote: snapshot?.remoteDeviceCount ?? 0)
+        updateSleepActivity(snapshot: snapshot)
         scheduleExpiry()
     }
 
-    private enum NapHold { case none, connected, remote }
-
-    /// App Nap would coalesce this windowless app's timers once it is in the background, among
-    /// them the 30 ms link keepalive ticks that keep a device's Wi-Fi out of power save, and the
-    /// 2026-09-22 stutter would be back. So while a device is connected Sill holds a
-    /// latency-critical activity, which still lets the Mac sleep when idle: a device at home can
-    /// wake it (Bonjour Sleep Proxy) or walk over. A device connected from away cannot, so while
-    /// one is, the activity is `.userInitiated`, which also keeps the Mac from idle sleep (the
-    /// display may still sleep; docs/remote-access-plan.md §6.5). Switching ends one activity and
-    /// begins the other.
-    private func holdAppNapOff(devices: Int, remote: Int) {
-        let want: NapHold = remote > 0 ? .remote : (devices > 0 ? .connected : .none)
+    /// Idle sleep protection leaves display sleep and an explicit user sleep under macOS control.
+    private func updateSleepActivity(snapshot: HostStatusSnapshot? = nil) {
+        let snapshot = snapshot ?? coordinator?.status.snapshot
+        let devices = snapshot?.devices.count ?? 0
+        let remote = snapshot?.remoteDeviceCount ?? 0
+        let want = HostSleepPolicy.hold(keepAvailable: settings.keepAvailable, running: coordinator != nil,
+                                        synthetic: synthetic, devices: devices, remote: remote)
         guard want != napHold else { return }
         if let activity = napActivity {
             ProcessInfo.processInfo.endActivity(activity)
             napActivity = nil
         }
         napHold = want
-        switch want {
-        case .remote:
-            napActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical],
-                                                                reason: "Sill is serving a device connected from away")
-        case .connected:
-            napActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
-                                                                reason: "Sill is serving a connected device")
-        case .none:
-            break
+        if let options = HostSleepPolicy.options(for: want) {
+            napActivity = ProcessInfo.processInfo.beginActivity(options: options,
+                                                                reason: "DUO你电脑 keeps this Mac available for connections")
         }
     }
 
