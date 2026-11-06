@@ -37,7 +37,6 @@ struct ContentView: View {
                 ConnectScreen(client: client)
             }
         }
-        .preferredColorScheme(.dark)
         // Tells MacMenuHub which window shows this session: the iPad's menu bar shows its menus while
         // it is the app's one window.
         .background(WindowSessionObserver(client: client))
@@ -1018,8 +1017,17 @@ struct ConnectScreen: View {
                 // The laptop pose: the room above the fold, and nothing between it and the footer.
                 .frame(height: layout.roomAboveFold)
                 if layout.roomAboveFold != nil { Spacer(minLength: 0) }
-                footer(layout)
+                VStack(spacing: 6) {
+                    footer(layout)
+                    // The VisionTec wordmark, centred under the footer. Small and dim on
+                    // purpose: a printed mark, not a control.
+                    VisionTecWordmark(size: 9)
+                        .opacity(0.62)
+                        .padding(.bottom, 6)
+                        .accessibilityHidden(true)
+                }
             }
+            .background(PageBackground())
             .duoLog(posture, size: geo.size, screen: "connect screen")
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -1063,10 +1071,14 @@ struct ConnectScreen: View {
             HStack(spacing: 12) {
                 if !carded && client.pendingLink == nil {
                     Image(systemName: "laptopcomputer")
-                        .font(.system(size: 21, weight: .medium))
+                        .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Palette.text)
-                        .frame(width: 48, height: 48)
-                        .background(Palette.control, in: RoundedRectangle(cornerRadius: 14))
+                        .frame(width: 34, height: 34)
+                        .background(Palette.iconTile, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(Palette.stroke, lineWidth: 1)
+                        }
                         .accessibilityHidden(true)
                 }
                 VStack(alignment: .leading, spacing: 3) {
@@ -1138,6 +1150,7 @@ struct ConnectScreen: View {
             .accessibilityHint("打开 App Store。")
         }
 
+        VStack(spacing: 2) {
         ForEach(client.macs) { mac in
             // The kind of link, never the Wi-Fi network's name: that needs Location access, which
             // Sill does not ask for (DiscoveryPolicy.method); "Remote" for a saved Mac dialed away
@@ -1160,6 +1173,9 @@ struct ConnectScreen: View {
             .accessibilityHint(mac.rowAccessibilityHint(device: device))
             .contextMenu { menu(for: mac) }
         }
+        }
+        .padding(6)
+        .glassPanel(22)
 
         if client.showsNearbyHint {
             Text("Mac 需与这台 \(device) 连接同一 Wi-Fi 网络，或在 DUO你电脑中开启无线直连。在外使用时，请先用 Mac 上的配对码添加。")

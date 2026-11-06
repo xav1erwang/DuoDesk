@@ -105,10 +105,8 @@ struct HostSettingsPanel: View {
             foot
         }
         .padding(14)
-        .background(Self.shape.fill(Palette.bar))
-        .overlay(Self.shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
-        .shadow(color: .black.opacity(0.65), radius: 30, x: 0, y: 24)
-        .tint(Palette.accent)
+        .glassPanel(24)
+        .tint(Palette.current)
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         // VoiceOver stays inside while it is open, the escape gesture closes it, and focus starts
         // on the Mac's name.
@@ -146,72 +144,34 @@ struct HostSettingsPanel: View {
     // MARK: Header and foot (pinned)
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(client.macName.isEmpty ? "Mac" : client.macName)
-                    .font(.headline)
-                    .foregroundStyle(Palette.text)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityFocused($headerFocused)
-                if let state = client.settings.host {
-                    VStack(alignment: .leading, spacing: 1) {
-                        // Wraps rather than cutting the bitrate off at larger text sizes; each
-                        // value keeps its unit (no-break spaces), and a wrap falls after a "·".
-                        // It ends in how this device's connection reaches the Mac, the connect
-                        // screen's word; "Direct" is the old "Connected directly" line.
-                        Text(Self.readout(state.stream, route: client.route))
-                            .fixedSize(horizontal: false, vertical: true)
-                        // Its own line: beside the numbers it never fit the panel's width, and it
-                        // is what confirms the Virtual Display switch took effect.
-                        if state.stream?.onVirtualDisplay == true {
-                            Text("使用虚拟显示器")
-                        }
-                        // From afar, how, with the round trip (it needs no clock agreement between
-                        // the two devices, unlike frame age); the readout above then ends in the
-                        // bitrate. Wraps like the readout (larger text on the outer display cut it
-                        // off), after a "·" as the readout does, and never inside the route: its
-                        // spaces are no-break ones, as on the Mac's card (at xxLarge on the outer
-                        // display it read "Connected through" / "Tailscale · 48 ms").
-                        if let r = remoteRoute {
-                            Text("\(Self.remoteRouteText(r).replacingOccurrences(of: " ", with: "\u{00A0}"))\u{00A0}· \(Self.rttText(client.linkStats))")
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        // Away from home (docs/remote-bundle-plan.md §5.8): which quality this
-                        // connection's Mac runs for it, from the Mac's word. Its own line, wrapping
-                        // like the readout; the quality kept whole.
-                        if let line = AwayCopy.headerLine(state.away) {
-                            Text(line.text)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .font(.footnote.monospacedDigit())
-                    .foregroundStyle(Palette.muted)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(Self.spokenReadout(state.stream, route: client.route, remote: remoteRoute,
-                                                           rttMs: client.linkStats?.rtt?.median)
-                                        + (AwayCopy.headerLine(state.away)?.spoken ?? ""))
-                }
-            }
+        HStack(spacing: 12) {
+            Text(client.macName.isEmpty ? "Mac" : client.macName)
+                .font(.headline)
+                .foregroundStyle(Palette.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused($headerFocused)
+                // The readout is no longer drawn — the design keeps the sheet's head to
+                // the Mac's name and the close button — but it is still what VoiceOver
+                // hears, so nothing is lost for anyone not reading the screen.
+                .accessibilityLabel(Text(spokenHeader))
             Spacer(minLength: 8)
-            // A 44 pt tall tap area (the word alone is about 42×22) without moving the header: the
-            // padding and the shape sit inside the label, which is what the button hit-tests, and
-            // the layout takes them back outside.
-            Button(action: close) {
-                Text("完成")
-                    .padding(.vertical, 11)
-                    .padding(.horizontal, 4)
-                    .contentShape(Rectangle())
-            }
-            .padding(.vertical, -11)
-            .padding(.horizontal, -4)
-            .font(.body.weight(.semibold))
-            // ⌘. (and Esc where SwiftUI gets it first); Esc itself is the panel's EscapeKey.
-            .keyboardShortcut(.cancelAction)
+            PanelCloseButton(label: "关闭") { close() }
         }
         .padding(.horizontal, 4)
         .padding(.bottom, 12)
+    }
+
+    /// "MacBook Pro，画面 3024 乘以 1898 像素，目标每秒 120 帧，码率 150 兆比特每秒，Wi‑Fi…"
+    private var spokenHeader: String {
+        let name = client.macName.isEmpty ? "Mac" : client.macName
+        guard let state = client.settings.host else { return name }
+        var parts = [name,
+                     Self.spokenReadout(state.stream, route: client.route, remote: remoteRoute,
+                                        rttMs: client.linkStats?.rtt?.median)]
+        if let line = AwayCopy.headerLine(state.away) { parts.append(line.spoken) }
+        return parts.joined(separator: "，")
     }
 
     /// Disconnect, in Leave's old place of honour: the bar's last slot is Settings now.
@@ -705,7 +665,15 @@ private struct Rows<Content: View>: View {
     init(@ViewBuilder content: () -> Content) { self.content = content() }
     var body: some View {
         VStack(spacing: 0) { content }
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.control))
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Palette.group)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Palette.strokeSoft, lineWidth: 1)
+                    }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -835,7 +803,7 @@ private struct ClipboardPasteRow: View {
 /// A hairline between rows, inset like the system's.
 private struct RowDivider: View {
     var body: some View {
-        Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5).padding(.leading, 14)
+        Rectangle().fill(Palette.divider).frame(height: 0.5).padding(.leading, 14)
     }
 }
 
