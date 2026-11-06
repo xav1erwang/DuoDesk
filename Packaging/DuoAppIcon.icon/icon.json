@@ -1,0 +1,16 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.042,0.048,0.066,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [ { "image-name" : "deck.svg", "name" : "Duo deck" } ]
+    },
+    {
+      "layers" : [ { "image-name" : "screen.svg", "name" : "Mac screen" } ]
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [ "macOS" ]
+  }
+}
