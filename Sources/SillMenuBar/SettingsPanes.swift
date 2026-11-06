@@ -280,12 +280,12 @@ private struct StreamingPane: View {
                         Text(DuoQualityLabels.title(forBitrate: settings.config.bitrate)).tag(settings.config.bitrate)
                     }
                 }
-                Picker("常规画面分辨率", selection: $settings.config.captureScale) {
+                Picker("窗口分辨率", selection: $settings.config.captureScale) {
                     Text("Retina").tag(CGFloat(2))
                     Text("标准").tag(CGFloat(1))
                 }
             } footer: {
-                Footnote("设备请求的帧率不会超过此上限；实际帧率还取决于桌面更新和连接。码率以 60 FPS 为基准，120 FPS 时加倍。超清和极致需要 USB 或高速 Wi-Fi。更改后画面可能短暂停顿。Duo 原生桌面保持原生尺寸并使用硬件编码，不受常规画面分辨率选项影响。")
+                Footnote("设备请求的帧率不会超过此上限；实际帧率还取决于桌面更新和连接。码率以 60 FPS 为基准，120 FPS 时加倍。超清和极致需要 USB 或高速 Wi-Fi。更改后画面可能短暂停顿。Duo 原生桌面保持原生尺寸并使用硬件编码，不受窗口分辨率选项影响。")
             }
             // Away from home (docs/remote-bundle-plan.md §5): its own quality, which a device away
             // sets too; the menu's Quality and Resolution stay the home ones.
@@ -296,7 +296,7 @@ private struct StreamingPane: View {
                         Text(DuoQualityLabels.title(forBitrate: settings.config.awayBitrate)).tag(settings.config.awayBitrate)
                     }
                 }
-                Picker("常规画面分辨率", selection: $settings.config.awayCaptureScale) {
+                Picker("窗口分辨率", selection: $settings.config.awayCaptureScale) {
                     Text("Retina").tag(CGFloat(2))
                     Text("标准").tag(CGFloat(1))
                 }

@@ -41,6 +41,8 @@ struct MenuEntry: Equatable {
     var attention = false
     /// ⌘ plus this key.
     var key = ""
+    /// An SF Symbol ahead of the title.
+    var symbol: String?
     var action: Action = .none
     var children: [MenuEntry] = []
 
@@ -83,64 +85,13 @@ enum MenuBuilder {
         }
         menu.append(.separator)
 
-        menu.append(MenuEntry(kind: .item, title: "虚拟显示器", subtitle: p.virtualDisplayNote,
-                              checked: config.virtualDisplay, action: .setVirtualDisplay(!config.virtualDisplay)))
-        menu.append(MenuEntry(kind: .item, title: "帧率上限", children: [60, 120].map { fps in
-            MenuEntry(kind: .item, title: "最高 \(fps) FPS", checked: config.maxFPS == fps, action: .setMaxFPS(fps))
-        }))
-        var quality = QualityPreset.allCases.map { preset in
-            MenuEntry(kind: .item, title: String(localized: DuoQualityLabels.title(forBitrate: preset.rawValue)), checked: config.bitrate == preset.rawValue, action: .setBitrate(preset.rawValue))
-        }
-        if QualityPreset(rawValue: config.bitrate) == nil {
-            quality.append(MenuEntry(kind: .item, title: String(localized: DuoQualityLabels.title(forBitrate: config.bitrate)), checked: true, enabled: false))
-        }
-        // The home quality, as ever; while every connected device is away, the subtitle says which
-        // quality runs instead (the away one is set in Settings › Streaming, never here).
-        let awayName = String(localized: DuoQualityLabels.name(forBitrate: config.awayBitrate))
-        let qualityNote = p.away ? "当前远程画质：\(awayName)" : "码率以 60 FPS 为基准"
-        menu.append(MenuEntry(kind: .item, title: "画质", subtitle: qualityNote, children: quality))
-        menu.append(MenuEntry(kind: .item, title: "常规画面分辨率", subtitle: "Duo 原生桌面不受此选项影响", children: [
-            MenuEntry(kind: .item, title: "Retina", checked: config.captureScale >= 1.5, action: .setCaptureScale(2)),
-            MenuEntry(kind: .item, title: "标准", subtitle: "像素更少，编码负担更低",
-                      checked: config.captureScale < 1.5, action: .setCaptureScale(1)),
-        ]))
+        menu.append(MenuEntry(kind: .item, title: "配对 iPhone 或 iPad…", enabled: p.canPair,
+                              symbol: "qrcode", action: .showPairing))
         menu.append(.separator)
-
-        // How DUO你电脑 runs on this Mac, not the picture: devices reach it over peer-to-peer Wi-Fi too.
-        // Here as well as in Settings because it is situational (on in a café, off at home).
-        menu.append(MenuEntry(kind: .item, title: "无线直连",
-                              subtitle: "无需接入同一网络；Wi-Fi 串流可能卡顿",
-                              checked: config.directWireless, action: .setDirectWireless(!config.directWireless)))
-        // Opens the pane rather than toggling: turning it on is worth reading what it does, and the
-        // internet switch stays one deliberate step deeper, never in the menu.
-        if let note = p.remoteAccessNote {
-            menu.append(MenuEntry(kind: .item, title: "远程访问…", subtitle: note, action: .showSettingsTab(.remoteAccess)))
-        }
-        var loginNote: String?
-        if !login.available { loginNote = "从应用程序包运行时可用" }
-        else if let error = login.error { loginNote = error }
-        else if login.needsApproval { loginNote = "请在系统设置的登录项中允许 DUO你电脑" }
-        menu.append(MenuEntry(kind: .item, title: "登录时启动", subtitle: loginNote, checked: login.on,
-                              enabled: login.available, action: .toggleLaunchAtLogin))
-        menu.append(MenuEntry(kind: .item, title: "权限", children: [
-            permissions.screenRecording
-                ? MenuEntry(kind: .item, title: "屏幕录制：已允许", enabled: false)
-                : MenuEntry(kind: .item, title: "屏幕录制：未允许…", action: .allowScreenRecording),
-            permissions.accessibility
-                ? MenuEntry(kind: .item, title: "辅助功能：已允许", enabled: false)
-                : MenuEntry(kind: .item, title: "辅助功能：未允许…", action: .allowAccessibility),
-            .separator,
-            MenuEntry(kind: .item, title: "打开隐私与安全性…", action: .openPrivacy),
-        ]))
+        menu.append(MenuEntry(kind: .item, title: "设置…", key: ",", symbol: "gearshape", action: .showSettings))
+        menu.append(MenuEntry(kind: .item, title: "显示日志…", symbol: "doc.text", action: .showLog))
         menu.append(.separator)
-
-        if p.remoteAccessNote != nil {
-            menu.append(MenuEntry(kind: .item, title: "配对 iPhone 或 iPad…", enabled: p.canPair, action: .showPairing))
-        }
-        menu.append(MenuEntry(kind: .item, title: "显示日志…", action: .showLog))
-        menu.append(MenuEntry(kind: .item, title: "设置…", key: ",", action: .showSettings))
-        menu.append(.separator)
-        menu.append(MenuEntry(kind: .item, title: "退出 DUO你电脑", key: "q", action: .quit))
+        menu.append(MenuEntry(kind: .item, title: "退出 DUO你电脑", key: "q", symbol: "power", action: .quit))
         return menu
     }
 
@@ -193,31 +144,23 @@ enum MenuBuilder {
 /// Its actions are AppKit target/action, the one safe place to start what may run a modal loop
 /// (NSApp.terminate): see AppDelegate.
 @MainActor
-final class StatusItemController: NSObject, NSMenuDelegate {
+final class StatusItemController: NSObject {
     private let item: NSStatusItem
-    private let menu = NSMenu()
+    private let panel = NSPopover()
     private let model: AppModel
-    private let card: NSHostingView<LiveStatusCard>
     private var glyph: StatusGlyph.State?
-    private var menuOpen = false
-
-    private static let attentionImage: NSImage? = {
-        let config = NSImage.SymbolConfiguration(paletteColors: [.systemOrange])
-        let image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "需要关注")?
-            .withSymbolConfiguration(config)
-        image?.isTemplate = false
-        return image
-    }()
 
     init(model: AppModel) {
         self.model = model
-        card = NSHostingView(rootView: LiveStatusCard(model: model))
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
         item.autosaveName = "SillStatusItem"
-        menu.delegate = self
-        menu.autoenablesItems = false
-        item.menu = menu
+        panel.behavior = .transient
+        panel.animates = true
+        if let button = item.button {
+            button.target = self
+            button.action = #selector(togglePanel)
+        }
         show(model.presentation)
     }
 
@@ -230,59 +173,35 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         button.toolTip = p.tooltip
         button.setAccessibilityLabel(p.accessibilityLabel)
-        // A device joining while the menu is open makes the card taller.
-        if menuOpen { card.frame.size = card.fittingSize }
     }
 
-    // MARK: NSMenuDelegate
+    // MARK: The panel
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
+    @objc private func togglePanel() {
+        if panel.isShown {
+            panel.performClose(nil)
+            return
+        }
         model.permissions.refresh()
         model.loginItem.refresh()
-        rebuild()
+        showPanel()
     }
 
-    func menuWillOpen(_ menu: NSMenu) { menuOpen = true }
-    func menuDidClose(_ menu: NSMenu) { menuOpen = false }
-
-    private func rebuild() {
-        menu.removeAllItems()
-        for entry in MenuBuilder.entries(for: model) {
-            menu.addItem(makeItem(entry))
-        }
+    private func showPanel() {
+        guard let button = item.button else { return }
+        let root = StatusPanel(presentation: model.presentation,
+                               entries: MenuBuilder.entries(for: model),
+                               action: { [weak self] action in self?.perform(action) },
+                               dismiss: { [weak self] in self?.panel.performClose(nil) })
+        let host = NSHostingController(rootView: root)
+        host.sizingOptions = [.preferredContentSize]
+        panel.contentViewController = host
+        panel.contentSize = host.view.fittingSize
+        panel.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate()
     }
 
-    private func makeItem(_ e: MenuEntry) -> NSMenuItem {
-        switch e.kind {
-        case .separator:
-            return .separator()
-        case .card:
-            let cardItem = NSMenuItem()
-            card.frame = NSRect(origin: .zero, size: card.fittingSize)
-            cardItem.view = card
-            return cardItem
-        case .item:
-            let menuItem = NSMenuItem(title: e.title, action: e.action == .none ? nil : #selector(menuAction(_:)), keyEquivalent: e.key)
-            menuItem.target = self
-            menuItem.representedObject = e.action
-            menuItem.state = e.checked ? NSControl.StateValue.on : .off
-            menuItem.isEnabled = e.enabled
-            if let subtitle = e.subtitle {
-                if #available(macOS 14.4, *) { menuItem.subtitle = subtitle } else { menuItem.toolTip = subtitle }
-            }
-            if e.attention { menuItem.image = Self.attentionImage }
-            if !e.children.isEmpty {
-                let submenu = NSMenu(title: e.title)
-                submenu.autoenablesItems = false
-                for child in e.children { submenu.addItem(makeItem(child)) }
-                menuItem.submenu = submenu
-            }
-            return menuItem
-        }
-    }
-
-    @objc private func menuAction(_ sender: NSMenuItem) {
-        guard let action = sender.representedObject as? MenuEntry.Action else { return }
+    private func perform(_ action: MenuEntry.Action) {
         switch action {
         case .none: break
         case .allowScreenRecording: model.permissions.requestScreenRecording()

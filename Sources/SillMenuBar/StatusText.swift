@@ -213,7 +213,7 @@ enum StatusText {
             return ("\(connected) 已连接", "在设备上选择窗口以开始串流。")
         }
         if case .advertising(let name) = s.network {
-            return ("等待设备连接", "在 iPhone 或 iPad 上打开 DUO你电脑。此 Mac 显示为“\(name)”。")
+            return ("等待设备连接", "在 iPhone 或 iPad 的 DUO你电脑 中选择“\(name)”。")
         }
         return ("等待设备连接", "正在本地网络注册…")
     }
