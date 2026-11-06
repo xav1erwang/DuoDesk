@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The Mac screen the Duo folds around. Its gradient is the streamed desktop. -->
+  <defs>
+    <linearGradient id="screen" x1="0.05" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#1b45a8"/>
+      <stop offset="0.46" stop-color="#2f92e3"/>
+      <stop offset="1" stop-color="#84efe3"/>
+    </linearGradient>
+    <clipPath id="screenClip">
+      <rect x="168" y="128" width="688" height="360" rx="92"/>
+    </clipPath>
+    <!-- The VisionTec V: a pane of glass over the screen, lit at its top-left. -->
+    <linearGradient id="vGlass" x1="0.1" y1="0.02" x2="0.7" y2="0.95">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.86"/>
+      <stop offset="0.42" stop-color="#f2fcff" stop-opacity="0.58"/>
+      <stop offset="1" stop-color="#8fe4df" stop-opacity="0.34"/>
+    </linearGradient>
+  </defs>
+  <rect x="168" y="128" width="688" height="360" rx="92" fill="url(#screen)"/>
+  <g clip-path="url(#screenClip)">
+    <!-- Montserrat Black "V" (VisionTec wordmark spec: Montserrat 900, tracked), outlined.
+         Cap height 210 on the 1024 grid, centred on the screen. -->
+    <g transform="translate(394.1 203.0) scale(0.2100)">
+      <path d="M422.9 1000.0 L0.0 0.0 L362.9 0.0 L707.1 844.3 L491.4 844.3 L845.7 0.0 L1177.1 0.0 L754.3 1000.0 Z"
+            fill="url(#vGlass)"/>
+    </g>
+  </g>
+</svg>

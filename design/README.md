@@ -20,6 +20,37 @@
   tile. The result is cached in `.build/icon`. A layered
   `Packaging/AppIcon.icon` made in Icon Composer from the SVG's four groups
   replaces the generated one as soon as it exists.
+
+- `Packaging/DuoAppIcon.icon` — the Duo Mac icon, a layered Icon Composer
+  document (macOS 26/27's format). Two layers: `Assets/screen.svg` is the Mac
+  screen the Duo folds around, filled with the blue-teal gradient the app uses
+  for streamed video; `Assets/deck.svg` is the lower half, the dark surface you
+  type and touch. `icon.json` stacks deck then screen (bottom to top) over a
+  near-black `automatic-gradient` background. Layers are unmasked squares on
+  the 1024 grid — macOS masks, lights and refracts them itself, so the artwork
+  carries no baked corners, specular or shadow.
+
+  The VisionTec "V" sits centred on the screen as a watermark: Montserrat Black
+  (the brand's wordmark font), outlined, cap height 210 on the grid, filled with
+  a translucent glass gradient lit at its top-left so the screen shows through.
+  VisionTec's wordmark spec is in `VisionTec 品牌资源/VisionTec 文字 Logo
+  设计规范.md` (in the VisionLab repo): Montserrat 900, uppercase, 0.18em
+  tracking. Do not redraw the letter — re-outline it from the font.
+
+  `Scripts/build-duodesk-mac.sh` compiles it with `actool` into `Assets.car`
+  plus `DuoAppIcon.icns` and declares both `CFBundleIconName` and
+  `CFBundleIconFile`. Icon Composer's own CLI renders any appearance or size
+  without building the app:
+
+  ```sh
+  ICT='/Applications/Xcode.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool'
+  "$ICT" Packaging/DuoAppIcon.icon --export-image --output-file /tmp/icon.png \
+      --platform macOS --rendition Default --width 1024 --height 1024 --scale 1 --design-generation 27
+  ```
+
+  `--rendition` takes `Default`, `Dark`, `ClearLight`, `ClearDark`,
+  `TintedLight`, `TintedDark` or `Mono`; `--design-generation 27` renders in the
+  current macOS 27 style (`26` shows how macOS 26 drew it).
 - `DMGBackground.svg` — the window of Sill.dmg, the Mac download: 660 x 400
   points of white, an arrow from where Sill.app sits (170, 180) to
   Applications (490, 180) in the app icon's greys, and "To install Sill, drag

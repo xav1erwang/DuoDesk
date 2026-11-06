@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The Duo's lower half: the surface you type on and touch. -->
+  <defs>
+    <linearGradient id="deck" x1="0.05" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#39404f"/>
+      <stop offset="1" stop-color="#151a24"/>
+    </linearGradient>
+  </defs>
+  <rect x="168" y="500" width="688" height="396" rx="92" fill="url(#deck)"/>
+  <rect x="236" y="560" width="552" height="278" rx="44" fill="#ffffff" fill-opacity="0.10"/>
+</svg>
