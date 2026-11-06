@@ -12,9 +12,21 @@ final class Results: @unchecked Sendable {
     var first = Double.infinity
     var last = 0.0
     var start = 0.0
-    let duration = 30.0
+    let duration: Double
+    init(duration: Double) { self.duration = duration }
 }
-let results = Results()
+let arguments = CommandLine.arguments
+func integerOption(_ flag: String, default fallback: Int, allowed: ClosedRange<Int>) -> Int {
+    guard let index = arguments.firstIndex(of: flag) else { return fallback }
+    guard index + 1 < arguments.count, let value = Int(arguments[index + 1]), allowed.contains(value) else {
+        fputs("Invalid \(flag)\n", stderr)
+        exit(2)
+    }
+    return value
+}
+let targetFPS = integerOption("--fps", default: 120, allowed: 1...240)
+let seconds = integerOption("--seconds", default: 30, allowed: 1...120)
+let results = Results(duration: Double(seconds))
 let native = DuoDesktopResolution(width: 2007, height: 1427)
 let decoder = HardwareHEVCDecoder(onFormat: { size, _ in
     print("Codec canvas verified: \(size)")
@@ -32,7 +44,7 @@ let decoder = HardwareHEVCDecoder(onFormat: { size, _ in
     results.lock.lock(); results.failures.append(message); results.lock.unlock()
 })
 decoder.require(native)
-let encoder = try HEVCEncoder(width: native.encodedWidth, height: native.encodedHeight, fps: 120,
+let encoder = try HEVCEncoder(width: native.encodedWidth, height: native.encodedHeight, fps: targetFPS,
                               bitrate: 20_000_000, prioritizeSpeed: true, quiet: true)
 encoder.onEncoded = { data, key, ps in
     if let ps { decoder.apply(ps) }
@@ -62,7 +74,7 @@ let images: [CVPixelBuffer] = try (0..<3).map { index in
 results.start = ProcessInfo.processInfo.systemUptime
 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "duodesk.codec-feed", qos: .userInteractive))
 var sent: Int64 = 0
-timer.schedule(deadline: .now(), repeating: .nanoseconds(1_000_000_000 / 120), leeway: .microseconds(100))
+timer.schedule(deadline: .now(), repeating: .nanoseconds(1_000_000_000 / targetFPS), leeway: .microseconds(100))
 timer.setEventHandler {
     if ProcessInfo.processInfo.systemUptime - results.start >= results.duration + 2 {
         timer.cancel()
@@ -72,9 +84,10 @@ timer.setEventHandler {
             let mean = sorted.isEmpty ? -1 : sorted.reduce(0, +) / Double(sorted.count)
             let report: [String: Any] = ["width": native.encodedWidth, "height": native.encodedHeight,
                 "durationSeconds": results.duration, "decodedFrames": results.decoded, "decodedFPS": fps,
+                "targetFPS": targetFPS,
                 "encodeMeanMs": mean, "encodeP95Ms": sorted.isEmpty ? -1 : sorted[Int(Double(sorted.count - 1) * 0.95)],
                 "failures": results.failures, "hardwareRequired": true]
-            let passed = results.failures.isEmpty && fps >= 119.5 && mean >= 0 && mean < 1000.0 / 120
+            let passed = results.failures.isEmpty && fps >= Double(targetFPS) - 0.5 && mean >= 0 && mean < 1000.0 / Double(targetFPS)
             results.lock.unlock()
             print(String(data: try! JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), encoding: .utf8)!)
             decoder.clear()
@@ -83,7 +96,7 @@ timer.setEventHandler {
         }
         return
     }
-    encoder.encode(images[Int(sent % 3)], pts: CMTime(value: sent, timescale: 120))
+    encoder.encode(images[Int(sent % 3)], pts: CMTime(value: sent, timescale: CMTimeScale(targetFPS)))
     sent += 1
 }
 timer.resume()

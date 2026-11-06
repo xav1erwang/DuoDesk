@@ -1005,6 +1005,15 @@ final class StreamClient: ObservableObject {
     }
     private var networkLife = BrowserLife()
     private var nearbyLife = BrowserLife()
+    private struct ResolvedSavedService {
+        let name: String
+        let interfaceIndex: UInt32
+        let expiresAt: TimeInterval
+    }
+    private var savedServiceResolvers: [String: SavedServiceResolver] = [:]
+    private var resolvedSavedServices: [String: ResolvedSavedService] = [:]
+    private var nextSavedServiceLookup: [String: TimeInterval] = [:]
+    private var savedServiceCheck: DispatchWorkItem?
     /// `startBrowsing` has run: this client looks for Macs (the harness's mock clients never do).
     private var browsing = false
     /// The app is not in the background (UIApplication's notifications): the automatic reconnect dials
@@ -1471,7 +1480,12 @@ final class StreamClient: ObservableObject {
         browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
             DispatchQueue.main.async {
                 guard let self, let browser, self[keyPath: key] === browser else { return }
+                #if DEBUG
+                let hidden = UserDefaults.standard.string(forKey: "SillHideBrowseName")
+                self[keyPath: self.lifeKey(kind)].fresh = results.filter { Self.serviceName(of: $0) != hidden }
+                #else
                 self[keyPath: self.lifeKey(kind)].fresh = Array(results)
+                #endif
                 self.showResults(kind)
             }
         }
@@ -1670,6 +1684,59 @@ final class StreamClient: ObservableObject {
         moveHomeIfListed()
     }
 
+    /// A missed PTR browse result can still resolve by the last paired service name. Its TXT tag
+    /// must match the saved recognition key; the subsequent session still pins the Mac's TLS key.
+    private func refreshSavedServices(listedIDs: Set<String>, now: TimeInterval) {
+        let eligible = savedMacs.filter { $0.revoked != true && $0.newKey != true && $0.recognitionKeyData != nil
+            && !($0.bonjourName ?? "").isEmpty && !listedIDs.contains($0.macID) }
+        let ids = Set(eligible.map(\.macID))
+        for id in Array(savedServiceResolvers.keys) where !ids.contains(id) || !appInForeground || connected || localNetworkDenied {
+            savedServiceResolvers.removeValue(forKey: id)?.cancel()
+        }
+        resolvedSavedServices = resolvedSavedServices.filter { ids.contains($0.key) && $0.value.expiresAt > now }
+        nextSavedServiceLookup = nextSavedServiceLookup.filter { ids.contains($0.key) }
+        savedServiceCheck?.cancel()
+        savedServiceCheck = nil
+        guard browsing, appInForeground, !connected, !localNetworkDenied else { return }
+        for mac in eligible where savedServiceResolvers[mac.macID] == nil && now >= (nextSavedServiceLookup[mac.macID] ?? 0) {
+            guard let name = mac.bonjourName else { continue }
+            nextSavedServiceLookup[mac.macID] = now + 15
+            let resolver = SavedServiceResolver()
+            savedServiceResolvers[mac.macID] = resolver
+            resolver.start(name: name, type: Self.serviceType) { [weak self, weak resolver] answer in
+                DispatchQueue.main.async {
+                    guard let self, let resolver, self.savedServiceResolvers[mac.macID] === resolver else { return }
+                    self.savedServiceResolvers.removeValue(forKey: mac.macID)
+                    if let answer, let current = self.savedMac(mac.macID), current.bonjourName == name,
+                       current.revoked != true, current.newKey != true,
+                       let key = current.recognitionKeyData, RecognitionTag.matches(answer.tag, recognitionKey: key) {
+                        self.resolvedSavedServices[mac.macID] = ResolvedSavedService(name: name, interfaceIndex: answer.interfaceIndex,
+                                                                                   expiresAt: ProcessInfo.processInfo.systemUptime + 45)
+                        #if DEBUG
+                        print("saved discovery: verified local service for \(name) on interface \(answer.interfaceIndex)")
+                        #endif
+                    }
+                    self.discoveryChanged()
+                }
+            }
+        }
+        let next = (nextSavedServiceLookup.values.filter { $0 > now } + resolvedSavedServices.values.map(\.expiresAt)).min()
+        if let next {
+            let work = DispatchWorkItem { [weak self] in self?.discoveryChanged() }
+            savedServiceCheck = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0.1, next - now), execute: work)
+        }
+    }
+
+    func clearSavedServices() {
+        savedServiceResolvers.values.forEach { $0.cancel() }
+        savedServiceResolvers.removeAll()
+        resolvedSavedServices.removeAll()
+        nextSavedServiceLookup.removeAll()
+        savedServiceCheck?.cancel()
+        savedServiceCheck = nil
+    }
+
     /// The rows, each with the endpoint of the browser that listed it: a network row always the
     /// network browser's, so at home a Mac is never reached over AWDL. Each row's word comes from
     /// the interfaces that same browser saw its Mac on (DiscoveryPolicy.method), and so does the
@@ -1759,6 +1826,23 @@ final class StreamClient: ObservableObject {
                             wired: wired.flatMap { name in seen.interfaces.first { $0.name == name } },
                             wifi: wifi.flatMap { name in seen.interfaces.first { $0.name == name } },
                             door: door, homeWord: word)
+        }
+        let listedIDs = Set(next.compactMap(\.macID))
+        refreshSavedServices(listedIDs: listedIDs, now: now)
+        for (id, service) in resolvedSavedServices where !listedIDs.contains(id) {
+            guard let saved = savedMac(id), saved.bonjourName == service.name else { continue }
+            let interface = pathMonitor?.currentPath.availableInterfaces.first { if_nametoindex($0.name) == service.interfaceIndex }
+            let method = interface.flatMap { DiscoveryPolicy.method(direct: false, interfaces: [Self.policyInterface($0)]) }
+            let endpoint = NWEndpoint.service(name: service.name, type: Self.serviceType, domain: "local.", interface: interface)
+            let found = FoundMac(name: SavedMacs.displayNames(savedMacs)[id] ?? saved.name, endpoint: endpoint,
+                                 route: .network, macID: id, carriesTag: true, method: method,
+                                 wired: method == .wired ? interface : nil, wifi: method == .wifi ? interface : nil,
+                                 door: .pairingRequired)
+            if let index = next.firstIndex(where: { $0.name == service.name && $0.macID == nil && !$0.carriesTag }) {
+                next[index] = found
+            } else if !next.contains(where: { $0.name == service.name }) {
+                next.append(found)
+            }
         }
         for mac in next where mac.route == .network && paths.wifi[mac.name] != nil { lastWifiRow[mac.name] = mac }
         // The moment a saved Mac's network row goes is what holds back its remote dial; the last

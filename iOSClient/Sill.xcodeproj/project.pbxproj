@@ -40,6 +40,7 @@
 		A1000001000000000000A201 /* SillLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001000000000000F201 /* SillLinks.swift */; };
 		A1000001000000000000A01D /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001000000000000F01D /* DeviceIdentity.swift */; };
 		A1000001000000000000A016 /* SavedMacs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001000000000000F016 /* SavedMacs.swift */; };
+		D0000001000000000000D811 /* SavedServiceResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0000001000000000000F811 /* SavedServiceResolver.swift */; };
 		A1000001000000000000A017 /* RemoteDialPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001000000000000F017 /* RemoteDialPolicy.swift */; };
 		A1000001000000000000A01E /* GoodbyePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001000000000000F01E /* GoodbyePolicy.swift */; };
 		A1000001000000000000A018 /* RemoteConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000001000000000000F018 /* RemoteConnector.swift */; };
@@ -106,6 +107,7 @@
 		A1000001000000000000F201 /* SillLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SillLinks.swift; sourceTree = "<group>"; };
 		A1000001000000000000F01D /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		A1000001000000000000F016 /* SavedMacs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedMacs.swift; sourceTree = "<group>"; };
+		D0000001000000000000F811 /* SavedServiceResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedServiceResolver.swift; sourceTree = "<group>"; };
 		A1000001000000000000F017 /* RemoteDialPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDialPolicy.swift; sourceTree = "<group>"; };
 		A1000001000000000000F01E /* GoodbyePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoodbyePolicy.swift; sourceTree = "<group>"; };
 		A1000001000000000000F018 /* RemoteConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnector.swift; sourceTree = "<group>"; };
@@ -204,6 +206,7 @@
 				A1000001000000000000F017 /* RemoteDialPolicy.swift */,
 				A1000001000000000000F01E /* GoodbyePolicy.swift */,
 				A1000001000000000000F016 /* SavedMacs.swift */,
+				D0000001000000000000F811 /* SavedServiceResolver.swift */,
 				A1000001000000000000F01D /* DeviceIdentity.swift */,
 				A1000001000000000000F040 /* MacMenuState.swift */,
 				A1000001000000000000F041 /* MacMenuElements.swift */,
@@ -362,6 +365,7 @@
 				A1000001000000000000A017 /* RemoteDialPolicy.swift in Sources */,
 				A1000001000000000000A01E /* GoodbyePolicy.swift in Sources */,
 				A1000001000000000000A016 /* SavedMacs.swift in Sources */,
+				D0000001000000000000D811 /* SavedServiceResolver.swift in Sources */,
 				A1000001000000000000A01D /* DeviceIdentity.swift in Sources */,
 				A1000001000000000000A040 /* MacMenuState.swift in Sources */,
 				A1000001000000000000A041 /* MacMenuElements.swift in Sources */,

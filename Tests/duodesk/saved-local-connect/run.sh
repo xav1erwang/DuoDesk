@@ -94,6 +94,14 @@ sleep 6
 ! rg -q 'saved lookup: local service did not connect' "$scratch/local.log"
 stop_client
 
+# Hide the host from both browsers while leaving its service resolvable. The saved-service query
+# must identify it from its TXT tag, restore a local row, and connect using the existing pin.
+saved_name="$(printf '%s' "$saved" | jq -r '.[0].name')"
+start_client "$scratch/missed-browse.log" -SillHideBrowseName "Sill test $host_pid" -SillTapRow "$saved_name"
+wait_for 'saved discovery: verified local service' "$scratch/missed-browse.log"
+wait_for 'home: connected to .* a saved Mac' "$scratch/missed-browse.log"
+stop_client
+
 missing="$(printf '%s' "$saved" | jq -c 'map(.bonjourName = "DuoDesk missing service")')"
 start_client "$scratch/fallback.log" -Sill.savedMacs "$missing" -SillDialSaved local
 wait_for 'remote: connected to' "$scratch/fallback.log"
@@ -118,6 +126,10 @@ SILL_TEST_REMOTE_DIR="$scratch/other" SILL_TEST_LOOPBACK=1 SILL_TEST_NO_ROUTER=1
 other_pid=$!
 wait_for 'Home door QUIC: listening' "$scratch/other.log"
 other="$(printf '%s' "$saved" | jq -c --arg name "Sill test $other_pid" 'map(.bonjourName = $name)')"
+start_client "$scratch/forged-discovery.log" -Sill.savedMacs "$other" -SillHideBrowseName "Sill test $host_pid"
+sleep 7
+! rg -q "saved discovery: verified local service for Sill test $other_pid" "$scratch/forged-discovery.log"
+stop_client
 start_client "$scratch/wrong-key.log" -Sill.savedMacs "$other" -SillDialSaved local
 wait_for 'remote: connected to' "$scratch/wrong-key.log"
 rg -q 'pin refused the key' "$scratch/wrong-key.log"

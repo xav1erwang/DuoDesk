@@ -153,6 +153,7 @@ package final class StreamCoordinator {
     private var prioritizeSpeed: Bool { config.prioritizeSpeed }
 
     let server: StreamServer
+    private let remoteDisplayWake = RemoteDisplayWake()
     let catalog = WindowCatalog()
     let capture = WindowCapture()
     /// `--synthetic`: the Desktop source streams a test pattern instead of the screen.
@@ -499,6 +500,7 @@ package final class StreamCoordinator {
                 // A paired key's session, at either door: the pane's "last connected", and over the
                 // cable the iPhone or iPad the key runs on (learned once).
                 if let fp = route.fingerprint, route.pairedName != nil {
+                    if !self.synthetic { self.remoteDisplayWake.declareActivity() }
                     let words = route.label ?? Self.homeRouteWords(route, link: link)
                     self.remote?.sessionStarted(fingerprint: fp, route: words, cableDevice: route.cableDevice)
                 }

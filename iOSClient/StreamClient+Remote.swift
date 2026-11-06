@@ -257,6 +257,8 @@ extension StreamClient {
             DispatchQueue.main.async {
                 guard let self, signature != self.pathSignature else { return }
                 self.pathSignature = signature
+                self.clearSavedServices()
+                self.discoveryChanged()
                 if self.reconnect != nil { self.reconnectIfListed() }
             }
         }
