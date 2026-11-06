@@ -1289,11 +1289,6 @@ struct ConnectScreen: View {
     /// Connection guidance and, when configured for a release, this project's public links.
     private func footer(_ layout: ConnectLayout) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("在 Mac 上运行 DUO你电脑服务端，再配对这台 iPhone Duo。")
-                .foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("支持局域网与公网直连")
-                .foregroundStyle(Palette.muted)
             if let download = SillLinks.download {
                 footerLink("下载 Mac 服务端", to: download)
             }

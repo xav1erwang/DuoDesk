@@ -29,8 +29,8 @@ struct MacTheme {
     var current: Color { dark ? Color(hex: 0x2BD6FF) : Color(hex: 0x0A6488) }
     var stroke: Color { dark ? Color(hex: 0x69B4FF, opacity: 0.24) : Color(hex: 0x0B63C6, opacity: 0.16) }
     var strokeSoft: Color { dark ? Color(hex: 0x69B4FF, opacity: 0.14) : Color(hex: 0x0B63C6, opacity: 0.10) }
-    var panelTop: Color { dark ? Color(hex: 0x0E2E52, opacity: 0.52) : Color.white.opacity(0.72) }
-    var panelBottom: Color { dark ? Color(hex: 0x020A16, opacity: 0.38) : Color(hex: 0xF5F9FD, opacity: 0.58) }
+    var panelTop: Color { dark ? Color(hex: 0x0E2E52, opacity: 0.78) : Color.white.opacity(0.72) }
+    var panelBottom: Color { dark ? Color(hex: 0x020A16, opacity: 0.66) : Color(hex: 0xF5F9FD, opacity: 0.58) }
 }
 
 /// The deep-blue surface behind a Mac window, or its paper-white counterpart.
@@ -70,7 +70,7 @@ struct MacGlass: ViewModifier {
                                              startPoint: .topLeading, endPoint: .bottomTrailing))
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(colors: theme.dark
-                            ? [Color.white.opacity(0.10), .clear, Color.white.opacity(0.04)]
+                            ? [Color.white.opacity(0.05), .clear, Color.white.opacity(0.02)]
                             : [Color.white.opacity(0.55), .clear, Color.white.opacity(0.18)],
                             startPoint: .topLeading, endPoint: .bottomTrailing))
                     RoundedRectangle(cornerRadius: radius, style: .continuous)

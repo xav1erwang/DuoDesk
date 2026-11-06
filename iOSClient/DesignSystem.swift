@@ -145,15 +145,15 @@ struct GlassBackground: ViewModifier {
 
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(colors: dark
-                            ? [Color(hex: 0x0E2E52, opacity: 0.52),
-                               Color(hex: 0x020A16, opacity: 0.38)]
+                            ? [Color(hex: 0x0E2E52, opacity: 0.78),
+                               Color(hex: 0x020A16, opacity: 0.66)]
                             : [Color.white.opacity(0.72),
                                Color(hex: 0xF5F9FD, opacity: 0.58)],
                             startPoint: .topLeading, endPoint: .bottomTrailing))
 
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(colors: dark
-                            ? [Color.white.opacity(0.10), .clear, Color.white.opacity(0.04)]
+                            ? [Color.white.opacity(0.05), .clear, Color.white.opacity(0.02)]
                             : [Color.white.opacity(0.55), .clear, Color.white.opacity(0.18)],
                             startPoint: .topLeading, endPoint: .bottomTrailing))
 
