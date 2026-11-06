@@ -36,19 +36,19 @@ struct ConnectLayout {
     /// field has the keyboard.
     var compactPortrait: Bool { size.height > size.width && size.width < 600 }
 
-    /// Landscape (the Duo's inner display, or a phone on its side): Macs are cards in a grid and
-    /// the toolbar is a strip down the trailing edge (design/deep-blue-ui/connect-redesign.html).
+    /// Landscape (the Duo's inner display, or a phone on its side): Macs are cards in a
+    /// centred grid. Upright keeps the list.
     var landscape: Bool { size.width > size.height }
-    /// How many cards fit across. Two in landscape; one upright.
-    var cardColumns: Int { landscape ? (size.width >= 1180 ? 3 : 2) : 1 }
-    /// The trailing toolbar strip needs room for the cards beside it.
-    var usesToolbarStrip: Bool { landscape && size.width >= 640 }
-    /// The grid's width: the column's, widened in landscape to the screen less the toolbar
-    /// strip and the same margins, so the cards fill the surface instead of a 380 pt strip.
-    var gridWidth: CGFloat {
-        guard landscape else { return columnWidth }
-        let strip: CGFloat = usesToolbarStrip ? 58 : 0
-        return max(columnWidth, size.width - strip - columnX - 24)
+    /// Three cards across, four on a wide screen: the cards stay near 200 pt instead of
+    /// stretching to whatever the display gives.
+    var cardColumns: Int { landscape ? (size.width >= 1100 ? 4 : 3) : 1 }
+    /// The grid's width: centred, at most 900 pt, so the field of cards does not spread to
+    /// the screen's edges.
+    var gridWidth: CGFloat { min(size.width - 48, 900) }
+    /// Where a centred column starts. Landscape centres the grid; upright keeps the
+    /// design's 380 pt column where it always sat.
+    var contentLeading: CGFloat {
+        landscape ? max(12, (size.width - gridWidth) / 2) : columnX
     }
 }
 

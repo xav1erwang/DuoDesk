@@ -16,12 +16,30 @@ struct AppSettingsView: View {
     @AppStorage(StreamClient.gesturesKey) private var gesturesOn = true
     @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
     @AppStorage(StreamClient.clipboardKey) private var clipboardOn = true
+    /// What this device asks the Mac for; the Mac's own cap still applies.
+    @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     group("连接") {
+                        HStack {
+                            Text("首选帧率")
+                                .foregroundStyle(Palette.text)
+                            Spacer(minLength: 8)
+                            Picker("首选帧率", selection: $preferredFPS) {
+                                Text("60").tag(60)
+                                Text("120").tag(120)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .frame(width: 132)
+                        }
+                        .font(.system(size: 15))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        divider
                         row {
                             Toggle("三指手势", isOn: $gesturesOn)
                         }
@@ -34,7 +52,7 @@ struct AppSettingsView: View {
                             Toggle("共享剪贴板", isOn: $clipboardOn)
                         }
                         divider
-                        note("手势与画面选项跟随这台设备，换一台 Mac 也生效。")
+                        note("这些偏好跟随这台设备，换一台 Mac 也生效。画质与分辨率属于 Mac，在串流页的设置面板里调。")
                     }
 
                     if SillLinks.download != nil {
