@@ -33,13 +33,13 @@ cd DuoDesk
 bash Scripts/build-duodesk-mac.sh
 ```
 
-Mac 应用生成在 `Build/DUO你电脑 Mac.app`，将它移入「应用程序」并打开。
+Mac 应用生成在 `Build/DUO你电脑.app`，将它移入「应用程序」并打开。
 
 在 Xcode 中打开 `iOSClient/Sill.xcodeproj`，选择 `Sill` Scheme，在「Signing & Capabilities」中选择自己的 Team 并设置唯一的 Bundle Identifier。用 USB 连接并信任 Duo，按提示开启开发者模式，选择该设备后运行，即可安装手机端。
 
 ## 运行与配对
 
-1. 在 Mac 上打开「DUO你电脑 Mac」，按提示允许屏幕录制、辅助功能和本地网络访问，并保持应用运行。
+1. 在 Mac 上打开「DUO你电脑」，按提示允许屏幕录制、辅助功能和本地网络访问，并保持应用运行。
 2. 将 Duo 和 Mac 接入同一局域网，在 Duo 上打开「DUO你电脑」，允许本地网络访问，然后在列表中选择你的 Mac。
 3. 首次配对时，在 Duo 上扫描 Mac 显示的二维码；也可以选择「输入配对码」，输入 Mac 上显示的数字并点击「配对」。扫码时按提示允许相机访问。
 4. 配对成功后，选择要使用的显示器，例如「主显示器」。桌面显示在 Duo 上屏，下屏可切换键盘、触控板或组合模式。以后连接同一台 Mac 无需重复配对。

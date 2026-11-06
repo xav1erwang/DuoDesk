@@ -21,7 +21,7 @@ result = {'passed': False}
 try:
     rows = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True).splitlines()
     for row in rows:
-        if row.strip().endswith('/Applications/DUO你电脑 Mac.app/Contents/MacOS/DuoDeskHost'):
+        if row.strip().endswith('/Applications/DUO你电脑.app/Contents/MacOS/DuoDeskHost'):
             pid = int(row.split(None, 1)[0]); os.kill(pid, signal.SIGTERM); installed_stopped = True
             for _ in range(80):
                 try: os.kill(pid, 0)
@@ -96,7 +96,7 @@ finally:
             except subprocess.TimeoutExpired: process.kill(); process.wait()
     result['ownedProcessesExited'] = all(p.poll() is not None for p in processes)
     if installed_stopped:
-        subprocess.run(['open', '-g', '/Applications/DUO你电脑 Mac.app'], check=True)
+        subprocess.run(['open', '-g', '/Applications/DUO你电脑.app'], check=True)
     result['installedHostRelaunched'] = installed_stopped
     (out / 'result.json').write_text(json.dumps(result, indent=2))
 print('PASS: real screen → hardware host encoder → network → production iOS decoder/presenter → real fixture input')

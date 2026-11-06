@@ -9,7 +9,7 @@ Mac 应用要求 macOS 27 或更新版本，iOS 客户端要求 iOS / iPadOS 27.
 ## macOS
 
 1. 在本仓库 [Releases](https://github.com/xav1erwang/DuoDesk/releases) 下载 `DUO-macOS-universal.dmg`。
-2. 打开磁盘映像，将「DUO你电脑 Mac」拖入「应用程序」，再从「应用程序」启动。
+2. 打开磁盘映像，将「DUO你电脑」拖入「应用程序」，再从「应用程序」启动。
 3. 当前免费账号发布包使用 ad-hoc 签名。若系统阻止启动，先尝试打开一次，再进入「系统设置 → 隐私与安全性」，为这一个应用选择「仍要打开」。系统提示的具体措辞取决于 macOS 版本。[Apple 打开受阻应用说明](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac)
 4. 按应用指引授予屏幕录制、辅助功能和本地网络权限，必要时退出并重新打开应用。
 

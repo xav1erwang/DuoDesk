@@ -405,7 +405,7 @@ private struct PermissionsPane: View {
                     permissions.requestAccessibility()
                 }
             } footer: {
-                Footnote("请在系统设置中为 DUO你电脑 Mac 开启这两项权限。")
+                Footnote("请在系统设置中为 DUO你电脑 开启这两项权限。")
             }
             if permissions.relaunchSuggested, !permissions.screenRecording {
                 Section {

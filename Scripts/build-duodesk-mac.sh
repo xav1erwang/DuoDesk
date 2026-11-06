@@ -53,8 +53,8 @@ if [ "${#binaries[@]}" = 1 ]; then
 else
     lipo -create "${binaries[@]}" -output "$work/DuoDeskHost"
 fi
-app="$output/DUO你电脑 Mac.app"
-stage="$work/DUO你电脑 Mac.app"
+app="$output/DUO你电脑.app"
+stage="$work/DUO你电脑.app"
 mkdir -p "$stage/Contents/MacOS" "$stage/Contents/Resources"
 # Record the current SDK so native controls use the current macOS appearance.
 minos="$(xcrun vtool -show-build "$work/DuoDeskHost" | awk '$1 == "minos" && !seen {print $2; seen=1}')"
@@ -100,8 +100,8 @@ else
 fi
 codesign --verify --deep --strict "$stage"
 if [ -e "$app" ]; then
-    backup="$output/DUO你电脑 Mac.previous.app"
-    if [ -e "$backup" ]; then mv "$backup" "$output/DUO你电脑 Mac.previous.$(date +%s).app"; fi
+    backup="$output/DUO你电脑.previous.app"
+    if [ -e "$backup" ]; then mv "$backup" "$output/DUO你电脑.previous.$(date +%s).app"; fi
     mv "$app" "$backup"
 fi
 mv "$stage" "$app"
