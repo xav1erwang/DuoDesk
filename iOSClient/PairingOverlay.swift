@@ -61,7 +61,8 @@ struct PairingOverlay: View {
                     }
                 }
                 .frame(width: width, alignment: .leading)
-                .padding(.vertical, 16)
+                .padding(16)
+                .glassPanel(24)
                 // The Duo half-folded: above the fold only, or, in the book pose, on the leading
                 // page; elsewhere centred, or at the top while the code is typed.
                 .frame(maxWidth: layout.leadingPage ?? .infinity, maxHeight: layout.topRoom ?? geo.size.height,

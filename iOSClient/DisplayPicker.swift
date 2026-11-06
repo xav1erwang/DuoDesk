@@ -23,7 +23,6 @@ struct DisplayPicker: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .interactiveDismissDisabled(client.awaitingDisplaySelection)
         .presentationDetents([.medium, .large])
     }

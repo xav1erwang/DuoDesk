@@ -4,34 +4,6 @@ import Combine
 import AVFAudio
 import StreamProtocol
 
-// MARK: - Palette
-
-extension Color {
-    /// 0xRRGGBB, the way the design boards write colours.
-    init(hex: UInt32, opacity: Double = 1) {
-        self.init(.sRGB,
-                  red: Double((hex >> 16) & 0xFF) / 255,
-                  green: Double((hex >> 8) & 0xFF) / 255,
-                  blue: Double(hex & 0xFF) / 255,
-                  opacity: opacity)
-    }
-}
-
-enum Palette {
-    static let bar = Color(hex: 0x16181C)          // top bar and drawer background
-    static let control = Color(hex: 0x23262C)      // bar buttons, search field, selected row
-    static let controlOpen = Color(hex: 0x2C3550)  // a bar button whose thing is showing
-    static let accent = Color(hex: 0x9BB7FF)
-    static let text = Color(hex: 0xEEF0F3)
-    static let barLabel = Color(hex: 0xC4C9D1)     // the 11pt labels under the bar icons
-    static let muted = Color(hex: 0xA4ABB5)        // section headers, window counts, placeholder
-    static let panel = Color(hex: 0x1F2126)        // the stream panel behind the video
-    static let trackpad = Color(hex: 0x101215)     // the portrait trackpad's well
-    static let thumbBody = Color(hex: 0x26282D)    // thumbnail placeholder
-    static let thumbTitleBar = Color(hex: 0x34373D)
-    static let iconFallback = Color(hex: 0x3A3D44) // two-letter app badge
-}
-
 // MARK: - Layout selection
 
 /// Which layout a screen gets, decided from its size in points alone: no device check, no idiom,
@@ -1418,7 +1390,14 @@ private struct TopBar: View {
         .frame(height: metrics.height)
         .padding(.horizontal, metrics.padding)
         // The bar's colour runs to the screen edge; its contents stay inside the safe area.
-        .background(Palette.bar.ignoresSafeArea(edges: .top))
+        .background {
+            LinearGradient(colors: [Palette.barTop, Palette.barBottom],
+                           startPoint: .top, endPoint: .bottom)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Palette.strokeSoft).frame(height: 1)
+                }
+                .ignoresSafeArea(edges: .top)
+        }
     }
 
     private func button(open: Bool, symbol: String, label: String, accessibilityLabel: String,
@@ -1428,10 +1407,10 @@ private struct TopBar: View {
             VStack(spacing: metrics.buttonSpacing) {
                 Image(systemName: symbol)
                     .font(.system(size: 22))
-                    .foregroundStyle(open ? Palette.accent : Palette.text)
+                    .foregroundStyle(open ? Palette.current : Palette.text)
                 Text(label)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(open ? Palette.accent : Palette.barLabel)
+                    .foregroundStyle(open ? Palette.current : Palette.barLabel)
             }
         }
     }
@@ -1681,12 +1660,21 @@ struct BarButton<Content: View>: View {
         self.content = content
     }
 
+    @Environment(\.duoGlow) private var glow
+
     var body: some View {
         Button(action: action) {
             content()
                 .frame(width: width, height: height)
                 .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(open ? Palette.controlOpen : Palette.control))
+                .overlay {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(open ? Palette.current.opacity(0.55) : Palette.stroke,
+                                      lineWidth: 1)
+                }
+                .shadow(color: glow && open ? Palette.current.opacity(0.20) : .clear, radius: 10)
+                .shadow(color: .black.opacity(glow ? 0 : 0.05), radius: 1, y: 1)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
@@ -2149,7 +2137,7 @@ private struct WindowThumbnail: View {
     /// The thumbnail with its badge, halo, wiggle and lift.
     private var card: some View {
         let halo = RoundedRectangle(cornerRadius: radius + 5, style: .continuous)
-            .strokeBorder(Palette.accent, lineWidth: 2)
+            .strokeBorder(Palette.current.opacity(0.85), lineWidth: 2)
             .padding(-5)
         return preview
             .frame(width: width, height: height)
@@ -2276,10 +2264,7 @@ struct AppDrawer: View {
             .scrollIndicators(.hidden)
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Palette.bar))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
-        .shadow(color: .black.opacity(0.65), radius: 30, x: 0, y: 24)
+        .glassPanel(24)
     }
 
     private var searchField: some View {
@@ -2418,8 +2403,19 @@ struct DrawerRow<Leading: View>: View {
             .padding(.horizontal, 10)
             .frame(height: height)
             .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(highlighted ? Palette.control : Color.clear))
+            .background {
+                if highlighted {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(LinearGradient(colors: [Palette.controlOpen.opacity(0.92),
+                                                      Palette.controlOpen.opacity(0.30)],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(Palette.current)
+                                .frame(width: 3, height: height - 20)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)

@@ -97,6 +97,8 @@ struct AddMacCard: View {
                 }
             }
         }
+        .padding(16)
+        .glassPanel(22)
         .onChange(of: focus) { _, f in editing = f != nil }
         .accessibilityAction(.escape, close)
         .background(EscapeKey(action: close))
@@ -152,7 +154,7 @@ struct AddMacCard: View {
             Button(action: pair) {
                 Text("配对")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.black)
+                    .foregroundStyle(Palette.onAccent)
                     .frame(minWidth: 88, minHeight: 44)
                     .padding(.horizontal, 12)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.accent.opacity(working ? 0.4 : 1)))
