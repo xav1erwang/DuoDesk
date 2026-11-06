@@ -32,6 +32,17 @@ case "$architecture" in arm64|x86_64|universal) ;; *) echo "Unsupported architec
 mkdir -p "$output"
 output="$(cd "$output" && pwd)"
 cd "$root"
+# Ad-hoc signing makes the built app a different code identity on every build:
+# macOS then asks again for the login keychain (the Mac's identity key) and for
+# Accessibility, because both grants are keyed to the signature. A stable signing
+# identity keeps them, so an unnamed identity falls back to the first installed,
+# non-revoked Apple Development certificate; ad-hoc only when there is none.
+if [ -z "${DUODESK_SIGN_IDENTITY:-}" ]; then
+    DUODESK_SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep 'Apple Development' | grep -v REVOKED | head -1 \
+        | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-F]{40}).*/\1/')"
+    [ -n "$DUODESK_SIGN_IDENTITY" ] || DUODESK_SIGN_IDENTITY=-
+fi
 identity="${DUODESK_SIGN_IDENTITY:--}"
 if [ "$release" = 1 ] && [ "$identity" = - ]; then
     echo '--release requires DUODESK_SIGN_IDENTITY for Developer ID signing.' >&2
