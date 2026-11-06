@@ -292,6 +292,11 @@ final class StreamClient: ObservableObject {
     /// The next pick's token: strictly increasing for the life of the process, never reset, so an
     /// answer can never be taken for one to an earlier connection's pick.
     private var settingsToken = 1
+    /// Seconds added to a tap dial's give-up window when a wake packet went out: a sleeping
+    /// Mac takes 10–30 s to answer, and giving up at the usual deadline would read as "this
+    /// Mac cannot be reached" when it is merely still waking.
+    private var wakeWindow: TimeInterval = 0
+
     /// The pending picks' timeout check (one at a time, for the oldest).
     private var settingsExpiry: DispatchWorkItem?
     /// The worst round trip of the last second that had a pong (`linkStats.rtt.max`), for the pick
@@ -1979,14 +1984,26 @@ final class StreamClient: ObservableObject {
         reconnect = nil      // a tap starts afresh
         savedLocalAttempt = nil
         cancelHomeAsk()      // …and so does an ask still under way
-        if let id = mac.savedID, let saved = savedMac(id) { _ = sendLocalWake(to: saved) }
+        // A sleeping Mac on this network is woken by a magic packet, then the dial waits
+        // longer than a tap normally would for it to answer.
+        let woke: Bool
+        if let id = mac.savedID, let saved = savedMac(id) {
+            woke = sendLocalWake(to: saved)
+            wakeWindow = woke ? 25 : 0
+        } else {
+            woke = false
+            wakeWindow = 0
+        }
         if mac.route == .remote, let id = mac.macID {
             dialSaved(id, why: .tap)
+            if woke { status = "正在唤醒 \(mac.name)…" }
             return
         }
         // As strict as the automatic reconnect: a row named like a saved Mac, without a tag of a
         // saved Mac's, is dialed as that Mac, pinned to its key (FoundMac.savedByName).
         dial(mac, macID: mac.savedID, tap: true)
+        // After the dial, which sets "Connecting…": a waking Mac needs the words to say so.
+        if woke { status = "正在唤醒 \(mac.name)…" }
     }
 
     /// A network or Direct row's dial, a tap's or the automatic reconnect's (which keeps its
@@ -2276,7 +2293,8 @@ final class StreamClient: ObservableObject {
             // Not the automatic reconnect's dial (a tap's, the session after a pairing, `-SillConnect`):
             // its first window list within DiscoveryPolicy.tapDialDeadline, or it ends with words, so
             // "Connecting to…" never stays (a wired dial's fallback counts afresh from its own dial).
-            DispatchQueue.main.asyncAfter(deadline: .now() + DiscoveryPolicy.tapDialDeadline) { [weak self] in
+            let giveUpAfter = DiscoveryPolicy.tapDialDeadline + wakeWindow
+            DispatchQueue.main.asyncAfter(deadline: .now() + giveUpAfter) { [weak self] in
                 guard let self, self.connection === c, !self.connected, self.reconnect == nil else { return }
                 #if DEBUG
                 print("session: \(name) not connected in \(DiscoveryPolicy.tapDialDeadline) s (\(c.state)); giving up")
