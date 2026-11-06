@@ -167,6 +167,8 @@ struct PairDeviceView: View {
         }
     }
 
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if offer.byDevice {
@@ -195,9 +197,17 @@ struct PairDeviceView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             buttons
+            HStack {
+                Spacer(minLength: 0)
+                VisionTecMark(size: 9, color: MacTheme(scheme).tertiary.opacity(0.7))
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 2)
         }
         .padding(20)
         .frame(width: 440)
+        .background(MacWindowBackground())
+        .tint(MacTheme(scheme).current)
         .task(id: phase) {
             // Paired: closes itself after 3 s, unless the Turn On line still has something to say
             // (never on a window a device opened, which has no such line).
@@ -218,6 +228,7 @@ struct PairDeviceView: View {
                         Text("配对码").foregroundStyle(.secondary)
                         Text(offer.groupedCode)
                             .font(.system(size: 22, weight: .medium, design: .monospaced))
+                            .foregroundStyle(MacTheme(scheme).current)
                             .textSelection(.enabled)
                     }
                 }
@@ -256,6 +267,7 @@ struct PairDeviceView: View {
                         Text("配对码").foregroundStyle(.secondary)
                         Text(offer.groupedCode)
                             .font(.system(size: 22, weight: .medium, design: .monospaced))
+                            .foregroundStyle(MacTheme(scheme).current)
                             .textSelection(.enabled)
                     }
                 }
