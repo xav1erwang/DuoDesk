@@ -35,6 +35,9 @@ struct RemoteAccessPane: View {
         var showDevices: () -> Void = {}
     }
 
+    /// "仅使用电源适配器时开启" and kin, read from pmset once, when the pane is made.
+    @State private var wakeNote: String? = RemoteAccessPane.readWakeNote()
+
     let status: RemoteStatus
     @Binding var remoteAccess: Bool
     @Binding var internetAccess: Bool
@@ -73,10 +76,19 @@ struct RemoteAccessPane: View {
             Section {
                 Toggle("空闲时保持 Mac 可连接", isOn: $keepAvailable)
                 LabeledContent {
-                    Button("打开电源设置…") { Self.openEnergySettings() }
+                    Button("打开电池设置…") { Self.openEnergySettings() }
                 } label: {
-                    Text("睡眠")
+                    Text("睡眠与唤醒")
                     Text("开启后，应用运行时会阻止自动睡眠，屏幕仍可熄灭；使用电池时会增加耗电。合盖或手动睡眠仍由 macOS 管理。")
+                }
+                // The setting remote access actually needs is macOS's own, and it lives in the
+                // battery pane's Options sheet: say what it is set to, then how to change it.
+                LabeledContent {
+                    Text(wakeNote ?? "—")
+                        .foregroundStyle(.secondary)
+                } label: {
+                    Text("唤醒以供网络访问")
+                    Text("睡眠中的 Mac 仍能被网络唤醒来接受连接。在电池页底部点“选项…”可修改。")
                 }
             }
         }
@@ -173,7 +185,6 @@ struct RemoteAccessPane: View {
             }
         }
     }
-
     private func startEditingPort() {
         portText = String(port)
         portSaved = false
@@ -356,6 +367,44 @@ struct RemoteAccessPane: View {
         let parts = address.split(separator: ".")
         guard parts.count == 4 else { return address }
         return "\(parts[0]).\(parts[1]).x.x"
+    }
+
+    /// What macOS says about wake-on-network. `pmset -g custom` reads without root and splits
+    /// the answer by power source, which is exactly how the battery pane's Options sheet
+    /// words it ("仅使用电源适配器时").
+    static func readWakeNote() -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        process.arguments = ["-g", "custom"]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = Pipe()
+        do { try process.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+
+        var section = ""
+        var ac: Bool?
+        var battery: Bool?
+        for raw in text.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasSuffix(":") { section = line; continue }
+            // "womp                 1": the value is padded out with spaces, so split on any
+            // whitespace rather than on the first space.
+            let parts = line.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard parts.count >= 2, parts[0] == "womp" else { continue }
+            let on = parts[1] == "1"
+            if section.hasPrefix("AC") { ac = on }
+            else if section.hasPrefix("Battery") { battery = on }
+        }
+        switch (ac, battery) {
+        case (true, true): return "已开启"
+        case (true, false): return "仅使用电源适配器时开启"
+        case (false, true): return "仅使用电池时开启"
+        case (false, false): return "已关闭"
+        default: return nil
+        }
     }
 
     /// Battery on a laptop, Energy on a desktop: one System Settings extension on macOS 27
