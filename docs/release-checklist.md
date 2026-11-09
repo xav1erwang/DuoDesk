@@ -36,7 +36,7 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoDesk \
 
 ## 首次公开前
 
-2026-11-09 的源码、历史、图片及 GitHub 附件复查见[公开前隐私检查](the audit notes)。其中的历史邮箱与 Actions 元数据处理完成前，不应将此前的扫描记录理解为已经完成远端脱敏。
+2026-11-09 的源码、历史、图片及 GitHub 附件复查见[公开前隐私检查](the audit notes)。远端分支、标签及旧 Actions 元数据已完成脱敏处理；GitHub 仍可通过旧提交 ID 访问原邮箱，彻底清除还需处理服务端旧对象或缓存。
 
 - [ ] 确认仓库归属为 `xav1erwang`，名称为 `DuoDesk`，公开范围符合维护者决定。
 - [ ] 推送准备好的源码，确认下载源码包和干净 clone 都可构建。
