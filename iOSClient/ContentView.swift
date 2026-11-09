@@ -12,11 +12,18 @@ struct ContentView: View {
     var body: some View {
         root.onAppear { statsReporter.attach(to: client) }
             .sheet(isPresented: $client.displayPickerPresented) { DisplayPicker(client: client) }
+            .alert("连接失败", isPresented: $client.connectionFailurePresented) {
+                Button("好", role: .cancel) { }
+            } message: {
+                Text(client.connectionFailureMessage)
+            }
     }
 
     @ViewBuilder private var root: some View {
         #if DEBUG
-        if let spec = LayoutHarness.Spec.fromLaunchArguments {
+        if UserDefaults.standard.bool(forKey: "DuoConnectionPreview") {
+            ConnectionMotionPreview()
+        } else if let spec = LayoutHarness.Spec.fromLaunchArguments {
             // The harness gets the app's own client so `-SillLive 1` can put a real session inside
             // the fake screen; without that argument it never touches it.
             LayoutHarness(spec: spec, live: client)
@@ -42,6 +49,10 @@ struct ContentView: View {
         .background(WindowSessionObserver(client: client))
         .onAppear {
             #if DEBUG
+            if UserDefaults.standard.bool(forKey: "DuoConnectionFailureChecks") {
+                client.runConnectionFailureChecks()
+                return
+            }
             if UserDefaults.standard.bool(forKey: "DuoDisplaySelectionChecks") {
                 client.runDisplaySelectionChecks()
                 return
@@ -223,9 +234,7 @@ struct ContentView: View {
 /// * `-Sill.shareClipboard 0` — not a harness argument either: this device's Share Clipboard (the
 ///   Settings panel's This iPad group) off for one run, in the normal app too. The mock Mac shares its
 ///   clipboard (`WindowList.clipboard` 1) in every settings case but `legacy`, whose group then has no
-///   clipboard rows. `-SillClipboardChip 1` offers the clipboard's chip over the mock's stream (as
-///   after a copy on this device; it stays), and `-SillClipboardNote sent|long|notsent` shows a Paste's
-///   note in its place and under the group's Paste (docs/clipboard-plan.md).
+///   clipboard rows. Clipboard contents are handled without an on-screen paste prompt.
 /// * `-Sill.largerPicture 1` — not a harness argument either: this device's Larger Picture switch
 ///   (the Settings panel's This iPhone group; docs/larger-picture-plan.md) on for one run, in the
 ///   normal app too. A phone held upright then has, while a window streams, no thumbnails, the
@@ -546,7 +555,7 @@ struct LayoutHarness: View {
             }
         }
         .ignoresSafeArea()
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(UserDefaults.standard.string(forKey: "SillAppearance") == "light" ? .light : .dark)
         .statusBar(hidden: true)
         // The iPad's menu bar follows the client this frame shows, as the app's does.
         .background(WindowSessionObserver(client: spec.live ? live : mock))
@@ -871,8 +880,7 @@ enum SettingsScript {
             print(when + "suggestion: the callout's button, “\(button.title)”")
             client.changeSettings(button.change)
         case "paste" where words.count >= 2:
-            // The Settings group's Paste (or the chip's), as the system's Paste control hands over
-            // what it read: the rest of the step is the text (docs/clipboard-plan.md, the receipt).
+            // Explicit clipboard input for the test script; no clipboard contents are logged.
             let text = words.dropFirst().joined(separator: " ")
             print(when + "paste \(text.utf8.count) bytes")
             client.sendClipboard([text])
@@ -1035,6 +1043,12 @@ struct ConnectScreen: View {
             // Pairing and settings are toolbar items, as the platform draws them — not a
             // strip of our own beside the content.
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    DiscoveryRefreshButton(refreshing: client.refreshingDiscovery,
+                                           enabled: !carded && !client.localNetworkDenied,
+                                           action: client.refreshDiscovery)
+                        .frame(width: 44, height: 44)
+                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button(action: unfold) {
                         Image(systemName: "plus")
@@ -1161,12 +1175,14 @@ struct ConnectScreen: View {
     }
 
     @ViewBuilder private func macList(_ layout: ConnectLayout) -> some View {
-        Text(connectionStatus)
-            .font(.system(size: 13))
-            .foregroundStyle(Palette.muted)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 10)
-            .padding(.bottom, 4)
+        if !client.connectionInProgress {
+            Text(connectionStatus)
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 4)
+        }
 
         // A Mac that no longer serves this version said so (GoodbyePolicy's "update", its words the
         // status line above): where to get the new one, while the status line still says why. Not
@@ -1227,7 +1243,7 @@ struct ConnectScreen: View {
         }
 
         if client.showsNearbyHint {
-            Text("Mac 需与这台 \(device) 连接同一 Wi-Fi 网络，或在 DUO你电脑中开启无线直连。在外使用时，请先用 Mac 上的配对码添加。")
+            Text("Mac 需与这台 \(device) 连接同一局域网，或在 DUO你电脑中允许就近连接。在外使用时，请先用 Mac 上的配对码添加。")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1255,13 +1271,14 @@ struct ConnectScreen: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint("无需 Wi-Fi 网络，也可搜索已开启无线直连的 Mac。")
+                .accessibilityHint("无需连接同一局域网，也可搜索允许就近连接的 Mac。")
             }
         }
 
     }
 
     private var connectionStatus: String {
+        if client.refreshingDiscovery { return "正在刷新…" }
         switch client.status {
         case StreamClient.lookingOnNetwork: return "正在搜索局域网中的 Mac…"
         case StreamClient.lookingNearby: return "正在搜索局域网和附近的 Mac…"

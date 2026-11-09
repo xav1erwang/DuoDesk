@@ -240,36 +240,6 @@ struct HostSettingsPanel: View {
                 }
                 streamRows(shown)
                 Footnote(text: streamFooter)
-                // Which quality these rows set, away from home or at home.
-                if let note = AwayCopy.footnote(state.away, mac: mac, remoteAccessOn: client.macInfo?.remoteAccess == true) {
-                    Footnote(text: note, top: 0)
-                }
-                // As in the Mac's Settings › Streaming: its own group, the Mac's name for it, and
-                // what it trades away.
-                Rows {
-                    Toggle(isOn: binding(shown.prioritizeSpeed) { HostSettingsChange(prioritizeSpeed: $0) }) {
-                        RowTitle(title: "优先编码速度", since: client.settings.pendingSince(.prioritizeSpeed))
-                    }
-                    .rowFrame()
-                }
-                Footnote(text: "\(mac) 繁忙时降低延迟，画面可能略微变柔和。")
-                Rows {
-                    let unavailable = !state.virtualDisplayAvailable && !shown.virtualDisplay
-                    Toggle(isOn: binding(shown.virtualDisplay) { HostSettingsChange(virtualDisplay: $0) }) {
-                        RowTitle(title: "虚拟显示器", since: client.settings.pendingSince(.virtualDisplay))
-                    }
-                    // Off and impossible on this host: disabled, the reason under it. On, it can
-                    // always be turned off, as from the Mac's own menu.
-                    .disabled(unavailable)
-                    .accessibilityHint(state.virtualDisplayNote ?? "")
-                    .rowFrame()
-                }
-                if let note = state.virtualDisplayNote {
-                    Footnote(text: note, warning: true)
-                } else {
-                    Footnote(text: "串流时，所选窗口会移到 \(mac) 的虚拟显示器，即使被遮挡也能继续更新。")
-                }
-                Footnote(text: "对所有连接 \(mac) 的设备生效，画面会短暂停顿。")
                 // Direct Wireless Connection: how devices reach the Mac, not how it streams; after the
                 // closing footer, whose "the stream restarts" is not true of it, and last, the least
                 // changed row with the longest footer (the compact halves' 259 pt shows the rest
@@ -279,16 +249,16 @@ struct HostSettingsPanel: View {
                 if let direct = shown.directWireless {
                     Rows {
                         Toggle(isOn: binding(direct) { HostSettingsChange(directWireless: $0) }) {
-                            RowTitle(title: "无线直连", since: client.settings.pendingSince(.directWireless))
+                            RowTitle(title: "允许就近连接", since: client.settings.pendingSince(.directWireless))
                         }
                         // A warning about turning it off, so only while the switch shows on.
-                        .accessibilityHint(client.connectedDirectly && direct ? "关闭后会断开本机的直连。" : "")
+                        .accessibilityHint(client.connectedDirectly && direct ? "关闭后会断开本机的就近连接。" : "")
                         // From afar the Mac refuses it anyway: how devices near the Mac reach it is
                         // theirs and the Mac's to change.
                         .disabled(remoteRoute != nil)
                         .rowFrame()
                     }
-                    Footnote(text: remoteRoute != nil ? "请在 \(mac) 上，或从靠近它的设备修改。" : directFooter(on: direct))
+                    Footnote(text: "当设备在附近时 尝试直接连接")
                 }
                 if !state.persistent {
                     Footnote(text: "这些设置在主机程序退出前保持有效。")
@@ -341,12 +311,8 @@ struct HostSettingsPanel: View {
     private func streamRows(_ shown: StreamSettings) -> some View {
         Rows {
             AdaptiveRow(title: "画质", since: client.settings.pendingSince(.bitrate)) {
-                Picker("画质", selection: binding(shown.bitrate) { HostSettingsChange(bitrate: $0) }) {
-                    ForEach(QualityPreset.allCases) { Text(DuoQualityLabels.title(forBitrate: $0.rawValue)).tag($0.rawValue) }
-                    if QualityPreset(rawValue: shown.bitrate) == nil {
-                        // Set by hand on the Mac: shown, never offered (the Mac's menu does the same).
-                        Text(DuoQualityLabels.title(forBitrate: shown.bitrate)).tag(shown.bitrate)
-                    }
+                Picker("画质", selection: binding(DuoQualityLabels.preset(forBitrate: shown.bitrate).rawValue) { HostSettingsChange(bitrate: $0) }) {
+                    ForEach(DuoQualityLabels.presets) { Text(DuoQualityLabels.name(forBitrate: $0.rawValue)).tag($0.rawValue) }
                 }
                 .pickerStyle(.menu)
                 .fixedSize()     // one line; the row stacks instead when it does not fit beside the title
@@ -367,16 +333,7 @@ struct HostSettingsPanel: View {
                     .fixedSize()
                 }
             }
-            RowDivider()
-            AdaptiveRow(title: "Mac 帧率上限", since: client.settings.pendingSince(.maxFPS)) {
-                // A Mac-held value such as 90 selects no segment, as on the Mac.
-                Picker("Mac 帧率上限", selection: binding(shown.maxFPS) { HostSettingsChange(maxFPS: $0) }) {
-                    Text("60 fps").tag(60)
-                    Text("120 fps").tag(120)
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-            }
+
         }
     }
 
@@ -400,29 +357,10 @@ struct HostSettingsPanel: View {
     /// connection).
     @ViewBuilder private var awayFromHome: some View {
         if let info = client.macInfo {
-            Text("远程连接")
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(Palette.muted)
-                .padding(.horizontal, 14)
-                .padding(.top, 6)
-                .padding(.bottom, 6)
-                .accessibilityAddTraits(.isHeader)
             switch DiscoveryPolicy.awayFromHome(saved: client.macInfoSaved, remoteSession: remoteRoute != nil,
                                                 remoteAccess: info.remoteAccess, tlsAtHome: client.sessionAtHomeOverTLS) {
-            case .paired(let reach):
-                Rows {
-                    Label("已配对", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(Palette.text)
-                        .rowFrame()
-                }
-                switch reach {
-                case .connected:
-                    if let r = remoteRoute { Footnote(text: Self.remoteRouteText(r) + "。") }
-                case .reaches:
-                    Footnote(text: "在外时可\(Self.reach(info))连接到 \(mac)。")
-                case .turnOnRemoteAccess:
-                    Footnote(text: Self.turnOnRemoteAccess(mac))
-                }
+            case .paired:
+                EmptyView()
             case .pairThisDevice(let atHome):
                 Rows {
                     Button(action: pairThisDevice) {
@@ -445,7 +383,7 @@ struct HostSettingsPanel: View {
 
     /// With Remote Access off on the Mac: how to reach it away from home.
     static func turnOnRemoteAccess(_ mac: String) -> String {
-        "要在外连接 \(mac)，请在其 DUO你电脑 设置中打开“远程访问”。"
+        "要通过互联网连接 \(mac)，请在 Mac 的设置中开启“允许使用互联网建立连接”。"
     }
 
     // MARK: This device
@@ -468,8 +406,8 @@ struct HostSettingsPanel: View {
             .accessibilityAddTraits(.isHeader)
             .id(Self.gesturesGroupID)
         Rows {
-            AdaptiveRow(title: "本机目标帧率", since: nil) {
-                Picker("本机目标帧率", selection: Binding(
+            AdaptiveRow(title: "帧率", since: nil) {
+                Picker("帧率", selection: Binding(
                     get: { DuoStreamPolicy.normalizedFPS(preferredFPS) },
                     set: { preferredFPS = DuoStreamPolicy.normalizedFPS($0) }
                 )) {
@@ -481,7 +419,6 @@ struct HostSettingsPanel: View {
                 .accessibilityIdentifier("duo.settings.rate")
             }
         }
-        Footnote(text: "目标受屏幕、低电量模式、Mac 帧率上限和当前桌面时钟限制。更高目标可能需要重新连接后生效。")
         if offersLargerPicture {
             Rows {
                 Toggle(isOn: $largerPicture) {
@@ -499,19 +436,7 @@ struct HostSettingsPanel: View {
                 }
                 .rowFrame()
                 .onChange(of: clipboardOn) { _, _ in client.clipboardSwitchChanged() }
-                if clipboardOn {
-                    RowDivider()
-                    ClipboardPasteRow(client: client, title: "粘贴到 \(mac)")
-                }
             }
-            if clipboardOn, let note = client.clipboardNote {
-                Footnote(text: note.text, warning: note.warning, top: 6)
-                    .padding(.bottom, -6)
-                    .accessibilityHidden(true)      // announced as it came
-            }
-            Footnote(text: clipboardOn
-                     ? "在 \(mac) 上复制的文字可在本机粘贴。要发到 \(mac)，请先在本机复制文字，点按粘贴，再在 \(mac) 上按 ⌘V。"
-                     : "关闭时，本机与 \(mac) 不会互相传送复制的内容。")
         }
         Rows {
             Toggle(isOn: $gesturesOn) {
@@ -527,7 +452,7 @@ struct HostSettingsPanel: View {
                 }
             }
         }
-        Footnote(text: gesturesFooter)
+        if voiceOver { Footnote(text: "VoiceOver 已开启，可点按上方手势执行。") }
     }
 
     /// The Mac's window list said it takes the gestures (`WindowList.gestures`).
@@ -610,8 +535,8 @@ struct HostSettingsPanel: View {
     private static func routeWord(_ route: DiscoveryPolicy.Method) -> String {
         switch route {
         case .wired: return "有线"
-        case .wifi: return "Wi‑Fi"
-        case .direct: return "直连"
+        case .wifi: return "局域网"
+        case .direct: return "就近连接"
         }
     }
 
@@ -628,25 +553,13 @@ struct HostSettingsPanel: View {
     private static func spoken(_ route: DiscoveryPolicy.Method) -> String {
         switch route {
         case .wired: return "已通过数据线连接"
-        case .wifi: return "已通过 Wi-Fi 连接"
-        case .direct: return "已无线直连"
+        case .wifi: return "已通过局域网连接"
+        case .direct: return "已通过就近连接"
         }
     }
 
     /// "iPhone" or "iPad", for copy about this device.
     private var device: String { UIDevice.current.userInterfaceIdiom == .phone ? "iPhone" : "iPad" }
-
-    /// Under the Direct Wireless Connection row: what it does and costs, and, while the switch shows
-    /// on and this device is connected over it, what turning it off does to this device: the Mac
-    /// disconnects every device on peer-to-peer Wi-Fi once its listener has changed (1.5 s), and a
-    /// device still connected directly shares no network the Mac is listed on (one that does moves
-    /// to it by itself), so it cannot come back until it does. Once the switch shows off (turned
-    /// off here or on the Mac, with this connection still up for that moment) the warning is moot.
-    private func directFooter(on: Bool) -> String {
-        var text = "设备无需与 \(mac) 接入同一 Wi-Fi 网络即可直连，方式类似隔空投送。开启后，Wi-Fi 串流可能出现卡顿。"
-        if on, client.connectedDirectly { text += " 本机当前使用直连，关闭后会断开连接。" }
-        return text
-    }
 
     /// This panel changes the Mac's limit. The lower deck separately sets this device's request.
     private var streamFooter: String {
@@ -772,31 +685,6 @@ private struct GestureRow: View {
             .foregroundStyle(Palette.muted)
             .frame(width: 24)
             .accessibilityHidden(true)
-    }
-}
-
-/// "Paste on ‹Mac›" with the system's Paste button (ClipboardPasteButton): beside it when they fit,
-/// under it when larger text leaves no room, as `AdaptiveRow` does. The title is the row's words for
-/// VoiceOver; the button reads "Paste" with its hint.
-private struct ClipboardPasteRow: View {
-    @ObservedObject var client: StreamClient
-    let title: String
-    @Environment(\.dynamicTypeSize) private var typeSize
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                Text(title).foregroundStyle(Palette.text)
-                Spacer(minLength: 8)
-                ClipboardPasteButton(client: client, iconOnly: true)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title).foregroundStyle(Palette.text).fixedSize(horizontal: false, vertical: true)
-                ClipboardPasteButton(client: client, iconOnly: true)
-            }
-            .padding(.vertical, 8)
-        }
-        .id(typeSize)
-        .rowFrame()
     }
 }
 

@@ -238,25 +238,6 @@ struct StreamScreen: View {
                 .onChange(of: DuoLayout.of(geo.size).isPortrait, initial: true) { _, portrait in
                     client.setPointerLayout(portrait: portrait)
                 }
-                // The clipboard's chip on screen or not: its 20 s run only while it is, and VoiceOver
-                // is told when it first shows (ClipboardPolicy.chipCounts).
-                .onChange(of: clipboardChipOnScreen, initial: true) { _, onScreen in
-                    client.clipboardChipShown(onScreen)
-                }
-                // The clipboard's chip (docs/clipboard-plan.md): a sibling after the layouts, so its
-                // Paste button and Dismiss take their touches over the stream's UIKit input view, and
-                // nothing else does (the frame around it is empty). Near the bar, off the link's line,
-                // inside the stream panel's corner; never while something is open over the stream.
-                if clipboardChipAllowed, client.clipboardChip || client.clipboardNote != nil, let panel = tourTargets[.stream] {
-                    let corner = ClipboardPolicy.chipCorner(landscape: layout == .landscape, linkLineShown: shownLinkLine != nil)
-                    ClipboardChip(client: client)
-                        .frame(maxWidth: max(0, panel.width - 16), alignment: .trailing)
-                        .padding(8)
-                        .frame(width: panel.width, height: panel.height,
-                               alignment: corner == .topTrailing ? .topTrailing : .bottomTrailing)
-                        .position(x: panel.midX, y: panel.midY)
-                        .transition(.opacity)
-                }
                 // The tour: a sibling above the layouts, as the pairing overlay is, and under it: an
                 // outside link puts the tour aside until the overlay has closed.
                 if let run = tour, !overlayShown {
@@ -484,15 +465,6 @@ struct StreamScreen: View {
     /// pairing overlay, the first-run tour (its dim and card; VoiceOver is on its card meanwhile).
     private var linkLineAllowed: Bool { !settingsOpen && !drawerOpen && !overlayShown && !tourOnScreen }
 
-    /// The clipboard's chip shows where the link's line may, and not over a thumbnail's lights or the
-    /// Aa ruler either (the Settings panel has its own Paste).
-    private var clipboardChipAllowed: Bool { linkLineAllowed && windowMenu == nil && !scaleOpen }
-
-    /// The chip itself on screen, not its note in its place: its time runs only then.
-    private var clipboardChipOnScreen: Bool {
-        clipboardChipAllowed && client.clipboardChip && client.clipboardNote == nil && tourTargets[.stream] != nil
-    }
-
     /// Runs LinkLine on the report and what is open, says the line once a spell, and looks again at
     /// the linger's end.
     private func updateLinkLine() {
@@ -644,8 +616,7 @@ struct StreamScreen: View {
         }
         if defaults.bool(forKey: "SillSettings") {
             after(1.5) { print("harness: the Settings panel opened"); setSettings(true) }
-            // `-SillSettingsCloseAt <s>`: closed again s seconds in, as Done does (the clipboard's chip
-            // waiting under it, then showing: docs/clipboard-plan.md).
+            // `-SillSettingsCloseAt <s>`: close again s seconds in, as Done does.
             let closeAt = defaults.double(forKey: "SillSettingsCloseAt")
             if closeAt > 1.5 { after(closeAt) { print("harness: the Settings panel closed"); setSettings(false) } }
         }
@@ -1142,7 +1113,6 @@ struct StreamScreen: View {
 
             ZStack {
                 StreamView(client: client)
-                    .opacity(client.shouldHidePendingNativeVideo ? 0 : 1)
                 // Same frame as the video, so a touch maps straight onto the streamed frame.
                 InputOverlay(videoSize: client.videoSize,
                              send: { client.sendInput($0) },
@@ -1153,6 +1123,10 @@ struct StreamScreen: View {
                              latchedModifiers: latched,
                              onModifiersConsumed: { latched = [] },
                              sendGesture: { client.sendGesture($0, fingers: $1) })
+                if !client.connectionPictureReady && !client.preparingConnection {
+                    Palette.panel
+                        .allowsHitTesting(false)
+                }
                 if let issue = client.nativeDesktopIssue {
                     Text(verbatim: issue)
                         .font(.callout)
@@ -1161,6 +1135,7 @@ struct StreamScreen: View {
                         .padding()
                         .allowsHitTesting(false)
                 }
+                ConnectionTransitionView(preparing: client.preparingConnection, ready: client.connectionPictureReady)
             }
             .background(Palette.panel)
             .overlay(alignment: .top) { LinkLineView(text: shownLinkLine) }
@@ -1502,8 +1477,14 @@ private struct CleanImageView: View {
     }
 
     private var liveVideo: some View {
-        StreamView(client: client, videoOnly: true, cursorInVideoOnly: client.extendedDesktopRequested)
-            .opacity(!client.shouldHidePendingNativeVideo && (client.nativeDesktopResolution == nil || client.hasNativeDesktopVideo) ? 1 : 0)
+        ZStack {
+            StreamView(client: client, videoOnly: true, cursorInVideoOnly: client.extendedDesktopRequested)
+            if !client.connectionPictureReady && !client.preparingConnection {
+                Palette.panel
+                    .allowsHitTesting(false)
+            }
+            ConnectionTransitionView(preparing: client.preparingConnection, ready: client.connectionPictureReady)
+        }
     }
 }
 

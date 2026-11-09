@@ -10,6 +10,7 @@ import StreamProtocol
 /// queue without touching it. Network callbacks hop here with Task { @MainActor }.
 @MainActor
 package final class StreamCoordinator {
+    private let loginWindow: Bool
     /// The knobs (HostConfig.swift): the CLI's `standard` values and flag, or the app's Settings.
     /// A new value is taken only between pipelines, inside `select` (see `setTarget`), so one
     /// pipeline never mixes two. The knob properties below read it, so every existing read keeps
@@ -44,11 +45,12 @@ package final class StreamCoordinator {
     /// Use the existing display only for an explicit physical-mode fallback. Otherwise a Duo
     /// desktop needs its requested canvas, even when the Mac has several displays.
     private var existingDisplayCapture: Bool {
-        !synthetic && preservePhysicalMode && catalog.displayInfos.count > 1 && clientExtendedRequests.isEmpty
+        loginWindow || (!synthetic && preservePhysicalMode && catalog.displayInfos.count > 1 && clientExtendedRequests.isEmpty
             && clientDesktopResolutions.keys.allSatisfy { clientsSelectingDisplays.contains($0) }
+        )
     }
     private var displayPreviewClients: Set<ObjectIdentifier> = []
-    private lazy var extendedDesktopAvailable: Bool = appKitLoop && !synthetic && VirtualDisplay.checkPrivateAPI().isEmpty
+    private lazy var extendedDesktopAvailable: Bool = appKitLoop && !synthetic && !loginWindow && VirtualDisplay.checkPrivateAPI().isEmpty
     #if DUO_DISPLAY_RESTORE_TESTING
     /// Inject a startup failure only in the synthetic coordinator fixture.
     private var testFailExtendedStart = false
@@ -401,7 +403,8 @@ package final class StreamCoordinator {
     /// version for the window lists, when it has one that parses.
     package init(config: HostConfig, synthetic: Bool = false, appKitLoop: Bool, remote: RemoteAccess? = nil,
                  homePairing: Bool = false, testHooks: Bool = true, hostVersion: String? = nil,
-                 independentDuoDesktop: Bool = false, advertise: Bool = true) throws {
+                 independentDuoDesktop: Bool = false, advertise: Bool = true, loginWindow: Bool = false) throws {
+        self.loginWindow = loginWindow
         var config = config.validated()
         if !appKitLoop { config.virtualDisplay = false }
         self.config = config
@@ -442,6 +445,7 @@ package final class StreamCoordinator {
         menus = MenuMirror(server: server)
         let launch = UUID().uuidString
         launchID = launch
+        server.pathProbes.launchID = launch
         // A synthetic host shares a pasteboard of its own, never this Mac's clipboard.
         clipboard = HostClipboard(server: server, enabled: config.shareClipboard, launchID: launch, synthetic: synthetic)
         let hook = Self.testMenuHook(synthetic: synthetic)
@@ -475,7 +479,7 @@ package final class StreamCoordinator {
 
         server.onClientConnected = { [weak self] connection, route, link in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, connection.state == .ready else { return }
                 let id = ObjectIdentifier(connection)
                 self.routes[id] = route
                 // A recoverable issue is valid only for its sole device. Another connection must
@@ -609,7 +613,7 @@ package final class StreamCoordinator {
         // queue, preserving control/touch order. Permits fence requests held across goodbye.
         server.onTouchBarControl = { [weak self] message, connection, route, permit in
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.shuttingDown, self.routes[ObjectIdentifier(connection)] == route,
+                guard let self, !self.loginWindow, !self.shuttingDown, self.routes[ObjectIdentifier(connection)] == route,
                       permit.connectionID == ObjectIdentifier(connection) else { return }
                 permit.admit {
                     switch message.kind {
@@ -628,7 +632,7 @@ package final class StreamCoordinator {
         }
         server.onTouchBarInput = { [weak self] message, connection, route, permit in
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.shuttingDown, self.routes[ObjectIdentifier(connection)] == route,
+                guard let self, !self.loginWindow, !self.shuttingDown, self.routes[ObjectIdentifier(connection)] == route,
                       let touch = Wire.decode(TouchBarTouch.self, from: message.payload), touch.isValid else { return }
                 self.touchBarSession?.receive(touch, from: connection, route: route, permit: permit)
             }
@@ -819,7 +823,7 @@ package final class StreamCoordinator {
             }
         }
         if virtualDisplay { enableVirtualDisplay() }
-        catalog.start()
+        catalog.start(scanApplications: !loginWindow)
         // The only startup line Direct Wireless adds, and only when it is on: the default path
         // prints what it always printed.
         if config.directWireless {
@@ -1014,6 +1018,8 @@ package final class StreamCoordinator {
         }
     }
 
+    package func recoverNetworkAdvertisement() { server.recoverAdvertisement() }
+
     /// Windows in the catalog's last look, for the CLI's startup line.
     package var windowCount: Int { catalog.infos.count }
 
@@ -1103,6 +1109,7 @@ package final class StreamCoordinator {
     // MARK: Client messages
 
     private func handle(_ message: StreamMessage, from connection: NWConnection, inputQueuedAt: TimeInterval? = nil) async {
+        guard !loginWindow || LoginWindowPolicy.permits(message.kind) else { return }
         let enteredAt = inputQueuedAt.map { _ in Date().timeIntervalSince1970 }
         var mappedAt: TimeInterval?
         var deliveredAt: TimeInterval?
@@ -1115,6 +1122,7 @@ package final class StreamCoordinator {
         switch message.kind {
         case .selectSource:
             guard let source = Wire.decode(StreamSource.self, from: message.payload) else { return }
+            if loginWindow, !LoginWindowPolicy.permits(source) { return }
             if source == .desktop { clearDesktopIssue() }
             // A window picked comes forward on the Mac, which closes a view a gesture opened; the
             // Desktop picked (as a device does before a gesture made over a window) leaves it.
@@ -1163,7 +1171,7 @@ package final class StreamCoordinator {
             guard routes[device] != nil else { return }
             let currentVideo = control == nil ? desktopResolution == nil : videoEpoch.acceptsControl(control)
             guard currentVideo else { Stats.shared.bump("in.staleVideo"); return }
-            guard let rect = currentSourceRect() else {
+            guard currentSourceRect() != nil else {
                 // Nothing streams (between sources, or the stream stopped: the window closed under a
                 // drag): input has nowhere to land. The up of a key or a button the Mac has down still
                 // goes (DroppedInput), a button's where the pointer is (`.null`), so no modifier this
@@ -1178,7 +1186,17 @@ package final class StreamCoordinator {
             // A synthetic host acts on nothing: it posts no event (InputInjector.dryRun), so it
             // activates and raises nothing either.
             if !synthetic { raiseIfInteracting(event) }
-            deliver(event, in: rect, from: device, epoch: control?.epoch)
+            clipboard.afterPendingWrites(from: connection) { [weak self] in
+                guard let self, self.routes[device] != nil else { return }
+                let currentVideo = control == nil ? self.desktopResolution == nil : self.videoEpoch.acceptsControl(control)
+                guard currentVideo, let currentRect = self.currentSourceRect() else {
+                    if self.injector.isUpOfSomethingDown(event) {
+                        self.deliver(event, in: .null, from: device, epoch: control?.epoch)
+                    }
+                    return
+                }
+                self.deliver(event, in: currentRect, from: device, epoch: control?.epoch)
+            }
             if inputQueuedAt != nil { deliveredAt = Date().timeIntervalSince1970 }
             desktopInputMayActivate(event)
         case .gesture:
@@ -1202,6 +1220,7 @@ package final class StreamCoordinator {
             queueGesture(gesture, from: deviceName(connection))
         case .viewport:
             guard let v = Wire.decode(Viewport.self, from: message.payload), v.isValid else { return }
+            if loginWindow, v.extendedDesktop == true { return }
             let advertisedExistingCapture = existingDisplayCapture
             if let displayID = v.displayID {
                 catalog.refreshDisplayInventory()
@@ -3011,14 +3030,14 @@ package final class StreamCoordinator {
 
     private func listMessage() -> StreamMessage {
         StreamMessage(kind: .windowList, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
-                      payload: Wire.encode(WindowList(macName: macName, windows: catalog.infos, active: active, launchID: launchID,
+                      payload: Wire.encode(WindowList(macName: macName, windows: loginWindow ? [] : catalog.infos, active: active, launchID: launchID,
                                                       hostVersion: hostVersion, protocol: SillProtocol.current,
-                                                      gestures: TrackpadGesture.generation, clipboard: clipboard.advertised,
+                                                      gestures: loginWindow ? 0 : TrackpadGesture.generation, clipboard: clipboard.advertised,
                                                       inputDryRun: synthetic && injector.dryRun && injector.testLog ? true : nil,
                                                       extendedDesktop: extendedDesktopAvailable ? true : nil,
                                                       desktopIssue: desktopIssue,
                                                       renderedNativeDesktop: true,
-                                                      resizableMirror: true,
+                                                      resizableMirror: loginWindow ? nil : true,
                                                       displays: catalog.displayInfos,
                                                       selectedDisplayID: active == .desktop ? streamingDisplayID : catalog.effectiveDisplayID,
                                                       existingDisplayCapture: existingDisplayCapture ? true : nil)))
@@ -3028,6 +3047,7 @@ package final class StreamCoordinator {
 
     private func sendCatalog(to connection: NWConnection) {
         catalog.refreshDisplayInventory()
+        guard connection.state == .ready else { return }
         let now = Date().timeIntervalSince1970
         print("Catalog → \(connection.endpoint): \(catalog.infos.count) windows, \(catalog.allIcons.count) icons, \(catalog.installedApps.count) apps")
         server.send(listMessage(), to: connection)

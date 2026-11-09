@@ -149,6 +149,29 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(self.monitor()["status"], "waiting_for_device")
         self.run.assert_not_called()
 
+    def test_available_phone_without_an_open_developer_tunnel_can_renew(self):
+        expected = self.config["device_id"]
+        capability = {"featureIdentifier": "com.apple.coredevice.feature.connectdevice"}
+        # Xcode's UI says "available (paired)" while its JSON tunnel state is disconnected.
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                if legacy:
+                    device = {"hardwareProperties": {"udid": expected, "reality": "physical"},
+                              "connectionProperties": {"tunnelState": "disconnected", "pairingState": "paired"}}
+                else:
+                    device = {"properties": {"hardware": {"udid": expected, "reality": "physical"},
+                              "connection": {"state": "disconnected", "pairingState": "paired"}}}
+                document = {"result": {"devices": [device]}}
+                self.assertFalse(renew.observed_device(document, expected)["connected"])
+                device["capabilities"] = [capability]
+                self.assertTrue(renew.observed_device(document, expected)["connected"])
+                connection = device["connectionProperties"] if legacy else device["properties"]["connection"]
+                connection["pairingState"] = "unpaired"
+                self.assertFalse(renew.observed_device(document, expected)["connected"])
+                connection["pairingState"] = "paired"
+                connection["tunnelState" if legacy else "state"] = "unavailable"
+                self.assertFalse(renew.observed_device(document, expected)["connected"])
+
     def test_only_the_paired_physical_target_can_trigger(self):
         def item(device_id, reality="physical", state="connected", pairing="paired"):
             return {"properties": {"hardware": {"udid": device_id, "reality": reality},

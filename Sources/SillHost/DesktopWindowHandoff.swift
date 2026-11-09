@@ -69,54 +69,90 @@ final class DesktopWindowHandoff {
             // the next layout turn before deciding that a cross-display handoff is necessary.
             try await Task.sleep(for: .milliseconds(180))
         }
+        try await applyRecordedWindows { index in
+            try await self.applyWindow(at: index, captureID: captureID)
+        }
+    }
+
+    private func applyRecordedWindows(_ operation: (Int) async throws -> Void) async throws {
         for index in windows.indices {
-            let item = windows[index]
-            guard WindowSizer.liveBounds(of: item.placement.windowID) != nil else { continue }
-            let destination = CGDisplayBounds(item.displayID == sourceID ? captureID : item.displayID)
-            guard destination.width > 0, destination.height > 0 else { throw Failure.windowUnavailable }
-            let current = WindowSizer.liveBounds(of: item.placement.windowID)
-            if item.displayID != sourceID, let current, near(current, item.placement.originalFrame),
-               visible(item.placement.windowID) { continue }
-            if item.originalFullscreen, WindowSizer.isFullScreen(item.placement.element),
-               let current, near(current, destination), visible(item.placement.windowID) { continue }
-            if !item.originalFullscreen, let current, reachable(current, on: destination),
-               visible(item.placement.windowID) { continue }
-
-            print("Duo window handoff: pid \(item.placement.pid), window \(item.placement.windowID), source \(item.displayID), original \(item.placement.originalFrame), current \(String(describing: current)), target \(destination), fullscreen \(item.originalFullscreen)/\(WindowSizer.isFullScreen(item.placement.element))")
-
-            if WindowSizer.isFullScreen(item.placement.element) {
-                let fullBounds = current ?? destination
-                try setFullscreen(item.placement.element, false)
-                try await waitForNormal(item.placement, fullBounds: fullBounds)
-                if windows[index].normalHome == nil, let normal = WindowSizer.liveBounds(of: item.placement.windowID),
-                   let original = homes[item.displayID] {
-                    windows[index].normalHome = CGRect(x: original.minX + normal.minX - fullBounds.minX,
-                                                       y: original.minY + normal.minY - fullBounds.minY,
-                                                       width: normal.width, height: normal.height)
-                }
+            try Task.checkCancellation()
+            do {
+                try await operation(index)
+            } catch {
+                // A utility window on another monitor can refuse AX writes. Keep trying to
+                // preserve it, but do not discard an otherwise ready selected desktop for it.
+                guard windows[index].displayID != sourceID, !(error is CancellationError) else { throw error }
+                let item = windows[index]
+                print("Duo window handoff skipped outside selected display: pid \(item.placement.pid), window \(item.placement.windowID)")
             }
-            guard let home = homes[item.displayID],
-                  let normal = windows[index].normalHome ?? WindowSizer.liveBounds(of: item.placement.windowID) else { throw Failure.windowUnavailable }
-            let wanted = item.displayID == sourceID
-                ? fit(CGRect(x: destination.minX + normal.minX - home.minX,
-                             y: destination.minY + normal.minY - home.minY,
-                             width: normal.width, height: normal.height), in: destination)
-                : normal
-            let result = move(item.placement, to: wanted)
-            guard result != .apiDisabled else { throw Failure.windowUnavailable }
-            // Fixed-size windows can reject AXSize while accepting AXPosition. Judge the
-            // resulting reachable frame, rather than treating that size refusal as data loss.
-            try await wait {
+        }
+    }
+
+    private func applyWindow(at index: Int, captureID: CGDirectDisplayID) async throws {
+        let item = windows[index]
+        let selected = item.displayID == sourceID
+        if !selected { AXUIElementSetMessagingTimeout(item.placement.element, 0.2) }
+        defer { if !selected { AXUIElementSetMessagingTimeout(item.placement.element, 1.0) } }
+        guard let current = WindowSizer.liveBounds(of: item.placement.windowID) else { return }
+        // A display change can send a previously normal window into Stage Manager's strip.
+        // Re-read its live geometry here: the frame saved by record() predates that transition.
+        if systemOwnsPlacement(frame: current, element: item.placement.element) {
+            print("Duo window handoff: system manages preview for window \(item.placement.windowID)")
+            return
+        }
+        let destination = CGDisplayBounds(item.displayID == sourceID ? captureID : item.displayID)
+        guard destination.width > 0, destination.height > 0 else { throw Failure.windowUnavailable }
+        if item.displayID != sourceID, near(current, item.placement.originalFrame),
+           visible(item.placement.windowID) { return }
+        if item.originalFullscreen, WindowSizer.isFullScreen(item.placement.element),
+           near(current, destination), visible(item.placement.windowID) { return }
+        if !item.originalFullscreen, reachable(current, on: destination),
+           visible(item.placement.windowID) { return }
+
+        print("Duo window handoff: pid \(item.placement.pid), window \(item.placement.windowID), source \(item.displayID), original \(item.placement.originalFrame), current \(String(describing: current)), target \(destination), fullscreen \(item.originalFullscreen)/\(WindowSizer.isFullScreen(item.placement.element))")
+
+        if WindowSizer.isFullScreen(item.placement.element) {
+            let fullBounds = current
+            try setFullscreen(item.placement.element, false)
+            try await waitForNormal(item.placement, fullBounds: fullBounds)
+            if windows[index].normalHome == nil, let normal = WindowSizer.liveBounds(of: item.placement.windowID),
+               let original = homes[item.displayID] {
+                windows[index].normalHome = CGRect(x: original.minX + normal.minX - fullBounds.minX,
+                                                   y: original.minY + normal.minY - fullBounds.minY,
+                                                   width: normal.width, height: normal.height)
+            }
+        }
+        guard let home = homes[item.displayID],
+              let normal = windows[index].normalHome ?? WindowSizer.liveBounds(of: item.placement.windowID) else { throw Failure.windowUnavailable }
+        let wanted = item.displayID == sourceID
+            ? fit(CGRect(x: destination.minX + normal.minX - home.minX,
+                         y: destination.minY + normal.minY - home.minY,
+                         width: normal.width, height: normal.height), in: destination)
+            : normal
+        let result = move(item.placement, to: wanted)
+        guard result != .apiDisabled else { throw Failure.windowUnavailable }
+        // Fixed-size windows can reject AXSize while accepting AXPosition. Judge the
+        // resulting reachable frame, rather than treating that size refusal as data loss.
+        do {
+            try await wait(attempts: selected ? 80 : 16) {
                 guard let frame = WindowSizer.liveBounds(of: item.placement.windowID) else { return false }
                 return self.visible(item.placement.windowID) && self.reachable(frame, on: destination)
             }
-            if item.originalFullscreen {
-                try setFullscreen(item.placement.element, true)
-                try await wait {
-                    WindowSizer.isFullScreen(item.placement.element)
-                        && WindowSizer.liveBounds(of: item.placement.windowID).map { self.near($0, destination) } == true
-                        && self.visible(item.placement.windowID)
-                }
+        } catch {
+            if error is CancellationError { throw error }
+            if let frame = WindowSizer.liveBounds(of: item.placement.windowID),
+               systemOwnsPlacement(frame: frame, element: item.placement.element) { return }
+            throw error
+        }
+        if let frame = WindowSizer.liveBounds(of: item.placement.windowID),
+           systemOwnsPlacement(frame: frame, element: item.placement.element) { return }
+        if item.originalFullscreen {
+            try setFullscreen(item.placement.element, true)
+            try await wait {
+                WindowSizer.isFullScreen(item.placement.element)
+                    && WindowSizer.liveBounds(of: item.placement.windowID).map { self.near($0, destination) } == true
+                    && self.visible(item.placement.windowID)
             }
         }
     }
@@ -131,6 +167,15 @@ final class DesktopWindowHandoff {
             let element = item.placement.element
             let destination = CGDisplayBounds(item.displayID)
             let home = item.normalHome ?? item.placement.originalFrame
+            if let frame = WindowSizer.liveBounds(of: item.placement.windowID),
+               systemOwnsPlacement(frame: frame, element: element) {
+                // Restore the app's logical frame without asking its transformed sidebar
+                // preview to become a full window or bringing the app to the foreground.
+                if WindowSizer.frame(of: element).map({ near($0, home) }) != true {
+                    _ = move(item.placement, to: home)
+                }
+                continue
+            }
             if !item.originalFullscreen,
                WindowSizer.liveBounds(of: item.placement.windowID).map({ near($0, home) }) == true { continue }
             if item.originalFullscreen, WindowSizer.isFullScreen(element),
@@ -148,11 +193,15 @@ final class DesktopWindowHandoff {
             if WindowSizer.liveBounds(of: item.placement.windowID).map({ near($0, home) }) != true {
                 _ = move(item.placement, to: home)
                 guard waitSync({ WindowSizer.liveBounds(of: item.placement.windowID).map { self.near($0, home) } == true }) else {
-                    // An app may enforce a larger minimum size after its display changed. Keep
-                    // its title bar on the original physical screen instead of blocking every
-                    // subsequent connection because that app refused the exact old rectangle.
+                    // An app may enforce its own size or position after a display change. The
+                    // selected desktop stays on its original monitor; another screen's utility
+                    // window can stay reachable on any original physical monitor.
                     if !item.originalFullscreen,
-                       WindowSizer.liveBounds(of: item.placement.windowID).map({ reachable($0, on: destination) }) == true {
+                       let frame = WindowSizer.liveBounds(of: item.placement.windowID),
+                       reachable(frame, on: destination)
+                        || (item.displayID != sourceID && homes.keys.contains(where: {
+                            DuoDesktopDisplay.isDisplayOnline($0) && reachable(frame, on: CGDisplayBounds($0))
+                        })) {
                         continue
                     }
                     print("Duo window restoration pending: pid \(item.placement.pid), window \(item.placement.windowID)")
@@ -198,9 +247,9 @@ final class DesktopWindowHandoff {
                 && WindowSizer.liveBounds(of: placement.windowID).map { !wasCanvas || !self.near($0, fullBounds) } == true
         }
     }
-    private func wait(_ condition: () -> Bool) async throws {
+    private func wait(attempts: Int = 80, _ condition: () -> Bool) async throws {
         var stable = 0
-        for _ in 0..<80 {
+        for _ in 0..<attempts {
             stable = condition() ? stable + 1 : 0
             if stable >= 4 { return }
             try await Task.sleep(for: .milliseconds(50))
@@ -229,6 +278,10 @@ final class DesktopWindowHandoff {
         frame.width > 0 && frame.height > 0 && accessibilityFrame.width > frame.width * 1.5
             && accessibilityFrame.height > frame.height * 1.5
     }
+    private func systemOwnsPlacement(frame: CGRect, element: AXUIElement) -> Bool {
+        guard let logicalFrame = WindowSizer.frame(of: element) else { return false }
+        return Self.isScaledPreview(frame, accessibilityFrame: logicalFrame)
+    }
     private func reachable(_ frame: CGRect, on display: CGRect) -> Bool {
         contains(display, CGRect(origin: frame.origin, size: CGSize(width: min(40, frame.width), height: min(28, frame.height))))
     }
@@ -237,6 +290,48 @@ final class DesktopWindowHandoff {
         return CGRect(x: min(max(rect.minX, area.minX), area.maxX - width),
                       y: min(max(rect.minY, area.minY + 28), area.maxY - height - 8), width: width, height: height)
     }
+
+    #if DUO_DISPLAY_RESTORE_TESTING
+    /// Exercise refused AX writes without touching windows or display configuration.
+    static func inspectRefusedWindowHandoffForTesting() async -> [Bool] {
+        let handoff = DesktopWindowHandoff(sourceID: 5, homes: [:])
+        let element = AXUIElementCreateApplication(getpid())
+        handoff.windows = [4, 5, 4].enumerated().map { index, display in
+            Window(placement: WindowSizer.Placement(windowID: UInt32(index), pid: getpid(), element: element,
+                originalFrame: .zero, appName: "fixture", title: ""), displayID: UInt32(display),
+                originalFullscreen: false, normalHome: .zero)
+        }
+        var checks: [Bool] = []
+        var visited: [Int] = []
+        do {
+            try await handoff.applyRecordedWindows { index in
+                visited.append(index)
+                if index == 0 { throw Failure.windowUnavailable }
+            }
+            checks.append(visited == [0, 1, 2])
+        } catch { checks.append(false) }
+
+        visited = []
+        do {
+            try await handoff.applyRecordedWindows { index in
+                visited.append(index)
+                if index == 1 { throw Failure.windowUnavailable }
+            }
+            checks.append(false)
+        } catch { checks.append(visited == [0, 1]) }
+
+        visited = []
+        do {
+            try await handoff.applyRecordedWindows { index in
+                visited.append(index)
+                throw CancellationError()
+            }
+            checks.append(false)
+        } catch is CancellationError { checks.append(visited == [0]) }
+          catch { checks.append(false) }
+        return checks
+    }
+    #endif
 }
 
 private extension CGRect { var area: CGFloat { isNull ? 0 : width * height } }

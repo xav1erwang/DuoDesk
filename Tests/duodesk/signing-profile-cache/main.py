@@ -16,10 +16,20 @@ root = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location("duodesk_profile_cache", root / "Signing/renew.py")
 renew = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(renew)
+import device_install
 
 
 class ProfileCacheTests(unittest.TestCase):
     def setUp(self):
+        # These suites isolate signing/snapshot behavior; device-version checks have their own
+        # simulated two-Mac regression tests in signing-device-version.
+        for stub in (patch.object(renew, "installed_version", return_value=None),
+                     patch.object(renew, "capture_snapshot", side_effect=lambda *args: ("a" * 64, self.root)),
+                     patch.object(renew, "project_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "installed_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "project_version", return_value=("0.1.0", "1"))):
+            stub.start()
+            self.addCleanup(stub.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -146,7 +156,7 @@ class ProfileCacheTests(unittest.TestCase):
     def exercise_renewal_after_stale_export(self, newer):
         app = self.local / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
         app.mkdir(parents=True)
-        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
         old_expiration = self.clock + dt.timedelta(days=4)
         (self.local / "signing-status.json").write_text(json.dumps({
             "status": "installed", "binding": renew.config_binding(self.config),
@@ -164,7 +174,7 @@ class ProfileCacheTests(unittest.TestCase):
                 fresh_root = Path(args[args.index("-derivedDataPath") + 1])
                 fresh_app = fresh_root / "Build/Products/Debug-iphoneos/Sill.app"
                 fresh_app.mkdir(parents=True)
-                (fresh_app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+                (fresh_app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
             if args[0] in {"/usr/bin/codesign", "/usr/bin/xcrun"}:
                 self.assertEqual(self.target.read_bytes(), b"target-profile")
             return types.SimpleNamespace(returncode=0)
@@ -192,7 +202,7 @@ class ProfileCacheTests(unittest.TestCase):
     def test_invalid_incremental_signature_is_rebuilt_and_verified_before_install(self):
         app = self.local / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
         app.mkdir(parents=True)
-        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
         (self.local / "signing-status.json").write_text(json.dumps({
             "status": "installed", "binding": renew.config_binding(self.config),
             "expires_at": (self.clock + dt.timedelta(days=4)).isoformat(), "source_id": "a" * 64}))
@@ -207,7 +217,7 @@ class ProfileCacheTests(unittest.TestCase):
                 fresh_root = Path(args[args.index("-derivedDataPath") + 1])
                 fresh_app = fresh_root / "Build/Products/Debug-iphoneos/Sill.app"
                 fresh_app.mkdir(parents=True)
-                (fresh_app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+                (fresh_app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
             if args[0] == "/usr/bin/xcrun":
                 self.assertEqual(self.target.read_bytes(), b"target-profile")
             return types.SimpleNamespace(returncode=0)

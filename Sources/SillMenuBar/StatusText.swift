@@ -313,8 +313,8 @@ enum StatusText {
     private static func word(_ route: ClientLink.Route) -> String {
         switch route {
         case .wired: return "有线"
-        case .wifi: return "Wi\u{2011}Fi"
-        case .direct: return "直连"
+        case .wifi: return "局域网"
+        case .direct: return "就近连接"
         }
     }
 

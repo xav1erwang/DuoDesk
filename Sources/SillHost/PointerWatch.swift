@@ -82,6 +82,7 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
     private let traceInputTiming = ProcessInfo.processInfo.environment["SILL_TEST_INPUT_TIMING"] == "1"
     // Under `lock`:
     private var control = PointerControl()
+    private var delivery = PointerDeliveryCheck()
     private var geometry: Geometry?
     private var fps = 60
     /// The last location read (the real pointer's or the scripted one's), to tell a read that moved.
@@ -126,6 +127,7 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
     /// A regular-mode window's state is re-read at once (off this thread).
     func setGeometry(_ g: Geometry?, fps: Int) {
         lock.lock()
+        if geometry != g { delivery = PointerDeliveryCheck() }
         geometry = g
         self.fps = max(1, fps)
         var reread: CGWindowID?
@@ -155,6 +157,14 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
             testPoint = p
             testPointAt = now
         }
+    }
+
+    /// A mouse event was posted. The next ordinary cursor samples confirm whether the system
+    /// cursor actually moved; counting a CGEventPost call alone cannot establish that.
+    func pointerPosted(to point: CGPoint) {
+        lock.lock(); defer { lock.unlock() }
+        guard !synthetic else { return }
+        delivery.posted(to: point, now: clock())
     }
 
     // MARK: From the network queue
@@ -215,6 +225,7 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
             }
         }
         guard let p = read else { lock.unlock(); return nil }
+        let delivered = synthetic ? nil : delivery.read(p, now: now)
         let moved = lastRead.map { $0 != p } ?? true
         lastRead = p
         let handedOver = control.read(p, now: now)
@@ -243,6 +254,15 @@ final class PointerWatch: @unchecked Sendable {   // every stored var is under `
                               inside: f.inside && onScreen, controller: control.controller,
                               moving: control.isMoving(now: now))
         lock.unlock()
+        switch delivered {
+        case .unconfirmed:
+            Stats.shared.bump("in.pointerUnconfirmed")
+            print("Pointer delivery: mouse input posted, but the system cursor stayed still away from the requested position for 350 ms")
+        case .movedAgain:
+            Stats.shared.bump("in.pointerMovedAgain")
+            print("Pointer delivery: the system cursor moved again")
+        case nil: break
+        }
         if let reread { dispatchReread(reread) }
         if handedOver { Stats.shared.bump("ptr.mac") }
         return reading

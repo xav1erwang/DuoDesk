@@ -2,6 +2,7 @@
 import Foundation
 import Observation
 import SillHostCore
+import StreamProtocol
 
 /// The app's settings: the host's knobs (`config`) and a few facts the UI remembers, all in
 /// UserDefaults (the bundle's domain, me.saffer.sill.mac; the bare SillMenuBar binary's is
@@ -47,6 +48,8 @@ final class HostSettings {
         static let updateCheck = "updateCheck"
         static let keepAvailable = "keepAvailable"
         static let shareClipboard = "shareClipboard"
+        static let nearbyDefaultApplied = "nearbyDefaultApplied"
+        static let idleSleepDefaultApplied = "idleSleepDefaultApplied"
     }
 
     var config: HostConfig {
@@ -58,6 +61,17 @@ final class HostSettings {
     }
     /// Called after `config` changed and was saved, on the main actor, before the assignment returns.
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
+
+    /// One user-facing choice applies to both local and internet connections in Duo.
+    var pictureQuality: Int {
+        get { DuoQualityLabels.preset(forBitrate: config.bitrate).rawValue }
+        set {
+            var next = config
+            next.bitrate = newValue
+            next.awayBitrate = newValue
+            config = next
+        }
+    }
 
     /// The Settings tab shown last, reopened next time.
     var settingsTab: SettingsTab { didSet { defaults.set(settingsTab.rawValue, forKey: Key.settingsTab) } }
@@ -113,6 +127,17 @@ final class HostSettings {
             standard.awayCaptureScale = 2
             standard.awayBitrate = 15_000_000
             standard.prioritizeSpeed = true
+            standard.remoteAccess = true
+            standard.directWireless = true
+            // Adopt Duo's new default once; later changes made in Settings still persist.
+            if !defaults.bool(forKey: Key.nearbyDefaultApplied) {
+                defaults.set(true, forKey: Key.directWireless)
+                defaults.set(true, forKey: Key.nearbyDefaultApplied)
+            }
+            if !defaults.bool(forKey: Key.idleSleepDefaultApplied) {
+                defaults.set(false, forKey: Key.keepAvailable)
+                defaults.set(true, forKey: Key.idleSleepDefaultApplied)
+            }
         }
         defaults.register(defaults: [
             Key.maxFPS: standard.maxFPS,
@@ -122,15 +147,15 @@ final class HostSettings {
             Key.awayCaptureScale: Double(standard.awayCaptureScale),
             Key.prioritizeSpeed: standard.prioritizeSpeed,
             Key.virtualDisplay: standard.virtualDisplay,
-            // Off, like the CLI: an existing install has no key, so it stops asking for AWDL.
+            // Duo allows nearby connections by default; the upstream CLI keeps its own default.
             Key.directWireless: standard.directWireless,
-            // Off, and the internet switch too: only the Mac's own user widens exposure.
+            // Paired-device connections are always available in Duo; router forwarding is optional.
             Key.remoteAccess: standard.remoteAccess,
             Key.remotePort: standard.remotePort,
             Key.internetAccess: standard.internetAccess,
             Key.remoteAddressName: "",
             Key.updateCheck: Bundle.main.bundleIdentifier != "com.duodesk.host",
-            Key.keepAvailable: Bundle.main.bundleIdentifier == "com.duodesk.host",
+            Key.keepAvailable: false,
             // On, like the CLI: each device has its own switch, and a password manager's copies never go.
             Key.shareClipboard: standard.shareClipboard,
         ])
@@ -142,7 +167,7 @@ final class HostSettings {
                             prioritizeSpeed: defaults.bool(forKey: Key.prioritizeSpeed),
                             virtualDisplay: defaults.bool(forKey: Key.virtualDisplay),
                             directWireless: defaults.bool(forKey: Key.directWireless),
-                            remoteAccess: defaults.bool(forKey: Key.remoteAccess),
+                            remoteAccess: Bundle.main.bundleIdentifier == "com.duodesk.host" || defaults.bool(forKey: Key.remoteAccess),
                             remotePort: defaults.integer(forKey: Key.remotePort),
                             internetAccess: defaults.bool(forKey: Key.internetAccess),
                             // Never a default or a launch argument: it lives with the trust list

@@ -19,7 +19,7 @@ struct MenuEntry: Equatable {
         case setDirectWireless(Bool)
         case setMaxFPS(Int), setBitrate(Int), setCaptureScale(CGFloat)
         case toggleLaunchAtLogin
-        case showLog, showSettings, quit
+        case showLog, showSettings, showFeedback, quit
         /// Settings on one tab (Remote Access…); the plain `showSettings` stays for ⌘,. (Swift
         /// allows no second case named `showSettings`.)
         case showSettingsTab(SettingsTab)
@@ -85,11 +85,11 @@ enum MenuBuilder {
         }
         menu.append(.separator)
 
-        menu.append(MenuEntry(kind: .item, title: "配对 iPhone 或 iPad…", enabled: p.canPair,
+        menu.append(MenuEntry(kind: .item, title: "配对设备…", enabled: p.canPair,
                               symbol: "qrcode", action: .showPairing))
         menu.append(.separator)
         menu.append(MenuEntry(kind: .item, title: "设置…", key: ",", symbol: "gearshape", action: .showSettings))
-        menu.append(MenuEntry(kind: .item, title: "显示日志…", symbol: "doc.text", action: .showLog))
+        menu.append(MenuEntry(kind: .item, title: "用户反馈…", symbol: "text.bubble", action: .showFeedback))
         menu.append(.separator)
         menu.append(MenuEntry(kind: .item, title: "退出 DUO你电脑", key: "q", symbol: "power", action: .quit))
         return menu
@@ -214,6 +214,7 @@ final class StatusItemController: NSObject {
         case .setCaptureScale(let scale): model.settings.config.captureScale = scale
         case .toggleLaunchAtLogin: model.loginItem.set(!model.loginItem.isOn)
         case .showLog: model.showLog?()
+        case .showFeedback: FeedbackWindowController.shared.show()
         case .showSettings: model.showSettings?(nil)
         case .showSettingsTab(let tab): model.showSettings?(tab)
         case .showPairing: model.pairDevice()

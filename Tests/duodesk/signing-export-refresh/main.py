@@ -15,10 +15,20 @@ root = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location("duodesk_renew_export", root / "Signing/renew.py")
 renew = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(renew)
+import device_install
 
 
 class ExportRefresh(unittest.TestCase):
     def setUp(self):
+        # These suites isolate signing/snapshot behavior; device-version checks have their own
+        # simulated two-Mac regression tests in signing-device-version.
+        for stub in (patch.object(renew, "installed_version", return_value=None),
+                     patch.object(renew, "capture_snapshot", return_value=("a" * 64, Path("/tmp/duodesk-approved-source"))),
+                     patch.object(renew, "project_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "installed_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "project_version", return_value=("0.1.0", "1"))):
+            stub.start()
+            self.addCleanup(stub.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.local = Path(self.temp.name)
@@ -29,7 +39,7 @@ class ExportRefresh(unittest.TestCase):
         self.new_expiry = self.current + dt.timedelta(days=7)
         self.cached = self.local / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
         self.cached.mkdir(parents=True)
-        (self.cached / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+        (self.cached / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
         binding = hashlib.sha256(json.dumps({k: self.config[k] for k in ("team_id", "device_id", "bundle_id")},
                                             sort_keys=True).encode()).hexdigest()
         self.state = {"status": "installed", "binding": binding, "checked_at": self.current.isoformat(),
@@ -64,7 +74,7 @@ class ExportRefresh(unittest.TestCase):
         elif args[0] == "/usr/bin/ditto":
             app = Path(args[-1]) / "Payload/Sill.app"
             app.mkdir(parents=True)
-            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
         elif args[0] == "/usr/bin/xcrun" and self.install_failure:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0)

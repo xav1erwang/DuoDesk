@@ -65,6 +65,7 @@ final class InputInjector {
     private var lastKeyFlags: UInt64 = 0
     /// Where the last pointer event went: a synthetic host's pointer, which it never reads.
     private var lastPointerLocation: CGPoint = .zero
+    private var lastPointerFlags: UInt64?
 
     init() {
         prepareForInput()
@@ -222,7 +223,26 @@ final class InputInjector {
         watch?.sillMoved(to: location)   // before the post (see `watch`); a dry run moves the scripted pointer
         let watchedAt = beganAt.map { _ in Date().timeIntervalSince1970 }
         lastPointerLocation = location
-        if post(event) { Stats.shared.bump("in.pointer") }
+        if post(event) {
+            Stats.shared.bump("in.pointer")
+            let flags = event.flags.rawValue & Self.modifierBits
+            if flags != lastPointerFlags {
+                lastPointerFlags = flags
+                print("Pointer modifier flags: \(KeyStrokes.names(flags)); remote modifiers held: \(KeyStrokes.names(keys.heldFlags))")
+            }
+            let kind: String
+            switch type {
+            case .mouseMoved: kind = "move"
+            case .leftMouseDragged, .rightMouseDragged: kind = "drag"
+            case .leftMouseDown: kind = "leftDown"
+            case .leftMouseUp: kind = "leftUp"
+            case .rightMouseDown: kind = "rightDown"
+            case .rightMouseUp: kind = "rightUp"
+            default: kind = "other"
+            }
+            Stats.shared.bump("in.\(kind)")
+            watch?.pointerPosted(to: location)
+        }
         if let beganAt, let createdAt, let watchedAt {
             print("Input pointer timing: began=\(beganAt) created=\(createdAt) watched=\(watchedAt) posted=\(Date().timeIntervalSince1970)")
         }

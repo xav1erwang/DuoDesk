@@ -472,7 +472,7 @@ struct CableNoticeView: View {
                 Label(Self.firstLine(name), systemImage: "checkmark.circle.fill")
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("设备已通过 USB 线缆自动配对，之后也可通过 Wi-Fi 或附近直连。")
+                Text("设备已通过 USB 线缆自动配对，之后也可通过局域网或就近连接。")
                     .fixedSize(horizontal: false, vertical: true)
                 if let removeProblem {
                     Warning("\(name) 仍处于配对状态：无法更新钥匙串（\(withoutFullStop(removeProblem))）。请重试。")

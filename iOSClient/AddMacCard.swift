@@ -134,7 +134,7 @@ struct AddMacCard: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
         } else {
-            Text("配对后，可以通过局域网或公网地址直连 Mac。")
+            Text("配对后，可以通过局域网或公网地址连接 Mac。")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)

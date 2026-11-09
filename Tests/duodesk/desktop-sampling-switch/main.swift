@@ -108,6 +108,23 @@ import Foundation
             fatalError("scaled Stage Manager previews must not be treated as movable windows")
         }
         print("PASS: scaled Stage Manager previews are excluded while normal or moved windows remain eligible")
+        let recorded = CGRect(x: 0, y: 30, width: 1920, height: 965)
+        let afterMirror = CGRect(x: -251, y: 250, width: 154, height: 119)
+        guard !DesktopWindowHandoff.isScaledPreview(recorded, accessibilityFrame: recorded),
+              DesktopWindowHandoff.isScaledPreview(afterMirror, accessibilityFrame: recorded),
+              !DesktopWindowHandoff.isScaledPreview(afterMirror, accessibilityFrame: afterMirror) else {
+            fatalError("a window that becomes a system preview during mirroring must be recognized from its live frame")
+        }
+        print("PASS: a selected window transformed after recording is recognized as a system preview")
+        let handoff = await DesktopWindowHandoff.inspectRefusedWindowHandoffForTesting()
+        let handoffLabels = ["a refused utility window on another screen does not block the selected desktop",
+                             "a selected desktop window failure still reaches the caller",
+                             "cancellation stops the handoff even on another screen"]
+        guard handoff.count == handoffLabels.count else { fatalError("window handoff fixture did not finish") }
+        for (passed, label) in zip(handoff, handoffLabels) {
+            guard passed else { fatalError(label) }
+            print("PASS: \(label)")
+        }
         guard let extensionWrites = DuoDesktopDisplay.inspectExtendedModeWritesForTesting(), extensionWrites.count == 4 else {
             fatalError("read-only extended display fixture could not inspect the current mode")
         }

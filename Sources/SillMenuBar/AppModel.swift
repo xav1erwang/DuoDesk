@@ -13,6 +13,7 @@ final class AppModel {
     let settings: HostSettings
     let permissions: PermissionsModel
     let loginItem = LoginItemModel()
+    let bootService = BootServiceModel()
     /// The update check (GitHub's releases feed): the menu's "Sill 0.4 Is Available…" and Settings ›
     /// General's section. Started once the host has started, or could not.
     let updates: UpdateChecker
@@ -67,6 +68,7 @@ final class AppModel {
     /// changing then (the older-device item's 10 minutes).
     @ObservationIgnored private var presentationExpiry: Task<Void, Never>?
     @ObservationIgnored private var presentationExpiryAt: Date?
+    @ObservationIgnored private var availability: HostAvailability?
 
     init() {
         let settings = HostSettings()
@@ -105,6 +107,15 @@ final class AppModel {
                 // with it. A keychain failure leaves the home door closed and remote access
                 // unavailable, not the app (docs/home-pairing-plan.md §6.1).
                 let remote = await makeRemoteAccess()
+                bootService.identity = { [weak remote] in
+                    guard let remote else { throw IdentityStoreError("Mac 尚未准备好。") }
+                    return try remote.bootIdentity()
+                }
+                if !synthetic, Bundle.main.bundleIdentifier == "com.duodesk.host" {
+                    bootService.start()
+                } else {
+                    bootService.refresh()
+                }
                 identityLoading = false
                 settings.config.requirePairing = launchRequirePairing(remote)
                 // The window lists carry this Sill's version, when it has one (the bare binary's
@@ -125,13 +136,19 @@ final class AppModel {
                 // accepted only menu values, and validating here would rewrite unrelated hand-set
                 // keys (which save(changedFrom:) would then write).
                 c.onDeviceSettingsChange = { [settings] change, away in
-                    settings.config = away ? settings.config.applyingAway(change) : settings.config.applying(change)
+                    var next = away ? settings.config.applyingAway(change) : settings.config.applying(change)
+                    if Bundle.main.bundleIdentifier == "com.duodesk.host", let bitrate = change.bitrate {
+                        next.bitrate = bitrate
+                        next.awayBitrate = bitrate
+                    }
+                    settings.config = next
                     return settings.config
                 }
                 // Not in HostConfig (it moves no listener): handed over on its own.
                 remote.setAddressName(settings.remoteAddressName)
                 settings.onAddressNameChange = { [settings, weak remote] in remote?.setAddressName(settings.remoteAddressName) }
                 await c.start(preselect: nil, promptForPermissions: false)
+                availability = HostAvailability { [weak c] in c?.recoverNetworkAdvertisement() }
                 Stats.shared.startPrinting()
                 print("Sill \(Self.version) (\(Self.build)) running from \(Bundle.main.bundlePath); log file \(HostLog.shared.fileURL?.path ?? "none")")
                 onboardIfNeeded()
@@ -195,13 +212,13 @@ final class AppModel {
             // The strong keychain: no other process can pre-create or read these items. Logged so a
             // release build can be confirmed hardened (and Noah's on-device pass can read it back).
             print("Remote access: the identity is in the data-protection keychain (access group \(group)).")
-            return KeychainIdentityStore(accessGroup: group)
+            return BootMirroredIdentityStore(local: KeychainIdentityStore(accessGroup: group))
         case .legacy:
             // No keychain-access-groups entitlement (a development build, or a release with no
             // embedded provisioning profile): the login keychain, the profile-free fallback. Said in
             // the log so a build that should have hardened but did not is visible.
             print("Remote access: the identity is in the login keychain (no keychain-access-groups entitlement — a development build, or a release with no embedded provisioning profile; docs/keychain-plan.md).")
-            return KeychainIdentityStore()
+            return BootMirroredIdentityStore(local: KeychainIdentityStore())
         case .memory:
             return MemoryIdentityStore()
         case .testDirectory(let path):
@@ -232,6 +249,12 @@ final class AppModel {
     /// Sill.app ignores the argument with a line.
     private func launchRequirePairing(_ remote: RemoteAccess) -> Bool {
         let stored = remote.storedRequirePairing()
+        if Bundle.main.bundleIdentifier == "com.duodesk.host" {
+            if !stored, let problem = remote.saveRequirePairing(true) {
+                print("Pairing remains required; the saved policy could not be updated: \(problem)")
+            }
+            return true
+        }
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: "requirePairing") != nil else { return stored }
         if Self.bundled {
@@ -401,7 +424,8 @@ final class AppModel {
     /// missing, Settings opens on Permissions. The test pattern needs none.
     private func onboardIfNeeded() {
         permissions.refresh()
-        guard !synthetic, !permissions.allGranted, !settings.permissionsOnboardingDismissed else { return }
+        let needsSetup = !permissions.allGranted || bootService.needsApproval || bootService.error != nil
+        guard !synthetic, needsSetup, !settings.permissionsOnboardingDismissed else { return }
         showSettings?(.permissions)
     }
 }

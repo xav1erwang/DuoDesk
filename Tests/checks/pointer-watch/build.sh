@@ -8,5 +8,6 @@ cp "$WT"/Sources/StreamProtocol/*.swift "$T"/
 sed '/^import StreamProtocol$/d' "${3:-$WT/Sources/SillHost/PointerWatch.swift}" > "$T/PointerWatch.swift"
 sed '/^import StreamProtocol$/d' "$WT/Sources/SillHost/PointerControl.swift" > "$T/PointerControl.swift"
 cp "$WT/Sources/SillHost/Stats.swift" "$T/Stats.swift"
+cp "$WT/Sources/SillHost/PointerDeliveryCheck.swift" "$T/PointerDeliveryCheck.swift"
 cp "$(dirname "$0")/main.swift" "$T/main.swift"
 swiftc -O -package-name sill "$T"/*.swift -o "$OUT" 2>&1 | grep -E "error" ; rm -rf "$T"

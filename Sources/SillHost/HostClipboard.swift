@@ -58,6 +58,8 @@ final class HostClipboard {
     private var look: Task<Void, Never>?
     /// Each connection's subscriptions and texts of the last second (ClipboardPolicy.hostReceives).
     private var arrivals: [ObjectIdentifier: [Double]] = [:]
+    private var pendingWrites = 0
+    private var inputAfterWrite: [(device: ObjectIdentifier, input: @MainActor () -> Void)] = []
     /// macOS's answer at the last look, for its line (ClipboardPolicy.accessLine); kept for the launch.
     private var reportedAccess: ClipboardPolicy.MacAccess?
     private lazy var ignored = RefusalSummary(queue: .main, categories: ["rate", "tooLong", "undecodable"]) { counts in
@@ -155,7 +157,10 @@ final class HostClipboard {
             subscribe(connection, who: who)
         case .set(let text):
             subscribe(connection, who: who)
-            board.write(text)
+            pendingWrites += 1
+            board.write(text) { [weak self] in
+                Task { @MainActor in self?.writeFinished() }
+            }
             Stats.shared.bump("clip.recv")
             let others = ClipboardPolicy.forward(to: order, from: id).compactMap { subscribers[$0]?.connection }
             if testLog { print("Test clipboard: \(text.utf8.count) bytes from \(who) set on the pasteboard, sent to \(others.count) other device\(others.count == 1 ? "" : "s").") }
@@ -170,9 +175,25 @@ final class HostClipboard {
         }
     }
 
+    /// A paste shortcut must reach the target app after its clipboard write. Other input
+    /// stays in order behind it, while the pasteboard queue keeps any slow read off the UI.
+    func afterPendingWrites(from connection: NWConnection, _ input: @escaping @MainActor () -> Void) {
+        if pendingWrites == 0 { input() }
+        else { inputAfterWrite.append((ObjectIdentifier(connection), input)) }
+    }
+
+    private func writeFinished() {
+        pendingWrites -= 1
+        guard pendingWrites == 0 else { return }
+        let waiting = inputAfterWrite
+        inputAfterWrite = []
+        for item in waiting { item.input() }
+    }
+
     /// The device left: forgotten without a line.
     func clientLeft(_ connection: NWConnection) {
         let id = ObjectIdentifier(connection)
+        inputAfterWrite.removeAll { $0.device == id }
         arrivals[id] = nil
         guard subscribers.removeValue(forKey: id) != nil else { return }
         order.removeAll { $0 == id }
@@ -315,7 +336,7 @@ final class HostClipboard {
 
         /// A device's text, for this Mac only, marked as this launch's, its change count kept. Written
         /// whatever macOS says of reads: writing needs no leave.
-        func write(_ text: String) {
+        func write(_ text: String, completion: @escaping @Sendable () -> Void) {
             queue.async {
                 let prepared = self.board.prepareForNewContents(with: .currentHostOnly)
                 let item = NSPasteboardItem()
@@ -327,6 +348,7 @@ final class HostClipboard {
                 let count = self.lastAccess.map(ClipboardPolicy.hostLooks) == false ? prepared : self.board.changeCount
                 self.ownChangeCount = count
                 self.seen = count
+                completion()
             }
         }
     }

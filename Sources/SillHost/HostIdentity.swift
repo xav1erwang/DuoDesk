@@ -92,7 +92,10 @@ package final class HostIdentity: @unchecked Sendable {
     package func txtRecord(homeDoor p: String? = nil) -> NWTXTRecord? {
         guard let tag = RecognitionTag.make(recognitionKey: recognitionKey) else { return nil }
         var entries = [RecognitionTag.txtKey: tag]
-        if let p { entries[HomeDoorTXT.key] = p }
+        if let p {
+            entries[HomeDoorTXT.key] = p
+            entries[LocalPathProbeReply.txtKey] = String(LocalPathProbeReply.generation)
+        }
         return NWTXTRecord(entries)
     }
 }

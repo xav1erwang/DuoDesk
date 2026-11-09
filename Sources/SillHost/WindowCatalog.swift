@@ -135,10 +135,10 @@ final class WindowCatalog {
 
     /// Starts the one-time installed-app scan, and polling if a client is already connected.
     /// Does not read the window list itself: the coordinator awaits `refreshWindows()` right after.
-    func start() {
+    func start(scanApplications: Bool = true) {
         guard !started else { return }
         started = true
-        scanInstalledApps()
+        if scanApplications { scanInstalledApps() }
         if clientCount > 0 { startPolling() }
     }
 

@@ -61,3 +61,17 @@
   (`Sources/SillMenuBar/StatusGlyph.swift`): the iMac outline with the tilted
   iPad, as a template image. `SillMenuBar -SillRenderPreviews <dir>` writes
   `glyphs.png` with every state on light and dark bars.
+- `readme/build.py` renders the README's images into `docs/images/readme/`:
+  the Visiontec lockup (Montserrat Black at the wordmark's 0.18em tracking,
+  the icon's own V as a watermark, the deep-blue tokens from MacTheme), the
+  Bilibili button, and the product renders cropped onto rounded plates. A
+  dark and a light banner are written, and `README.md` picks between them with
+  `<picture>` and `prefers-color-scheme`. Needs macOS 27, Google Chrome (the
+  layout and gradients), Pillow, and `ictool` for the app icon:
+
+  ```sh
+  python3 design/readme/build.py
+  ```
+
+  Text set as an image stays in the banner only; everything else in the
+  README is Markdown, so it remains readable to screen readers and search.

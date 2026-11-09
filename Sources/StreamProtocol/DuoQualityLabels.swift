@@ -3,12 +3,18 @@ import Foundation
 
 /// Product-facing labels; the stored bitrates and upstream protocol names stay unchanged.
 public enum DuoQualityLabels {
+    public static let presets: [QualityPreset] = [.balanced, .low, .high]
+
+    public static func preset(forBitrate bitrate: Int) -> QualityPreset {
+        presets.min { abs($0.rawValue - bitrate) < abs($1.rawValue - bitrate) } ?? .balanced
+    }
+
     public static func name(forBitrate bitrate: Int) -> LocalizedStringResource {
         return switch QualityPreset(rawValue: bitrate) {
-        case .low: "省流"
+        case .low: "低流量"
         case .efficient: "高效"
         case .balanced: "均衡"
-        case .high: "高清"
+        case .high: "高画质"
         case .pro: "专业"
         case .ultra: "超清"
         case .extreme: "极致"
@@ -19,10 +25,10 @@ public enum DuoQualityLabels {
     public static func title(forBitrate bitrate: Int) -> LocalizedStringResource {
         let rate = QualityPreset.mbps(bitrate)
         return switch QualityPreset(rawValue: bitrate) {
-        case .low: "省流 — \(rate) Mbps"
+        case .low: "低流量 — \(rate) Mbps"
         case .efficient: "高效 — \(rate) Mbps"
         case .balanced: "均衡 — \(rate) Mbps"
-        case .high: "高清 — \(rate) Mbps"
+        case .high: "高画质 — \(rate) Mbps"
         case .pro: "专业 — \(rate) Mbps"
         case .ultra: "超清 — \(rate) Mbps"
         case .extreme: "极致 — \(rate) Mbps"

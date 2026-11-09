@@ -73,6 +73,8 @@ enum DoorPolicy {
             return door == .home ? t.paired || !t.requirePairing : t.paired
         case RemoteTLS.pairingALPN?:
             return door == .home ? true : t.remotePairingOpen
+        case RemoteTLS.pathProbeALPN?:
+            return door == .home && t.paired
         default:
             return false
         }
@@ -86,6 +88,8 @@ enum DoorPolicy {
         /// A pairing connection: read exactly one kind 19 (at most 4 KiB, within the admission
         /// deadline), then treat it as `pairing(_:method:version:)` says.
         case pairing
+        /// An echo-only local connection; never registered as a viewer.
+        case pathProbe
         /// A paired key the door does not serve now: this goodbye ("remoteOff", "busy"), then close.
         case goodbye(String)
         /// Cancelled with no Sill byte, counted under this word in the minute's summary ("unpaired").
@@ -104,6 +108,8 @@ enum DoorPolicy {
             return trusts(.home, alpn: alpn, t) ? .session : .refuse("unpaired")
         case (.home, RemoteTLS.pairingALPN?):
             return .pairing
+        case (.home, RemoteTLS.pathProbeALPN?):
+            return t.paired ? .pathProbe : .refuse("unpaired")
         case (.remote, RemoteTLS.sessionALPN?):
             guard t.paired else { return .refuse("unpaired") }
             guard t.remoteAccess else { return .goodbye(Goodbye.remoteOff) }

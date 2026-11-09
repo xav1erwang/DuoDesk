@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>Label</key><string>com.duodesk.host.boot</string>
+    <key>BundleProgram</key><string>Contents/MacOS/DuoDeskHost</string>
+    <key>ProgramArguments</key><array><string>DuoDeskHost</string><string>--boot-service</string></array>
+    <key>MachServices</key><dict><key>com.duodesk.host.boot</key><true/></dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>5</integer>
+    <key>ProcessType</key><string>Background</string>
+</dict></plist>

@@ -168,6 +168,7 @@ extension StreamClient {
     func persistSavedMacs() {
         storeSavedMacs()
         recomputeMacs()
+        updateLocalPathMeasurements()
         updateDiscovery()
     }
 
@@ -580,6 +581,7 @@ extension StreamClient {
     func sessionEnded(error: NWError?, end: RemoteDialPolicy.End?) {
         let s = session
         let goodbye = self.goodbye
+        let failedBeforePicture = connected && !hasPresentedSessionPicture
         firstListDeadline?.cancel()
         firstListDeadline = nil
         let saved = s?.macID.flatMap { savedMac($0) }
@@ -653,6 +655,7 @@ extension StreamClient {
             persistSavedMacs()
         }
         tearDown(status: outcome.text)
+        if failedBeforePicture { showConnectionFailure(outcome.text) }
         reconnect = outcome.reconnect ? lostReconnect(session: s, saved: saved, name: name, remoteAllowed: outcome.remoteAllowed,
                                                       afterQuit: goodbye?.reason == Goodbye.quit) : nil
         updateDiscovery()
@@ -673,6 +676,7 @@ extension StreamClient {
         let outcome = GoodbyePolicy.outcome(goodbye, mac: name, device: Self.deviceWord, saved: saved != nil)
         tearDown(status: outcome.text, restartSearch: connected)
         notice = Notice(text: outcome.text, storeLink: outcome.storeLink)
+        if !outcome.reconnect { showConnectionFailure(outcome.text) }
         if s?.why == .afterPairing {
             afterPairingWatch?.cancel()
             afterPairingWatch = nil

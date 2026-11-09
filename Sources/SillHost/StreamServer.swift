@@ -154,6 +154,7 @@ final class StreamServer {
 
     /// The network queue: both doors, their connections, the verify blocks and the timers.
     let queue: DispatchQueue
+    lazy var pathProbes = LocalPathProbeServer(queue: queue)
     private let videoIngressLock = NSLock()
     private var videoIngress = EncodedVideoMailbox()
     private let touchBarIngressLock = NSLock()
@@ -449,6 +450,7 @@ final class StreamServer {
     private var swapCount = 0
     private var replacementPort: NWEndpoint.Port?    // the port the current replacement tried; nil = any port
     private var started = false
+    private var serviceRefresh: DispatchWorkItem?
     private let portLock = NSLock()                  // `port` is read on the main actor
     private var readyPort: UInt16?
     /// 6× the shortest clean pause measured, and past the ~1 s the old record's removal takes to show.
@@ -760,8 +762,8 @@ final class StreamServer {
 
     /// On `queue`. Starts replacing the listener when the wanted flag differs from the one it was
     /// built with, unless a replacement is under way: that one looks again when it settles.
-    private func beginSwap() {
-        guard started, swap == .idle, wantedPeerToPeer != peerToPeer else { return }
+    private func beginSwap(force: Bool = false) {
+        guard started, swap == .idle, force || wantedPeerToPeer != peerToPeer else { return }
         swapCount += 1
         let n = swapCount
         swap = .cancelling(n)
@@ -839,6 +841,7 @@ final class StreamServer {
     /// reads (the floor above "0") is not a client yet: it is judged the same way as the gate admits
     /// it (`droppedForDirectWireless`, from the plain door's `accept` or the TLS home door's Door).
     private func disconnectPeerToPeerClients() {
+        pathProbes.close { _, connection in self.runsPeerToPeer(connection) }
         // An ask or a proof in flight over peer-to-peer Wi-Fi goes too (a TLS home door).
         homeDoor?.cancelPending { runsPeerToPeer($0) }
         for client in clients.values where !client.route.isRemote && runsPeerToPeer(client.connection) {
@@ -970,6 +973,30 @@ final class StreamServer {
         queue.async { [self] in
             guard started, swap == .idle, serviceNameAndType != nil, txtRecord != nil else { return }
             listener.service = makeService()
+        }
+    }
+
+    /// Network and power recovery must withdraw the old registration before publishing afresh.
+    /// Updating TXT alone leaves mDNSResponder's existing registration in place. Accepted
+    /// connections are independent of the listener and continue streaming through this refresh.
+    func recoverAdvertisement() {
+        queue.async { [self] in
+            guard started, serviceNameAndType != nil else { return }
+            if case .closed = homeMode { return }
+            serviceRefresh?.cancel()
+            serviceRefresh = nil
+            guard swap == .idle else { return } // The replacement publishes fresh state itself.
+            if case .failed = listener.state { beginSwap(force: true); return }
+            listener.service = nil
+            let current = listener
+            let work = DispatchWorkItem { [weak self, weak current] in
+                guard let self, let current, current === listener, swap == .idle else { return }
+                current.service = makeService()
+                serviceRefresh = nil
+                print("Local discovery: advertised again after network or wake recovery.")
+            }
+            serviceRefresh = work
+            queue.asyncAfter(deadline: .now() + Self.advertiseDelay, execute: work)
         }
     }
 
@@ -1111,6 +1138,7 @@ final class StreamServer {
                        line: (@Sendable (String, String) -> String)? = nil, done: (@Sendable (Int) -> Void)? = nil) {
         queue.async { [self] in
             let list = clients.values.filter { matching($0.route) }
+            pathProbes.close { route, _ in matching(route) }
             for client in list {
                 if let line { print(line(client.route.pairedName ?? client.device ?? "a device", "\(client.connection.endpoint)")) }
                 goodbye(Goodbye(reason: reason), to: client.connection)
@@ -1153,6 +1181,7 @@ final class StreamServer {
     /// client can remain connected forever without being able to receive a later stream.
     func goodbyeAndCloseAll(_ goodbye: Goodbye, within: TimeInterval = DeviceGate.closeWait) {
         queue.async { [self] in
+            pathProbes.close { _, _ in true }
             let connections = clients.values.map(\.connection)
             for connection in connections { self.goodbye(goodbye, to: connection, within: within) }
         }
@@ -1165,6 +1194,7 @@ final class StreamServer {
         let group = DispatchGroup()
         group.enter()
         queue.async { [self] in
+            pathProbes.close { _, _ in true }
             let data = StreamMessage(kind: .goodbye, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                                      payload: Wire.encode(goodbye)).serialized()
             for client in clients.values {
@@ -1204,8 +1234,8 @@ final class StreamServer {
     /// of now (`.ready`, or a TLS door's admission): a hello the floor admits calls `admit` with it;
     /// a lower version, a hello that does not decode, any other kind first, the end of the
     /// connection or nothing in time is refused (`refuse`), and `admit` is never called. On `queue`.
-    func gate(_ c: NWConnection, admit: @escaping (Hello?) -> Void) {
-        guard deviceFloor != .zero else { admit(nil); return }
+    func gate(_ c: NWConnection, readHello: Bool = false, admit: @escaping (Hello?) -> Void) {
+        guard readHello || deviceFloor != .zero else { admit(nil); return }
         var decided = false          // on `queue`, like every closure here
         let refuse = { [weak self] (hello: Hello?) in
             guard let self, !decided else { return }

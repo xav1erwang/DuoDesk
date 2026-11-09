@@ -71,6 +71,30 @@ func watch(synthetic: Bool = false, path: TestPointerPath? = nil, clock: Clock, 
 }
 let screen = CGRect(x: 0, y: 0, width: 1000, height: 500)
 
+// Posted input is distinct from observed cursor motion. A still desktop/video is never evidence
+// of failed mouse delivery, and neither a normal asynchronous post nor edge rounding is a stall.
+do {
+    var delivery = PointerDeliveryCheck()
+    check(delivery.read(pt(100, 100), now: 0) == nil, "no input: no delivery warning")
+    delivery.posted(to: pt(200, 100), now: 1)
+    check(delivery.read(pt(100, 100), now: 1.1) == nil, "an asynchronous mouse post has time to land")
+    check(delivery.read(pt(200, 100), now: 1.2) == nil, "observed motion confirms a posted position")
+    check(delivery.read(pt(200, 100), now: 20) == nil, "a static cursor and desktop are not a failure")
+
+    delivery.posted(to: pt(300, 100), now: 21)
+    check(delivery.read(pt(200, 100), now: 21.36) == .unconfirmed, "a posted point away from a cursor that stayed still is visible")
+    delivery.posted(to: pt(400, 100), now: 21.4)
+    check(delivery.read(pt(200, 100), now: 21.8) == nil, "continuous input does not flood the warning")
+    check(delivery.read(pt(400, 100), now: 21.9) == .movedAgain, "a real cursor move after the warning is recorded")
+
+    delivery.posted(to: pt(401, 100), now: 22)
+    check(delivery.read(pt(400, 100), now: 22.36) == nil, "one-point display-edge clamping is tolerated")
+    delivery.posted(to: pt(500, 100), now: 23)
+    check(delivery.read(pt(400, 100), now: 24) == nil, "old input is retired rather than diagnosed later")
+    delivery = PointerDeliveryCheck()
+    check(delivery.read(pt(0, 0), now: 25) == nil, "a new display geometry discards old delivery state")
+}
+
 // MARK: No geometry, no read
 
 do {

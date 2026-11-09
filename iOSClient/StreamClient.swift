@@ -70,8 +70,8 @@ struct FoundMac: Identifiable, Hashable {
         if route == .remote { return "已保存" }
         switch homeWord {
         case .method(.wired): return "有线"
-        case .method(.wifi): return "Wi\u{2011}Fi"
-        case .method(.direct): return "直连"
+        case .method(.wifi): return "局域网"
+        case .method(.direct): return "就近连接"
         case .method(nil): return nil
         case .notPaired, .openDoor: return "未配对"
         case .pairsOverCable: return "有线"
@@ -84,7 +84,7 @@ struct FoundMac: Identifiable, Hashable {
     func rowAccessibilityHint(device: String) -> String {
         if route == .remote { return "连接这台已配对的 Mac。" }
         switch homeWord {
-        case .method: return direct ? "无需共用 Wi-Fi 网络即可连接。" : ""
+        case .method: return direct ? "无需连接同一局域网即可连接。" : ""
         case .notPaired: return "\(name) 会显示配对码，配对后连接。"
         case .openDoor: return "\(name) 允许设备无需配对直接连接。"
         case .pairsOverCable: return "通过 USB 线配对并连接。"
@@ -146,15 +146,53 @@ final class StreamClient: ObservableObject {
     // seeds them.
     @Published var status = StreamClient.lookingOnNetwork {
         didSet {
-            #if DEBUG
             if status != oldValue { print("status: \(status)") }    // the simulator tests read the status line here
-            #endif
         }
     }
     /// The connect screen's rows (DiscoveryPolicy.rows): every Mac the network browser lists, then
     /// those seen only over peer-to-peer Wi-Fi.
-    @Published var macs: [FoundMac] = []
+    @Published var macs: [FoundMac] = [] {
+        didSet {
+            if macs.map(\.id) != oldValue.map(\.id) {
+                print("Discovery: \(macs.map(\.name))")
+            }
+        }
+    }
     @Published var connected = false
+    @Published private(set) var refreshingDiscovery = false
+    @Published var connectionFailurePresented = false
+    @Published private(set) var connectionFailureMessage = ""
+    @Published private(set) var hasPresentedSessionPicture = false
+    var connectionInProgress: Bool { !connected && (connection != nil || remoteDial != nil || savedLocalAttempt != nil) }
+
+    var connectionPictureReady: Bool {
+        if active == .desktop, shouldHidePendingNativeVideo || nativeDesktopResolution != nil {
+            return hasNativeDesktopVideo
+        }
+        return displayView.hasCurrentImage
+    }
+
+    var preparingConnection: Bool {
+        connected && !awaitingDisplaySelection && !hasPresentedSessionPicture && nativeDesktopIssue == nil
+    }
+
+    func showConnectionFailure(_ message: String) {
+        connectionFailureMessage = message
+        connectionFailurePresented = true
+    }
+
+    #if DEBUG
+    func runConnectionFailureChecks() {
+        let message = "Mac 暂时无法打开桌面，请重试。"
+        connected = true
+        goodbye = Goodbye(reason: "duoResolution", message: message, reconnect: false)
+        sessionEnded(error: nil, end: nil)
+        precondition(!connected && !preparingConnection && reconnect == nil)
+        precondition(connectionFailurePresented && connectionFailureMessage == message && status == message)
+        print("PASS: a desktop startup failure ends loading and retains its message in an alert")
+    }
+    #endif
+
     /// The nearby (peer-to-peer) browser runs: the status line says so, or under the hint the line
     /// in Search Nearby's place.
     @Published var searchingNearby = false
@@ -301,8 +339,7 @@ final class StreamClient: ObservableObject {
     private var settingsExpiry: DispatchWorkItem?
     /// The worst round trip of the last second that had a pong (`linkStats.rtt.max`), for the pick
     /// timeout. Kept across seconds without one: a stalled slow link reports no rtt at all, and
-    /// that must not shrink the timeout back to 4 s. Nil until measured; cleared on tear-down. Read by
-    /// the clipboard's Paste too (ClipboardPolicy.receiptWait).
+    /// that must not shrink the timeout back to 4 s. Nil until measured; cleared on tear-down.
     private(set) var lastRttMaxMs: Int?
     #if DEBUG
     /// Harness `pending` case: the mock never answers and never times out.
@@ -422,6 +459,7 @@ final class StreamClient: ObservableObject {
     #if DEBUG
     /// Isolated simulator state regression; never connects or posts Mac input.
     func runDisplaySelectionChecks() {
+        precondition(!preparingConnection)
         let main = RemoteDisplayInfo(id: 5, name: "Main", isMain: true, x: 0, y: 0,
                                      width: 1920, height: 1080, pixelWidth: 3840, pixelHeight: 2160)
         let side = RemoteDisplayInfo(id: 3, name: "Side", isMain: false, x: -1920, y: 0,
@@ -432,8 +470,11 @@ final class StreamClient: ObservableObject {
         }
         receiveDisplays(list(.none, 5))
         precondition(awaitingDisplaySelection && displayPickerPresented && !hasNativeDesktopVideo)
+        connected = true
+        precondition(!preparingConnection, "display selection must precede the connection animation")
         chooseDisplay(5)
         precondition(!awaitingDisplaySelection && pendingDisplaySelection == 5 && !hasNativeDesktopVideo)
+        precondition(preparingConnection, "choosing a display must show the connection animation in its picture pane")
         receiveDisplays(list(.none, 5))
         precondition(pendingDisplaySelection == 5, "an idle catalog must not enable input")
         receiveDisplays(list(.desktop, 3))
@@ -505,6 +546,7 @@ final class StreamClient: ObservableObject {
                                                            alreadyExtended: extendedDesktopRequested,
                                                            pathMoving: moving != nil, connectionDead: sessionDead, upper: upper,
                                                            metrics: nativeDisplayMetrics) else { return false }
+        cancelLocalPathComparison()
         upperDesktopBeforeExtension = upper
         extendedDesktopError = nil
         nativeDesktopIssue = nil
@@ -901,10 +943,15 @@ final class StreamClient: ObservableObject {
     private(set) lazy var displayView: HEVCDisplayView = {
         let view = HEVCDisplayView(frame: .zero)
         view.requireNativeResolution(expectedDesktopVideoResolution)
-        view.onVideoSize = { [weak self] size in self?.videoSize = size }
+        view.onVideoSize = { [weak self] size in
+            guard let self else { return }
+            self.videoSize = size
+            if self.connectionPictureReady { self.hasPresentedSessionPicture = true }
+        }
         view.onDecoderFailure = { [weak self] message in
             self?.disconnect()
             self?.status = message
+            self?.showConnectionFailure(message)
         }
         view.onNativeDisplaySize = { [weak self] metrics in
             DispatchQueue.main.async {
@@ -1064,7 +1111,35 @@ final class StreamClient: ObservableObject {
     /// (`toCable`) or one over the cable that went to Wi-Fi (`toWifi`), or brings a session through the
     /// remote door home to the network door once the network lists its Mac (`fromRemote`,
     /// `moveHomeIfListed`, docs/remote-bundle-plan.md §7).
-    private enum MoveKind { case fromDirect, toCable, toWifi, fromRemote }
+    private enum MoveKind { case fromDirect, toCable, toWifi, fromRemote, localComparison }
+    /// A single bounded comparison per connection. Main-thread intent, queue-confined sampling.
+    private var localPathSearch: (id: UUID, current: NWConnection)?
+    private var localPathSearchWork: DispatchWorkItem?
+    private var localPathTrialStarted = false
+    private var localPathCompared = false
+    private var measuredDirectPreferred = false
+    private var localPathTrialOnQueue: LocalPathTrial?
+    private struct LocalProbePath {
+        let endpoint: NWEndpoint
+        let interface: NWInterface
+    }
+    private struct LocalProbePlan {
+        let name: String
+        let pin: Data
+        let paths: [LocalPathProbe.Lane: LocalProbePath]
+    }
+    private struct LocalProbeMeasurement {
+        let plan: LocalProbePlan
+        let result: LocalPathProbe.Result
+    }
+    private let localMeasurements = LocalPathMeasurements<LocalProbeMeasurement>()
+    private var localProbePlans: [String: LocalProbePlan] = [:]
+    private var localProbeScans: [String: TimeInterval] = [:]
+    private var localProbeWantsNearby = false
+    private var localProbeRecheck: DispatchWorkItem?
+    private var localProbeOnQueue: LocalPathProbe?
+    private var preferredLocalProbeID: String?
+    private var localProbeAppliedToSession = false
     /// A move is under way, or carries on a session whose connection has gone (`sessionDead`): the
     /// automatic reconnect (StreamClient+Remote's `reconnectIfListed`) never runs meanwhile, so it
     /// cannot dial beside the move. Main thread.
@@ -1321,32 +1396,9 @@ final class StreamClient: ObservableObject {
     /// Mac takes and sends (`WindowList.clipboard`, 1 for text), nil from a Mac before it or with Share
     /// clipboard with devices off. Cleared with the session.
     @Published var hostClipboard: Int?
-    /// The chip "Paste on ‹Mac›" is offered (ClipboardPolicy.offersChip) until it is used, dismissed or
-    /// its time is up; the stream screen hides it while something is open over the stream.
-    @Published var clipboardChip = false
-    /// "Sent to ‹Mac›’s clipboard…" or "Too long to send…", for a moment after a Paste.
-    @Published var clipboardNote: ClipboardNote?
-    /// This connection sent its subscription and no stop since (ClipboardPolicy.deviceSubscription).
+    /// The Mac's subscription and the last local copy, for echo suppression.
     var clipboardSubscribed = false
-    /// When Sill last became active: a session that starts soon after gets the chip's look too.
-    var clipboardActivatedAt: TimeInterval?
-    /// What this device sent last, and its clipboard's change count right after: the Mac's echo of it
-    /// is not written again (ClipboardPolicy.deviceWrites).
     var clipboardSent: ClipboardPolicy.Sent?
-    var clipboardChipExpiry: DispatchWorkItem?
-    var clipboardNoteExpiry: DispatchWorkItem?
-    /// The chip is on screen (StreamScreen: nothing open over the stream, no note in its place), its time
-    /// on screen so far, since when that counts, and whether VoiceOver was told it came; Sill is active
-    /// (ClipboardPolicy.chipCounts: its 20 s run only while all say so, and VoiceOver is off).
-    var clipboardChipOnScreen = false
-    var clipboardChipShownFor: TimeInterval = 0
-    var clipboardChipCountingSince: TimeInterval?
-    var clipboardChipAnnounced = false
-    var clipboardAppActive = UIApplication.shared.applicationState == .active
-    /// A Paste waiting for the pong that says the Mac has read it (ClipboardPolicy.receiptLength), and
-    /// its timeout (`receiptWait`).
-    var clipboardReceipt: ClipboardReceipt?
-    var clipboardReceiptExpiry: DispatchWorkItem?
     /// This device's path (status, interfaces, cost), for "did it leave home since the loss".
     var pathSignature = ""
     var pathMonitor: NWPathMonitor?
@@ -1453,21 +1505,49 @@ final class StreamClient: ObservableObject {
             self?.cameForward()
         }
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.appInForeground = false
+            guard let self else { return }
+            appInForeground = false
+            localMeasurements.suspend()
+            localProbeRecheck?.cancel()
+            queue.async { self.localProbeOnQueue?.cancel(); self.localProbeOnQueue = nil }
         }
-        // The clipboard's chip looks when Sill becomes active (StreamClient+Clipboard).
-        observeClipboardActivation()
     }
 
     /// Starts the network browser, once; from then on it is only made again (`rebuildBrowser`). The
     /// nearby one follows the policy (`updateDiscovery`).
     func startBrowsing() {
         guard !browsing else { return }
+        print("Discovery started")
         browsing = true
         searchingSince = ProcessInfo.processInfo.systemUptime
         startPathMonitor()
         makeBrowser(.network)
         discoveryChanged()
+    }
+
+    /// A manual new query when the system browser is ready but has silently missed a Mac.
+    /// Reuse the normal rebuild's settling window so the currently visible rows stay in place.
+    func refreshDiscovery() {
+        guard browsing, appInForeground, !connected, !localNetworkDenied, !refreshingDiscovery else { return }
+        refreshingDiscovery = true
+        localMeasurements.refresh()
+        localProbePlans.removeAll()
+        localProbeScans.removeAll()
+        localProbeWantsNearby = false
+        localProbeRecheck?.cancel()
+        queue.async { self.localProbeOnQueue?.cancel(); self.localProbeOnQueue = nil }
+        print("Discovery refresh started")
+        savedServiceResolvers.values.forEach { $0.cancel() }
+        savedServiceResolvers.removeAll()
+        nextSavedServiceLookup.removeAll()
+        rebuildBrowser(.network, cameForward: false)
+        if nearbyBrowser != nil { rebuildBrowser(.nearby, cameForward: false) }
+        // Bonjour keeps browsing continuously. The manual refresh ends when the replacement
+        // browsers' normal settling window ends, rather than when the first old Mac reappears.
+        DispatchQueue.main.asyncAfter(deadline: .now() + DiscoveryPolicy.rebuildSettle) { [weak self] in
+            self?.refreshingDiscovery = false
+            print("Discovery refresh finished")
+        }
     }
 
     /// Makes `kind`'s browser and starts it. The network one never peer-to-peer: includePeerToPeer stays
@@ -1682,7 +1762,9 @@ final class StreamClient: ObservableObject {
     /// 3 s mark). Main thread.
     func discoveryChanged() {
         recomputeMacs()
+        updateLocalPathMeasurements()
         updateDiscovery()
+        tryLocalPathCandidate()
         reconnectIfListed()
         moveToNetworkIfListed()
         followBestPath()
@@ -1708,7 +1790,8 @@ final class StreamClient: ObservableObject {
             nextSavedServiceLookup[mac.macID] = now + 15
             let resolver = SavedServiceResolver()
             savedServiceResolvers[mac.macID] = resolver
-            resolver.start(name: name, type: Self.serviceType) { [weak self, weak resolver] answer in
+            resolver.start(name: name, type: Self.serviceType,
+                           acceptsTag: { tag in mac.recognitionKeyData.map { RecognitionTag.matches(tag, recognitionKey: $0) } ?? false }) { [weak self, weak resolver] answer in
                 DispatchQueue.main.async {
                     guard let self, let resolver, self.savedServiceResolvers[mac.macID] === resolver else { return }
                     self.savedServiceResolvers.removeValue(forKey: mac.macID)
@@ -1821,7 +1904,10 @@ final class StreamClient: ObservableObject {
             // or a look-alike; either way a tap asks, whatever its `p` (DiscoveryPolicy.rowDoor).
             let door = DiscoveryPolicy.rowDoor(seen.door, otherTagUnderSavedName: DiscoveryPolicy.otherTagUnderSavedName(
                 tagged: macID, carriesTag: carriesTag, name: row.name, saved: byName))
-            let method = DiscoveryPolicy.method(direct: row.direct, interfaces: seen.policy)
+            var method = DiscoveryPolicy.method(direct: row.direct, interfaces: seen.policy)
+            if wired == nil, let macID, let winner = localMeasurements.value(for: macID, now: now)?.result.winner {
+                method = winner == .nearby ? .direct : .wifi
+            }
             let word = DiscoveryPolicy.rowWord(door: door, saved: saved != nil, revoked: saved?.revoked == true,
                                                homeTLS: saved?.homeTLS == true, debug: Self.debugBuild, method: method,
                                                cable: wired.map { DiscoveryPolicy.carriesOnlyLinkLocal($0, own: own) } ?? false,
@@ -1911,20 +1997,21 @@ final class StreamClient: ObservableObject {
             now: now, connected: connected, onNetwork: Set(networkResults.map(Self.serviceName(of:))),
             remembered: Set(directWirelessMacs), searchingSince: searchingSince, askedNearby: askedNearby,
             nearbyRunning: nearbyBrowser != nil, listed: macs.count, localNetworkDenied: localNetworkDenied))
-        if out.browseNearby, nearbyBrowser == nil {
+        let browseNearby = out.browseNearby || ((localPathSearch != nil || localProbeWantsNearby) && !localNetworkDenied)
+        if browseNearby, nearbyBrowser == nil {
             nearbyLife = BrowserLife()
             makeBrowser(.nearby)
             #if DEBUG
             print("discovery: nearby search on")
             #endif
-        } else if !out.browseNearby, nearbyBrowser != nil {
+        } else if !browseNearby, nearbyBrowser != nil {
             stopNearbyBrowser()
             recomputeMacs()
             #if DEBUG
             print("discovery: nearby search off")
             #endif
         }
-        if searchingNearby != out.browseNearby { searchingNearby = out.browseNearby }
+        if searchingNearby != browseNearby { searchingNearby = browseNearby }
         if showsNearbyHint != out.showHint { showsNearbyHint = out.showHint }
         // "…and nearby" while the nearby search runs, but not under the hint: the line in Search
         // Nearby's place says it there (ConnectScreen), and the status would only repeat it.
@@ -1974,13 +2061,18 @@ final class StreamClient: ObservableObject {
         #if DEBUG
         if mockDiscovery {
             switch mac.route {
-            case .direct: status = "正在直连 \(mac.name)…"
+            case .direct: status = "正在就近连接 \(mac.name)…"
             case .remote: status = "正在连接 \(mac.name)…"
             case .network: status = "正在连接 \(mac.name)…"
             }
             return
         }
         #endif
+        preferredLocalProbeID = mac.savedID
+        updateLocalPathMeasurements()
+        if let id = mac.savedID, localMeasurements.active?.macID == id {
+            print("path measurement: tap continues the active measurement for \(mac.name)")
+        }
         reconnect = nil      // a tap starts afresh
         savedLocalAttempt = nil
         cancelHomeAsk()      // …and so does an ask still under way
@@ -2050,6 +2142,16 @@ final class StreamClient: ObservableObject {
                  tap: Bool = false) -> Bool {
         guard let endpoint = mac.endpoint else { return false }
         let row = HomeRow(id: mac.id, tagNamed: tagNamed, tried: tried, tapped: tap)
+        if mac.wired == nil, let id = macID, case .saved(let pin) = trust,
+           let measured = localMeasurements.value(for: id, now: ProcessInfo.processInfo.systemUptime),
+           measured.plan.pin == pin, let winner = measured.result.winner, let path = measured.plan.paths[winner] {
+            print("path measurement: reusing cached \(winner.rawValue) for \(mac.name)")
+            let started = connect(to: path.endpoint, name: mac.name, peerToPeer: winner == .nearby, macID: id,
+                                  fallback: endpoint, trust: trust, row: row, requiredInterface: path.interface)
+            localProbeAppliedToSession = started
+            measuredDirectPreferred = started && winner == .nearby
+            return started
+        }
         if let wired = wiredDial(for: mac) {
             #if DEBUG
             print("dialing \(mac.name) on \(wired.via)")
@@ -2107,7 +2209,7 @@ final class StreamClient: ObservableObject {
     @discardableResult
     func connect(to endpoint: NWEndpoint, name: String, peerToPeer: Bool = false, macID: String? = nil, fallback: NWEndpoint? = nil,
                  trust: DiscoveryPolicy.HomeTrust = .plain, row: HomeRow? = nil, preferQUIC: Bool = true,
-                 savedLocalID: UUID? = nil) -> Bool {
+                 savedLocalID: UUID? = nil, requiredInterface: NWInterface? = nil) -> Bool {
         // A TLS dial's parameters need this device's key, made now at its first one. A pin refused
         // (-9808) ends the dial as its `.waiting` would have: a Bonjour row's connection never says
         // so itself, it prepares again and again (DeviceTLS.options), and the tap's "Connecting to…"
@@ -2130,6 +2232,7 @@ final class StreamClient: ObservableObject {
                 c.cancel()
             }
         }) else { return false }
+        if let requiredInterface { params.requiredInterface = requiredInterface }
         if savedLocalAttempt?.id != savedLocalID { savedLocalAttempt = nil }
         // One connection at a time. A tap on the connect screen racing the reconnect timer used to
         // open two: both then read from whichever `connection` pointed at, interleaving headers
@@ -2154,7 +2257,7 @@ final class StreamClient: ObservableObject {
                           why: savedLocalID == nil ? nil : savedLocalAttempt?.why, home: trust, row: row,
                           endpoint: endpoint)
         goodbye = nil
-        status = peerToPeer ? "正在直连 \(name)…" : "正在连接 \(name)…"
+        status = peerToPeer ? "正在就近连接 \(name)…" : "正在连接 \(name)…"
         #if DEBUG
         if trust.tls { print("home: dialing \(name) over TLS, \(DiscoveryPolicy.pin(trust) == .anyKey ? "any key" : "pinned")") }
         #endif
@@ -2169,12 +2272,12 @@ final class StreamClient: ObservableObject {
             print("home: retrying unavailable QUIC over TCP with the same pin")
             #endif
             _ = self.connect(to: endpoint, name: name, peerToPeer: peerToPeer, macID: macID, fallback: fallback,
-                             trust: pinnedTrust, row: row, preferQUIC: false, savedLocalID: savedLocalID)
+                             trust: pinnedTrust, row: row, preferQUIC: false, savedLocalID: savedLocalID, requiredInterface: requiredInterface)
         }
         if useQUIC {
             session?.retryHomeTCP = { [weak self] pinnedTrust in
                 _ = self?.connect(to: endpoint, name: name, peerToPeer: peerToPeer, macID: macID, fallback: fallback,
-                                  trust: pinnedTrust, row: row, preferQUIC: false, savedLocalID: savedLocalID)
+                                  trust: pinnedTrust, row: row, preferQUIC: false, savedLocalID: savedLocalID, requiredInterface: requiredInterface)
             }
         }
         // The hello first, written to `c` before it becomes the session's connection below: from
@@ -2381,6 +2484,10 @@ final class StreamClient: ObservableObject {
         let shown = status
         // Cancels `c`, whose .cancelled finds it replaced; the same trust, so never plain for a TLS door.
         connect(to: fallback, name: name, macID: macID, trust: trust, row: row)
+        // The cached route just failed in this session. Keep its working fallback.
+        if let macID, localMeasurements.value(for: macID, now: ProcessInfo.processInfo.systemUptime) != nil {
+            localProbeAppliedToSession = true
+        }
         status = shown
     }
 
@@ -2394,7 +2501,7 @@ final class StreamClient: ObservableObject {
     /// device's key be unreadable (it cannot be: the session's first connection was made with it,
     /// and it stays in memory), parameters that never connect, so the move fails as any failed move
     /// does and nothing goes out plain to a TLS door.
-    private func moveParameters(_ kind: MoveKind, refused: WeakConnection) -> NWParameters {
+    private func moveParameters(_ kind: MoveKind, refused: WeakConnection, peerToPeer: Bool = false) -> NWParameters {
         if kind == .fromRemote {
             if let trust = homeMoveTrust, let params = sessionParameters(trust, peerToPeer: false, onPinRefused: { [weak self] in
                 guard let self, let c = refused.connection else { return }
@@ -2404,8 +2511,9 @@ final class StreamClient: ObservableObject {
             return DeviceTLS.refusing(peerToPeer: false, queue: queue)
         }
         let trust = session?.home ?? .plain
-        if let params = sessionParameters(trust, peerToPeer: false) { return params }
-        return DeviceTLS.refusing(peerToPeer: false, queue: queue)
+        if let params = sessionParameters(trust, peerToPeer: peerToPeer,
+                                          quic: kind == .localComparison && connection?.metadata(definition: NWProtocolQUIC.definition) != nil) { return params }
+        return DeviceTLS.refusing(peerToPeer: peerToPeer, queue: queue)
     }
 
     /// This device's hello (kind 23): its version, build, protocol and name, built once. DEBUG:
@@ -2438,6 +2546,279 @@ final class StreamClient: ObservableObject {
         #endif
     }
 
+    // MARK: Discovery-time path measurements
+
+    /// Raw sightings identify the saved key on each route. The visible row may merge both.
+    /// Wait briefly for the nearby browse to answer, then schedule one device at a time.
+    func updateLocalPathMeasurements() {
+        guard browsing, appInForeground, !localNetworkDenied else { return }
+        #if DEBUG
+        if mockDiscovery { return }
+        #endif
+        let now = ProcessInfo.processInfo.systemUptime
+        localProbeRecheck?.cancel()
+        localProbeRecheck = nil
+        for id in Array(localProbePlans.keys) {
+            guard let saved = savedMac(id), saved.revoked != true, saved.newKey != true,
+                  saved.fingerprintData == localProbePlans[id]?.pin else {
+                if localMeasurements.active?.macID == id {
+                    queue.async { self.localProbeOnQueue?.cancel(); self.localProbeOnQueue = nil }
+                }
+                localMeasurements.remove(id); localProbePlans[id] = nil; localProbeScans[id] = nil
+                continue
+            }
+        }
+        var sightings: [String: [NWBrowser.Result]] = [:]
+        for result in networkResults + nearbyResults {
+            guard case .bonjour(let txt) = result.metadata,
+                  txt[LocalPathProbeReply.txtKey] == String(LocalPathProbeReply.generation),
+                  let id = SavedMacs.recognize(tag: Self.tag(of: result), in: savedMacs),
+                  let saved = savedMac(id), saved.revoked != true, saved.newKey != true else { continue }
+            sightings[id, default: []].append(result)
+        }
+        for id in sightings.keys.sorted() {
+            guard let results = sightings[id], let saved = savedMac(id), let pin = saved.fingerprintData else { continue }
+            if localMeasurements.value(for: id, now: now) != nil {
+                localProbeScans[id] = nil
+                continue
+            }
+            if localMeasurements.contains(id) {
+                localMeasurements.enqueue(id, now: now, prioritize: id == preferredLocalProbeID)
+                continue
+            }
+            let deadline = localProbeScans[id] ?? now + 2
+            localProbeScans[id] = deadline
+            var paths: [LocalPathProbe.Lane: LocalProbePath] = [:]
+            // A real device interface, explicitly scoped; a Bonjour hit alone is not a path test.
+            for result in results {
+                guard case .service(let name, let type, let domain, _) = result.endpoint else { continue }
+                let interfaces = result.interfaces.sorted {
+                    if ($0.type == .wiredEthernet) != ($1.type == .wiredEthernet) { return $0.type == .wiredEthernet }
+                    return $0.index < $1.index
+                }
+                for interface in interfaces {
+                    let lane: LocalPathProbe.Lane
+                    if DiscoveryPolicy.isPeerToPeer(interface.name) { lane = .nearby }
+                    else if interface.type == .wifi || interface.type == .wiredEthernet { lane = .lan }
+                    else { continue }
+                    if paths[lane] == nil {
+                        paths[lane] = LocalProbePath(endpoint: .service(name: name, type: type, domain: domain, interface: interface), interface: interface)
+                    }
+                }
+            }
+            guard !paths.isEmpty, paths.count == 2 || now >= deadline else { continue }
+            localProbePlans[id] = LocalProbePlan(name: Self.serviceName(of: results[0]), pin: pin, paths: paths)
+            localProbeScans[id] = nil
+            localMeasurements.enqueue(id, now: now, prioritize: id == preferredLocalProbeID)
+        }
+        // Do not keep searching a vanished device, and stop AWDL browsing after observations.
+        localProbeScans = localProbeScans.filter { sightings[$0.key] != nil }
+        startNextLocalPathMeasurement()
+        localProbeWantsNearby = localProbeScans.values.contains { $0 > now }
+            || localMeasurements.active.flatMap { localProbePlans[$0.macID]?.paths[.nearby] } != nil
+        let deadlines = localProbeScans.values.filter { $0 > now }
+            + [localMeasurements.nextExpiry(after: now)].compactMap { $0 }
+        if let next = deadlines.min() {
+            let work = DispatchWorkItem { [weak self] in self?.discoveryChanged() }
+            localProbeRecheck = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, next - now), execute: work)
+        }
+    }
+
+    private func startNextLocalPathMeasurement() {
+        guard let ticket = localMeasurements.beginNext() else { return }
+        guard let plan = localProbePlans[ticket.macID], let identity = deviceIdentity() else {
+            localMeasurements.finish(ticket, value: nil, now: ProcessInfo.processInfo.systemUptime)
+            startNextLocalPathMeasurement()
+            return
+        }
+        var connections: [LocalPathProbe.Lane: NWConnection] = [:]
+        for (lane, path) in plan.paths {
+            let parameters = DeviceTLS.home(identity: identity, alpn: RemoteTLS.pathProbeALPN, pin: plan.pin,
+                                             peerToPeer: lane == .nearby, queue: queue, quic: true)
+            parameters.requiredInterface = path.interface
+            connections[lane] = NWConnection(to: path.endpoint, using: parameters)
+        }
+        print("path measurement: starting \(plan.name), \(connections.count) route(s), ticket \(ticket)")
+        let probe = LocalPathProbe(connections: connections, queue: queue, hello: Self.helloPayload, accepts: { lane, connection in
+            RemoteTLS.peerFingerprint(connection) == plan.pin
+                && Self.runsPeerToPeer(connection.currentPath) == (lane == .nearby)
+        }, completion: { [weak self] result in
+            guard let self else { return }
+            self.localProbeOnQueue = nil
+            DispatchQueue.main.async {
+                let measurement = result.winner == nil ? nil : LocalProbeMeasurement(plan: plan, result: result)
+                guard self.localMeasurements.finish(ticket, value: measurement, now: ProcessInfo.processInfo.systemUptime) else { return }
+                print(String(format: "path measurement: %@ complete %.3f s (setup %.3f s, sample/report %.3f s), selected %@",
+                             plan.name, result.elapsedSeconds, result.setupSeconds, result.sampleSeconds, result.winner?.rawValue ?? "none"))
+                for lane in [LocalPathProbe.Lane.lan, .nearby] {
+                    guard let q = result.qualities[lane] else { continue }
+                    print(String(format: "path measurement: %@ %@ echoes %d/%d, p90 %.1f ms, jitter %.1f ms, late %.1f%%, retransmit %.2f%%, echo delivery %.0f B/s",
+                                 plan.name, lane.rawValue, q.echoes.count, q.sent, q.tailMilliseconds, q.jitterMilliseconds,
+                                 q.lateFraction * 100, q.retransmissionFraction * 100, q.deliveryBytesPerSecond))
+                }
+                self.applyLocalPathMeasurement()
+                self.updateLocalPathMeasurements()
+                self.recomputeMacs()
+                self.updateDiscovery()
+                self.moveToNetworkIfListed()
+                self.followBestPath()
+            }
+        })
+        queue.async {
+            self.localProbeOnQueue?.cancel()
+            self.localProbeOnQueue = probe
+            probe.start()
+        }
+    }
+
+    private var localProbePendingForSession: Bool {
+        guard let id = session?.macID else { return false }
+        return localMeasurements.contains(id) || localProbeScans[id] != nil
+    }
+
+    private func applyLocalPathMeasurement() {
+        guard !localProbeAppliedToSession, connected, !extendedDesktopRequested, moving == nil,
+              session?.route.isRemote == false, route != .wired, let id = session?.macID,
+              let measured = localMeasurements.value(for: id, now: ProcessInfo.processInfo.systemUptime),
+              case .saved(let pin)? = session?.home, pin == measured.plan.pin,
+              let winner = measured.result.winner, let path = measured.plan.paths[winner] else { return }
+        guard measured.result.launchID == sessionHost else {
+            // Same saved key, different process: endpoint and launch must be re-observed together.
+            localMeasurements.remove(id); localProbePlans[id] = nil
+            updateLocalPathMeasurements(); updateDiscovery()
+            return
+        }
+        localProbeAppliedToSession = true
+        measuredDirectPreferred = winner == .nearby
+        guard connectedDirectly != (winner == .nearby) else { return }
+        print("path measurement: applying \(winner.rawValue) while the existing session continues")
+        startMove(to: path.endpoint, kind: .localComparison, fallback: nil,
+                  peerToPeer: winner == .nearby, requiredInterface: path.interface)
+    }
+
+    // MARK: Legacy hosts: comparison during desktop preparation
+
+    private func beginLocalPathComparison() {
+        if let id = session?.macID, localProbePlans[id] != nil || localProbeScans[id] != nil {
+            updateLocalPathMeasurements()
+            applyLocalPathMeasurement()
+            return
+        }
+        guard !localPathCompared else { return }
+        localPathCompared = true
+        guard connected, appInForeground, !extendedDesktopRequested, moving == nil,
+              let current = connection, sessionHost != nil, session?.route.isRemote == false,
+              case .saved? = session?.home, session?.bonjourName != nil,
+              route != .wired, settings.host?.settings.directWireless != false else { return }
+        let id = UUID()
+        localPathSearch = (id, current)
+        localPathTrialStarted = false
+        updateDiscovery()
+        tryLocalPathCandidate()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.localPathSearch?.id == id, !self.localPathTrialStarted else { return }
+            self.cancelLocalPathComparison()
+            self.updateDiscovery()
+            self.moveToNetworkIfListed()
+            self.followBestPath()
+        }
+        localPathSearchWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    /// The visible list merges LAN and AWDL rows. Compare their actual interfaces from the raw
+    /// browser results instead, so a Mac available on both paths still has two candidates.
+    private func tryLocalPathCandidate() {
+        guard let search = localPathSearch, !localPathTrialStarted, connected, connection === search.current,
+              !extendedDesktopRequested, moving == nil, let name = session?.bonjourName,
+              let launch = sessionHost, case .saved(let pin)? = session?.home else { return }
+        let direct = !connectedDirectly
+        let interface: NWInterface?
+        if direct {
+            interface = nearbyResults.filter { Self.serviceName(of: $0) == name }
+                .flatMap(\.interfaces).first { DiscoveryPolicy.isPeerToPeer($0.name) }
+        } else {
+            // Compare with the best listed network interface. A cable is already preferred by
+            // the normal path policy; Wi-Fi is explicitly scoped to exclude AWDL.
+            let listed = networkResults.filter { Self.serviceName(of: $0) == name }.flatMap(\.interfaces)
+            interface = listed.first { $0.type == .wiredEthernet }
+                ?? listed.first { $0.type == .wifi && !DiscoveryPolicy.isPeerToPeer($0.name) }
+        }
+        guard let interface, case .service(_, let type, let domain, _)? = session?.endpoint,
+              let parameters = sessionParameters(.saved(pin: pin), peerToPeer: direct,
+                                                  quic: search.current.metadata(definition: NWProtocolQUIC.definition) != nil) else { return }
+        parameters.requiredInterface = interface
+        let endpoint = NWEndpoint.service(name: name, type: type, domain: domain, interface: interface)
+        let candidate = NWConnection(to: endpoint, using: parameters)
+        sendHello(on: candidate)
+        localPathTrialStarted = true
+        localPathSearchWork?.cancel()
+        localPathSearchWork = nil
+        let trial = LocalPathTrial(current: search.current, candidate: candidate, candidateIsDirect: direct, queue: queue,
+                                  readyPathMatches: { c in
+            RemoteTLS.peerFingerprint(c) == pin && Self.runsPeerToPeer(c.currentPath) == direct
+        }, admits: { header, data in
+            if header.kind == .goodbye { return false }
+            guard header.kind == .windowList else { return nil }
+            return Wire.decode(WindowList.self, from: data)?.launchID == launch
+        }, completion: { [weak self] result in
+            guard let self else { candidate.cancel(); return }
+            self.localPathTrialOnQueue = nil
+            DispatchQueue.main.async {
+                guard self.localPathSearch?.id == search.id, self.connection === search.current,
+                      self.connected, !self.extendedDesktopRequested, self.moving == nil else { candidate.cancel(); return }
+                self.localPathSearch = nil
+                self.localPathTrialStarted = false
+                if let current = result.current, let other = result.candidate {
+                    print("path comparison: current tail \(Int(current.tailMilliseconds)) ms, late \(Int(current.lateFraction * 100))%; candidate tail \(Int(other.tailMilliseconds)) ms, late \(Int(other.lateFraction * 100))%; \(result.useCandidate ? "candidate" : "current") selected")
+                }
+                if result.useCandidate, candidate.state == .ready {
+                    self.measuredDirectPreferred = direct
+                    // LocalPathTrial's reader stopped on its final complete pong. Only now may
+                    // the ordinary session reader take over this already authenticated stream.
+                    candidate.stateUpdateHandler = { [weak client = self] state in
+                        guard let self = client else { return }
+                        switch state {
+                        case .ready: self.sessionReadyAgain(candidate)
+                        case .waiting: self.sessionWaiting(candidate)
+                        case .failed(let error): self.connectionLost(candidate, error: error); candidate.cancel()
+                        case .cancelled: self.connectionLost(candidate)
+                        default: break
+                        }
+                    }
+                    self.followRoute(of: candidate)
+                    self.finishMove(candidate, kind: .localComparison, kept: result.kept)
+                } else {
+                    candidate.cancel()
+                    // Preserve a measured direct winner instead of immediately undoing the
+                    // decision with the old unconditional direct-to-LAN preference.
+                    self.measuredDirectPreferred = result.current != nil && result.candidate != nil && self.connectedDirectly
+                    self.updateDiscovery()
+                    self.moveToNetworkIfListed()
+                    self.followBestPath()
+                }
+            }
+        })
+        queue.async {
+            self.localPathTrialOnQueue?.cancel()
+            self.localPathTrialOnQueue = trial
+            trial.start()
+        }
+    }
+
+    private func cancelLocalPathComparison() {
+        localPathSearch = nil
+        localPathSearchWork?.cancel()
+        localPathSearchWork = nil
+        localPathTrialStarted = false
+        queue.async {
+            self.localPathTrialOnQueue?.cancel()
+            self.localPathTrialOnQueue = nil
+        }
+        updateDiscovery()
+    }
+
     // MARK: Moving a session over AWDL to the network
 
     /// This session runs over peer-to-peer Wi-Fi and the network lists the same Mac by its Bonjour
@@ -2449,8 +2830,9 @@ final class StreamClient: ObservableObject {
     private func moveToNetworkIfListed() {
         moveCheck?.cancel()
         moveCheck = nil
-        guard !extendedDesktopRequested, connected, connectedDirectly, sessionListed, moving == nil, connection != nil,
+        guard localPathSearch == nil, !localProbePendingForSession, !extendedDesktopRequested, connected, connectedDirectly, sessionListed, moving == nil, connection != nil,
               let mac = macs.first(where: { $0.name == hostName && $0.route == .network }) else { return }
+        if measuredDirectPreferred, mac.wired == nil { return }
         let now = ProcessInfo.processInfo.systemUptime
         let decision = DiscoveryPolicy.moveToNetwork(listedSince: sightings.since[mac.name], lastAttempt: lastMoveAttempt,
                                                      refusedListing: refusedListing, now: now)
@@ -2481,7 +2863,7 @@ final class StreamClient: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         lastMoveAttempt = now
         lastMoveUp = now
-        status = "正在切换到 Wi-Fi…"
+        status = "正在切换到局域网…"
         if let wired = wiredDial(for: mac) {
             #if DEBUG
             print("discovery: moving the session to the network on \(wired.via)")
@@ -2665,9 +3047,12 @@ final class StreamClient: ObservableObject {
     /// DiscoveryPolicy.wiredWait, or unable to go on (`moveUnconstrained`). A move to the cable has
     /// none (the row as listed could be Wi-Fi again, and never Wi-Fi to Wi-Fi): its wired dial not
     /// ready within wiredWait, or unable to go on, ends the move (`giveUpMove`). Main thread.
-    private func startMove(to endpoint: NWEndpoint, kind: MoveKind, fallback: NWEndpoint?) {
+    private func startMove(to endpoint: NWEndpoint, kind: MoveKind, fallback: NWEndpoint?,
+                           peerToPeer: Bool = false, requiredInterface: NWInterface? = nil) {
         let refused = WeakConnection()
-        let c = NWConnection(to: endpoint, using: moveParameters(kind, refused: refused))
+        let parameters = moveParameters(kind, refused: refused, peerToPeer: peerToPeer)
+        if let requiredInterface { parameters.requiredInterface = requiredInterface }
+        let c = NWConnection(to: endpoint, using: parameters)
         refused.connection = c
         // Its own hello first, written to `c` as it is made, as `connect(to:)` does: every move's
         // connection (from AWDL, to the cable, to Wi-Fi, a rescue's, each fallback's) is a new
@@ -2757,6 +3142,7 @@ final class StreamClient: ObservableObject {
         guard let move = moving, move.connection === c, c.state != .ready else { return }
         #if DEBUG
         switch move.kind {
+        case .localComparison: break
         case .fromRemote: print("remote: the move home's dial on the cable \(why); dialing the row as listed")
         case .fromDirect: print("discovery: the wired move \(why); moving unconstrained")
         case .toCable: print("path: the dial on the cable \(why); dialing the row as listed")
@@ -2926,6 +3312,7 @@ final class StreamClient: ObservableObject {
             return
         }
         switch move.kind {
+        case .localComparison: break
         case .fromRemote:
             print("remote: move home refused: \(homeMoveName ?? hostName) on the network said goodbye (\(reason))")
             if let row = homeMoveRow { homeMoveRows.refused.insert(row.id) }
@@ -2957,7 +3344,8 @@ final class StreamClient: ObservableObject {
         // The session this move was for must still run: over AWDL for a move from AWDL (a direct
         // session that ended meanwhile reconnects by itself, to the network row), not over it for
         // `followBestPath`'s, and through the remote door for the move home.
-        guard connected, let old = connection, connectedDirectly == (kind == .fromDirect),
+        guard connected, let old = connection,
+              kind == .localComparison || connectedDirectly == (kind == .fromDirect),
               kind != .fromRemote || session?.route.isRemote == true else { c.cancel(); return }
         // From here `c` is the session's: the old connection's pings and one-second windows stop at
         // their next turn, since each checks that it is still `connection`, and its read loop goes on
@@ -3011,8 +3399,9 @@ final class StreamClient: ObservableObject {
             homeMoveTrust = nil
             homeMoveRow = nil
         }
-        connectedDirectly = false
-        session?.route = .network
+        connectedDirectly = Self.runsPeerToPeer(c.currentPath)
+        session?.route = connectedDirectly ? .direct : .network
+        session?.endpoint = c.endpoint
         sessionDead = false
         pathSignals = PathSignals()
         lastPongAt = ProcessInfo.processInfo.systemUptime
@@ -3028,6 +3417,7 @@ final class StreamClient: ObservableObject {
         MainActor.assumeIsolated { syncTouchBarConnection() }
         #if DEBUG
         switch kind {
+        case .localComparison: print("path: moved to the measured \(connectedDirectly ? "nearby" : "network") connection")
         case .fromRemote: print(reconnected ? "remote: the session carried on over the move home (its remote connection went)" : "remote: the session moved home")
         case .fromDirect: print("discovery: the session moved to the network")
         case .toCable: print(reconnected ? "path: the session carried on over a new connection (the cable's dial)" : "path: the session moved to the cable")
@@ -3046,6 +3436,7 @@ final class StreamClient: ObservableObject {
         // it here only after the launch identity is verified. Through `sendViewport` it becomes
         // `lastViewport`, preserving the full-rate request.
         if let v = kind == .fromRemote ? (homeMoveViewport ?? lastViewport) : lastViewport { sendViewport(v) }
+        if kind == .localComparison { send(.requestKeyframe, payload: Data()) }
         if kind == .fromRemote { homeMoveViewport = nil }
         // The Mac sends its menus only to a connection that asked, and answers a request on the
         // connection it came on, which the session no longer reads: the menus waiting settle, and
@@ -3104,6 +3495,7 @@ final class StreamClient: ObservableObject {
         }
         if connected { status = "已连接 \(hostName)" }
         switch move.kind {
+        case .localComparison: break
         case .fromRemote:
             // Still remote. A move that did not complete: the next try waits DiscoveryPolicy.upWait,
             // counted for this listing, and goes to the row tried least (DiscoveryPolicy.moveHomeRow). A
@@ -3169,7 +3561,7 @@ final class StreamClient: ObservableObject {
     private func followBestPath() {
         pathCheck?.cancel()
         pathCheck = nil
-        guard !extendedDesktopRequested, connected, connection != nil, sessionListed else { return }
+        guard localPathSearch == nil, (!localProbePendingForSession || sessionDead), !extendedDesktopRequested, connected, connection != nil, sessionListed else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let input = pathInput(now: now)
         if let move = moving {
@@ -3402,6 +3794,10 @@ final class StreamClient: ObservableObject {
 
     /// Forgets what the session knew of its path (a new session, or none). Main thread.
     private func resetPath() {
+        cancelLocalPathComparison()
+        localPathCompared = false
+        localProbeAppliedToSession = false
+        measuredDirectPreferred = false
         pathCheck?.cancel()
         pathCheck = nil
         pathSignals = PathSignals()
@@ -3784,6 +4180,7 @@ final class StreamClient: ObservableObject {
     /// never delivered its window list: the connect screen never left, and its Remote rows must not
     /// vanish for another 3 s. Main thread.
     func tearDown(status: String, restartSearch: Bool = true) {
+        hasPresentedSessionPicture = false
         displayPickerPresented = false
         displayCatalogReceived = false
         hostExistingDisplayCapture = false
@@ -3861,7 +4258,7 @@ final class StreamClient: ObservableObject {
         // Nor its menus: an open one says "Not connected.", the button goes, and the iPad's bar
         // loses the Mac's menus at its next rebuild.
         resetMenus()
-        // Nor the clipboard's subscription, its chip or its note.
+        // Nor the clipboard's background subscription.
         resetClipboard()
     }
 
@@ -4004,6 +4401,7 @@ final class StreamClient: ObservableObject {
         // Every input passes here, a hover and a flick's coast included: the tour's rule counts it
         // as something happening (StreamScreen.considerTour).
         lastInputAt = ProcessInfo.processInfo.systemUptime
+        prepareClipboardForPaste(event)
         #if DEBUG
         // The tour takes every touch and the keyboard while it shows, and holds back the pointer's
         // move to a new frame's middle, so nothing should get here then; the one case expected is a
@@ -4490,6 +4888,7 @@ final class StreamClient: ObservableObject {
                 self.hostClipboardChanged(list.clipboard)
                 if !self.sessionListed {
                     self.sessionListed = true
+                    self.beginLocalPathComparison()
                     #if DEBUG
                     switch (list.hostVersion, list.protocol) {
                     case (nil, nil): print("host: no version (a Mac from before 2026-09-25)")
@@ -4606,9 +5005,8 @@ final class StreamClient: ObservableObject {
                 self.receiveSettings(state)
             }
         case .pong:
-            // A Paste's receipt (StreamClient+Clipboard): its own random payload, not a time.
-            if data.count == ClipboardPolicy.receiptLength {
-                DispatchQueue.main.async { self.clipboardReceiptCame(data) }
+            if LocalPathTrial.isTrialPong(data) {
+                localPathTrialOnQueue?.receivePong(data, from: source)
                 return
             }
             // The host echoes the ping's payload unchanged: our own monotonic send time.
@@ -4821,6 +5219,7 @@ extension StreamClient {
         if !refused.isEmpty { settingsRefusals += 1 }
         scheduleSettingsExpiry()
         rememberDirectWireless(state)
+        if state.settings.directWireless == false { cancelLocalPathComparison(); measuredDirectPreferred = false }
         #if DEBUG
         logLink(from: linkBefore, to: state.link)
         #endif

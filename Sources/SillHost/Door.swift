@@ -421,6 +421,9 @@ final class Door {
         case .pairing:
             guard let fp else { refuse(id, "unpaired"); c.cancel(); return }
             readPairRequest(id, c, fp)
+        case .pathProbe:
+            guard let fp else { refuse(id, "unpaired"); c.cancel(); return }
+            admitPathProbe(id, c, fp)
         case .goodbye(let reason):
             // A paired key the door does not serve now: it proved itself, so its source starts clean.
             // Closed with a FIN and a drain (`closeWithGoodbye`): the device has sent its hello by
@@ -433,6 +436,33 @@ final class Door {
         case .refuse(let word):
             refuse(id, word)
             c.cancel()
+        }
+    }
+
+    /// The separate ALPN identifies probes before normal session registration, including when
+    /// deviceFloor is zero. Both TLS pins and the existing origin/Direct Wireless policy apply.
+    private func admitPathProbe(_ id: ObjectIdentifier, _ c: NWConnection, _ fingerprint: Data) {
+        guard let server, let pending = pending.removeValue(forKey: id) else { c.cancel(); return }
+        pending.deadline?.cancel()
+        forgive(pending.source)
+        let origin = pending.origin ?? .internet
+        let transport = quicLease(c, fingerprint: fingerprint, wasPaired: true)
+        server.gate(c, readHello: true) { [weak self, weak server, c] hello in
+            guard let self, let server, let hello else { c.cancel(); transport?.ended(); return }
+            let permits = { [weak self, weak c] in
+                guard let self, let c else { return false }
+                let snapshot = self.trust.snapshot
+                return self.kind == .home && snapshot.paired[fingerprint] != nil
+                    && DoorPolicy.admitsBeforeStart(.home, origin: origin, internetAccess: false)
+                    && transport?.validate(c.currentPath) != false
+            }
+            guard permits() else { c.cancel(); transport?.ended(); return }
+            if server.droppedForDirectWireless(c, acceptedPeerToPeer: pending.peerToPeer, hello: hello) {
+                transport?.ended(); return
+            }
+            let peer = ClientRoute.Peer(fingerprint: fingerprint, name: self.trust.snapshot.paired[fingerprint], cableDevice: nil)
+            server.pathProbes.serve(c, route: .home(origin, peer: peer), permits: permits,
+                                    ended: { transport?.ended() })
         }
     }
 

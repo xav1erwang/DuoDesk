@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise snapshot selection and failure recovery without signing or touching a device."""
+"""Exercise fresh-source snapshot selection and failure recovery without signing or a device."""
 import datetime as dt
 import importlib.util
 import json
@@ -17,11 +17,20 @@ sys.path.insert(0, str(ROOT / "Signing"))
 spec = importlib.util.spec_from_file_location("duodesk_pinned_renew", ROOT / "Signing/renew.py")
 renew = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(renew)
+import device_install
 import source_snapshot
 
 
 class PinnedSigningTests(unittest.TestCase):
     def setUp(self):
+        # These suites isolate signing/snapshot behavior; device-version checks have their own
+        # simulated two-Mac regression tests in signing-device-version.
+        for stub in (patch.object(renew, "installed_version", return_value=None),
+                     patch.object(renew, "project_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "installed_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "project_version", return_value=("0.1.0", "1"))):
+            stub.start()
+            self.addCleanup(stub.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="duodesk-source-pin-check-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "source"
@@ -62,7 +71,7 @@ class PinnedSigningTests(unittest.TestCase):
             app = build / "Build/Products/Release-iphoneos/Sill.app"
             app.mkdir(parents=True, exist_ok=True)
             import plistlib
-            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
         elif args[0] == "/usr/bin/xcrun" and self.install_fail:
             raise subprocess.CalledProcessError(1, args)
         return types.SimpleNamespace(returncode=0)
@@ -74,26 +83,26 @@ class PinnedSigningTests(unittest.TestCase):
              patch.object(renew.subprocess, "run", side_effect=self.command):
             return renew.run(self.config, force=force, renew_now=renew_now)
 
-    def test_automatic_renewal_builds_installed_snapshot_not_live_edits(self):
+    def test_automatic_renewal_builds_latest_source_in_a_fresh_snapshot(self):
         first = self.run_tool(force=True)
         (self.root / "iOSClient/Feature.swift").write_text("unverified-version-two")
         self.clock += dt.timedelta(days=6)
         self.expiry = self.clock + dt.timedelta(days=7)
         second = self.run_tool()
-        self.assertEqual(self.build_sources, ["version-one", "version-one"])
-        self.assertEqual(first["source_id"], second["source_id"])
+        self.assertEqual(self.build_sources, ["version-one", "unverified-version-two"])
+        self.assertNotEqual(first["source_id"], second["source_id"])
         updated = self.run_tool(force=True)
         self.assertEqual(self.build_sources[-1], "unverified-version-two")
         self.assertNotEqual(updated["source_id"], first["source_id"])
 
-    def test_daily_attempt_keeps_the_installed_snapshot_before_expiry_threshold(self):
+    def test_daily_attempt_uses_latest_source_before_expiry_threshold(self):
         first = self.run_tool(force=True)
         (self.root / "iOSClient/Feature.swift").write_text("unverified-version-two")
         self.clock += dt.timedelta(hours=24)
         self.expiry += dt.timedelta(hours=24)
         daily = self.run_tool(renew_now=True)
-        self.assertEqual(self.build_sources, ["version-one", "version-one"])
-        self.assertEqual(daily["source_id"], first["source_id"])
+        self.assertEqual(self.build_sources, ["version-one", "unverified-version-two"])
+        self.assertNotEqual(daily["source_id"], first["source_id"])
 
     def test_failed_install_leaves_pending_source_for_retry(self):
         first = self.run_tool(force=True)
@@ -111,7 +120,7 @@ class PinnedSigningTests(unittest.TestCase):
         self.assertEqual(retried["source_id"], pending["source_id"])
         self.assertFalse((self.local / "signing-pending.json").exists())
 
-    def test_monitor_recovers_pending_manual_version_not_later_worktree_edits(self):
+    def test_monitor_retries_latest_source_instead_of_a_stale_pending_snapshot(self):
         first = self.run_tool(force=True)
         binding = renew.config_binding(self.config)
         (self.local / "signing-monitor.json").write_text(json.dumps({
@@ -134,8 +143,8 @@ class PinnedSigningTests(unittest.TestCase):
              patch.object(renew.subprocess, "run", side_effect=self.command):
             recovered = renew.monitor(self.config)
         self.assertEqual(recovered["status"], "installed")
-        self.assertEqual(recovered["source_id"], pending["source_id"])
-        self.assertEqual(self.build_sources[-1], "version-two")
+        self.assertNotEqual(recovered["source_id"], pending["source_id"])
+        self.assertEqual(self.build_sources[-1], "unverified-version-three")
         self.assertFalse((self.local / "signing-pending.json").exists())
 
     def test_changed_snapshot_is_rejected_before_build_or_install(self):
@@ -167,17 +176,18 @@ class PinnedSigningTests(unittest.TestCase):
         self.assertFalse(any(args[0] == "/usr/bin/xcrun" for args in self.commands))
         self.assertFalse((self.local / "signing-status.json").exists())
 
-    def test_legacy_due_without_verified_source_fails_closed(self):
+    def test_legacy_receipt_also_builds_latest_source_without_reusing_an_old_snapshot(self):
         first = self.run_tool(force=True)
         state_path = self.local / "signing-status.json"
         legacy = dict(first)
         legacy.pop("source_id")
         state_path.write_text(json.dumps(legacy))
         self.clock += dt.timedelta(days=6)
+        self.expiry = self.clock + dt.timedelta(days=7)
         self.commands.clear()
-        with self.assertRaisesRegex(RuntimeError, "no verified source snapshot"):
-            self.run_tool()
-        self.assertEqual(self.commands, [])
+        renewed = self.run_tool()
+        self.assertEqual(renewed["status"], "installed")
+        self.assertEqual(renewed["source_id"], first["source_id"])
 
     def test_pending_other_device_is_never_installed(self):
         first = self.run_tool(force=True)

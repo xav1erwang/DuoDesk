@@ -754,7 +754,7 @@ enum DiscoveryPolicy {
         if failed >= reconnectQuietAfter {
             return "\(mac) 没有响应，可能已睡眠。正在继续尝试，也可点按该 Mac 立即重试。"
         }
-        return direct ? "正在通过直连重新连接 \(mac)…" : "正在重新连接 \(mac)…"
+        return direct ? "正在通过就近连接重新连接 \(mac)…" : "正在重新连接 \(mac)…"
     }
 
     /// What this device watched when a window list says nothing streams (`autoDesktop`).

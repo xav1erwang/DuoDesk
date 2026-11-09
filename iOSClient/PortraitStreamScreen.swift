@@ -173,7 +173,6 @@ struct PortraitStreamScreen: View {
 
     /// The Duo's fold across this screen (StreamScreen, iOS 27.1): where the halves split.
     @Environment(\.duoFold) private var duoFold
-    @State private var resolutionWaitFailed = false
 
     var body: some View {
         GeometryReader { geo in
@@ -181,15 +180,6 @@ struct PortraitStreamScreen: View {
         }
         .onAppear { keepCompleteDesktop() }
         .onChange(of: client.active) { _, _ in keepCompleteDesktop() }
-        .task(id: client.nativeDesktopResolution) {
-            resolutionWaitFailed = false
-            guard client.nativeDesktopResolution != nil else { return }
-            do { try await Task.sleep(for: .seconds(8)) } catch { return }
-            resolutionWaitFailed = !client.hasNativeDesktopVideo
-        }
-        .onChange(of: client.hasNativeDesktopVideo) { _, ready in
-            if ready { resolutionWaitFailed = false }
-        }
     }
 
     private func keepCompleteDesktop() {
@@ -197,16 +187,6 @@ struct PortraitStreamScreen: View {
         // become the Duo laptop's entire upper display. Its source is always the whole desktop.
         guard client.connected, case .window = client.active else { return }
         client.select(.desktop)
-    }
-
-    private var waitingForDesktop: LocalizedStringResource {
-        #if DEBUG
-        // The layout harness has no Mac or video; don't report a connection failure in a preview.
-        if client.mockDiscovery { return "模拟预览 · 未连接 Mac" }
-        #endif
-        if client.nativeDesktopResolution == nil { return "展开 Duo 以读取上屏原生分辨率" }
-        if resolutionWaitFailed { return "Mac 未能匹配原生分辨率，请更新服务端或重新连接。" }
-        return "正在让 Mac 匹配 Duo 上屏…"
     }
 
     // MARK: Two halves: the inner display, an iPad window
@@ -490,7 +470,6 @@ struct PortraitStreamScreen: View {
     private func picturePane(measured: Bool) -> some View {
         ZStack {
             StreamView(client: client)
-                .opacity(client.hasNativeDesktopVideo ? 1 : 0)
             InputOverlay(videoSize: client.videoSize,
                          send: { client.sendInput($0) },
                          makeTextInputFence: { client.makeTextInputFence() },
@@ -501,17 +480,19 @@ struct PortraitStreamScreen: View {
                          onModifiersConsumed: { latched = [] },
                          sendGesture: { client.sendGesture($0, fingers: $1) })
                 .allowsHitTesting(client.hasNativeDesktopVideo)
-            if !client.hasNativeDesktopVideo {
-                Group {
-                    if let issue = client.nativeDesktopIssue { Text(verbatim: issue) }
-                    else { Text(waitingForDesktop) }
-                }
+            if !client.connectionPictureReady && !client.preparingConnection {
+                Palette.panel
+                    .allowsHitTesting(false)
+            }
+            if let issue = client.nativeDesktopIssue {
+                Text(verbatim: issue)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding()
                     .allowsHitTesting(false)
             }
+            ConnectionTransitionView(preparing: client.preparingConnection, ready: client.connectionPictureReady)
         }
         .background(Palette.panel)
         .overlay(alignment: .top) { LinkLineView(text: linkLine) }

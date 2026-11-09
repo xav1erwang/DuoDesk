@@ -10,9 +10,12 @@ enum MainMenu {
         let main = NSMenu()
 
         let sill = submenu(in: main, title: "DUO你电脑")
-        sill.addItem(withTitle: "关于 DUO你电脑", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let about = sill.addItem(withTitle: "关于 DUO你电脑", action: #selector(AboutPanel.open(_:)), keyEquivalent: "")
+        about.target = AboutPanel.shared
         sill.addItem(.separator())
         sill.addItem(withTitle: "设置…", action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")
+        let feedback = sill.addItem(withTitle: "用户反馈…", action: #selector(FeedbackWindowController.open(_:)), keyEquivalent: "")
+        feedback.target = FeedbackWindowController.shared
         sill.addItem(.separator())
         sill.addItem(withTitle: "退出 DUO你电脑", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 

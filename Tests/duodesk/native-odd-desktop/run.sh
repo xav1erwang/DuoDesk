@@ -11,7 +11,7 @@ swiftc -O -emit-library -emit-module -module-name StreamProtocol Sources/StreamP
 swiftc -swift-version 5 -O -whole-module-optimization -warnings-as-errors -parse-as-library -package-name Sill \
   -Xfrontend -disable-access-control -I "$out" -L "$out" -lStreamProtocol -Xlinker -rpath -Xlinker "$out" \
   Sources/SillHost/NativeDesktopPadder.swift Sources/SillHost/NativeDesktopInput.swift \
-  Sources/SillHost/PointerControl.swift Sources/SillHost/PointerWatch.swift Sources/SillHost/Stats.swift \
+  Sources/SillHost/PointerControl.swift Sources/SillHost/PointerWatch.swift Sources/SillHost/PointerDeliveryCheck.swift Sources/SillHost/Stats.swift \
   Sources/SillHost/HEVCEncoder.swift Sources/SillHost/EncoderMailbox.swift Sources/SillHost/EncoderSlowState.swift \
   iOSClient/HardwareHEVCDecoder.swift iOSClient/HardwareDecoderRouter.swift \
   Tests/duodesk/native-odd-desktop/main.swift -o "$out/check"

@@ -10,6 +10,15 @@ final class Observations: @unchecked Sendable {
     var firstImages: [UInt64] = []
     var errors: [String] = []
 }
+/// Only the instrumented test copy requests a renderer reset on its first image.
+final class PresenterResumeFault: @unchecked Sendable {
+    static let shared = PresenterResumeFault()
+    private let lock = NSLock()
+    private var pending = CommandLine.arguments.contains("--flush-required")
+    func take() -> Bool {
+        lock.withLock { defer { pending = false }; return pending }
+    }
+}
 enum CheckError: Error { case failed(String) }
 func require(_ value: @autoclosure () -> Bool, _ message: String) throws {
     if !value() { throw CheckError.failed(message) }
@@ -76,8 +85,20 @@ func makeSample(_ sequence: Int64) throws -> CMSampleBuffer {
             }
             do {
                 presenter.reset(1)
-                try await feed(1)
+                let checkResume = CommandLine.arguments.contains("--flush-required")
+                try await feed(1, frames: checkResume ? 1 : 80)
+                if checkResume {
+                    for _ in 0..<200 {
+                        if presenter.isReady(1) { break }
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
                 try require(presenter.isReady(1), "initial surface did not become ready")
+                if checkResume {
+                    try require(observations.lock.withLock { observations.errors.isEmpty && observations.firstImages == [1] },
+                                "first-image flush did not resume exactly once")
+                    print("Presentation resume PASS: one first image survived a required renderer flush without disconnecting or waiting for another frame")
+                }
                 let queuedBeforeRehost = presenter.makeInputFence(1)
                 try require(queuedBeforeRehost(), "initial input permit was invalid")
                 layer.removeFromSuperlayer()

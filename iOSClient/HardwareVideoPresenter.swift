@@ -72,11 +72,10 @@ final class HardwareVideoPresenter: @unchecked Sendable {
             guard !stopped, token >= generation, revision > self.revision, fence.accepts(token, revision: revision) else { return }
             self.revision = revision
             generation = token; lastSequence = -1
-            let mustFlush = hasImage || enqueuing || flushing
             hasImage = false; lastSubmittedPermit = nil
-            guard mustFlush else { return }
             // enqueue and flush inherit this actor's isolation in SDK 27. Flush deliberately
-            // cancels a suspended enqueue; all synchronous receiver access stays serialized.
+            // cancels a suspended enqueue and clears a renderer invalidated before its first
+            // image (for example while the display picker or another app was in front).
             await flushReceiver(removingDisplayedImage: true)
         }
 
@@ -157,30 +156,54 @@ final class HardwareVideoPresenter: @unchecked Sendable {
             lastSubmittedPermit = event.permit
             enqueuing = true
             defer { enqueuing = false }
-            do {
-                let result = try await receiver.enqueue(ready)
+            for attempt in 0...1 {
                 guard !stopped, token == generation, eventRevision == revision,
                       event.permit?.isValid != false, fence.accepts(token, revision: eventRevision) else { return }
-                switch result {
-                case .enqueued:
-                    let first = !hasImage
-                    lastSequence = sequence; hasImage = true
-                    if fence.markReady(token, revision: eventRevision), first, let imageSize {
-                        onFirstImage(imageSize, token)
-                        print("Video presenter: first decoded image queued for generation \(token)")
+                do {
+                    let result = try await receiver.enqueue(ready)
+                    guard !stopped, token == generation, eventRevision == revision,
+                          event.permit?.isValid != false, fence.accepts(token, revision: eventRevision) else { return }
+                    switch result {
+                    case .enqueued:
+                        let first = !hasImage
+                        lastSequence = sequence; hasImage = true
+                        if fence.markReady(token, revision: eventRevision), first, let imageSize {
+                            onFirstImage(imageSize, token)
+                            print("Video presenter: first decoded image queued for generation \(token)")
+                        }
+                    case .cancelledDueToFlushRequiredToResume(let error):
+                        print("Video presenter: flush required, generation \(token), revision \(eventRevision), attempt \(attempt): \(error as NSError)")
+                        guard attempt == 0 else {
+                            onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                            return
+                        }
+                        // The renderer explicitly requests a reset, rather than a new network
+                        // connection. Our samples are already decoded, so this same current image
+                        // can be submitted again after the flush without waiting for a keyframe.
+                        await flushReceiver(removingDisplayedImage: false)
+                        if flushing { await waitForFlush() }
+                        continue
+                    case .enqueuedWithDecodeFailures(let errors):
+                        print("Video presenter: decode failures, generation \(token): \(errors.map { String(describing: $0 as NSError) })")
+                        onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                    case .cancelledDueToError(let error):
+                        print("Video presenter: enqueue error, generation \(token), revision \(eventRevision): \(error as NSError)")
+                        onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                    case .cancelledDueToFlush: break
+                    @unknown default:
+                        print("Video presenter: unrecognized enqueue result, generation \(token): \(result)")
+                        onFailure("视频呈现失败，请重新连接。", token, eventRevision)
                     }
-                case .enqueuedWithDecodeFailures, .cancelledDueToError, .cancelledDueToFlushRequiredToResume:
-                    onFailure("视频呈现失败，请重新连接。", token, eventRevision)
-                case .cancelledDueToFlush: break
-                @unknown default: onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                } catch is CancellationError {
+                    // The owning worker was stopped. No image or failure escapes a cancelled task.
+                } catch {
+                    if !stopped, token == generation, eventRevision == revision, event.permit?.isValid != false,
+                       fence.accepts(token, revision: eventRevision) {
+                        print("Video presenter: enqueue threw, generation \(token), revision \(eventRevision): \(error as NSError)")
+                        onFailure("视频呈现失败，请重新连接。", token, eventRevision)
+                    }
                 }
-            } catch is CancellationError {
-                // The owning worker was stopped. No image or failure escapes a cancelled task.
-            } catch {
-                if !stopped, token == generation, eventRevision == revision, event.permit?.isValid != false,
-                   fence.accepts(token, revision: eventRevision) {
-                    onFailure("视频呈现失败，请重新连接。", token, eventRevision)
-                }
+                return
             }
         }
 

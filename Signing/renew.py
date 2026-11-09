@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Mac-assisted development signing. No passwords, private keys, or cloud service.
 
-The scheduled process uses Xcode's existing account session and rebuilds the locally retained
-source of the last installed app, not arbitrary edits in the current working tree.
+The scheduled process uses Xcode's existing account session and builds a fresh, coherent snapshot
+of the current project's latest source. Old successful or interrupted snapshots are never reused.
 It never uninstalls an app or removes any cached signing profile.
 """
 import argparse
@@ -29,6 +29,8 @@ DEFAULT_RENEW_INTERVAL_HOURS = 24
 EXPIRY_RETRY_HOURS = 6
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from source_snapshot import capture_snapshot, validate_snapshot
+from device_install import (StaleDeviceBuild, project_version, bump_project_build,
+                           installed_version, require_current_build, install_and_verify, version_key)
 
 
 def now():
@@ -321,7 +323,11 @@ class InvalidSignedBundle(RuntimeError):
 
 
 def install_verified_app(app, config, expiration, old_expiration, force, binding, log, source_id=None):
-    if expiration <= now() + dt.timedelta(hours=config.get("renew_before_hours", 48)):
+    if expiration <= now():
+        raise RuntimeError("The development profile has expired; the build was not installed.")
+    # --force updates source as well as signing. The renewal lead time must not prevent a
+    # manual code update with the same, still-valid signature already installed on the phone.
+    if not force and expiration <= now() + dt.timedelta(hours=config.get("renew_before_hours", 48)):
         raise RuntimeError("Xcode did not issue a sufficiently fresh profile; see Local/signing-build.log.")
     if old_expiration is not None and (expiration < old_expiration or (not force and expiration == old_expiration)):
         raise RuntimeError("The profile was not extended or would shorten the existing installation. The existing device app was left installed.")
@@ -334,13 +340,12 @@ def install_verified_app(app, config, expiration, old_expiration, force, binding
         raise InvalidSignedBundle("The built app failed signature verification; it was not installed.") from error
     pending = LOCAL / "signing-pending.json"
     if source_id is not None:
-        # A crash after the device install must not let the next automatic run reinstall an
-        # older source. A later retry uses this exact snapshot until the result is recorded.
+        # Record an interrupted attempt so the monitor retries promptly. The retry captures
+        # the current project again; this receipt never selects an older build source.
         atomic_json(pending, {"binding": binding, "source_id": source_id})
-    with log.open("ab") as output:
-        subprocess.run(["/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device",
-                        config["device_id"], str(app)], stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
-    result = {"status": "installed", "binding": binding, "checked_at": now().isoformat(), "expires_at": expiration.isoformat()}
+    release, build = install_and_verify(app, config, log)
+    result = {"status": "installed", "binding": binding, "checked_at": now().isoformat(), "expires_at": expiration.isoformat(),
+              "version": release, "build": build}
     if source_id is not None:
         result["source_id"] = source_id
     # Only advance successful-install state after the device reports success.
@@ -394,7 +399,7 @@ def run(config, force=False, status_only=False, renew_now=False):
     if pending is not None and not pending_source:
         raise ValueError("The pending installation has no source snapshot.")
     due = renewal_due(old_expiration, now(), config.get("renew_before_hours", 48))
-    # An interrupted attempted update must be retried as that same version, never the older one.
+    # An interrupted update is retried promptly, using the latest project source at that attempt.
     pending_update = pending_source is not None and pending_source != state.get("source_id")
     due = due or pending_update
     if status_only or (not force and not renew_now and not due):
@@ -403,20 +408,23 @@ def run(config, force=False, status_only=False, renew_now=False):
         print(json.dumps(result))
         return result
 
-    if force or (old_expiration is None and pending_source is None):
+    current = installed_version(config)
+    candidate = project_version(ROOT)
+    # Check before advancing the build number: stale source must not be relabelled to appear newer.
+    require_current_build(candidate, current)
+    source_id, source_root = capture_snapshot(ROOT, LOCAL)
+    changed = state.get("binding") != binding or source_id != state.get("source_id")
+    if current is not None and version_key(candidate) == version_key(current) and (force or changed):
+        print("Building latest source as build " + bump_project_build(ROOT))
         source_id, source_root = capture_snapshot(ROOT, LOCAL)
-    else:
-        source_id = pending_source or state.get("source_id")
-        if source_id is None:
-            raise RuntimeError("The installed version has no verified source snapshot; no automatic install was attempted.")
-        source_root = validate_snapshot(LOCAL, source_id)
+    require_current_build(project_version(source_root), installed_version(config))
     build_root = build_dir_for_source(source_id)
     app = build_root / "Build/Products" / (config.get("configuration", "Debug") + "-iphoneos/Sill.app")
     # No shell interpolation: even paths containing spaces and a Chinese checkout name are safe.
     log = LOCAL / "signing-build.log"
     with log.open("ab") as output:
         subprocess.run(build_command(config, source_root, build_root), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=1800)
-    # Detect accidental mutation of the pinned source during an Xcode build before any install.
+    # Detect mutation of this attempt's snapshot during an Xcode build before any install.
     validate_snapshot(LOCAL, source_id)
     expiration = profile_expiration(read_profile(app), config)
     needs_refresh = renewal_due(expiration, now(), config.get("renew_before_hours", 48))
@@ -482,7 +490,13 @@ def observed_device(document, device_id):
         return None
     if state not in {"connected", "available", "disconnected", "unavailable"}:
         return None
-    connected = state in {"connected", "available"} and pairing == "paired"
+    # CoreDevice reports an available, paired phone as "disconnected" until a developer
+    # tunnel opens. Its connect capability distinguishes this from an offline phone.
+    capabilities = device.get("capabilities", [])
+    can_connect = isinstance(capabilities, list) and any(
+        isinstance(item, dict) and item.get("featureIdentifier") == "com.apple.coredevice.feature.connectdevice"
+        for item in capabilities)
+    connected = pairing == "paired" and (state in {"connected", "available"} or (state == "disconnected" and can_connect))
     result = {"connected": connected}
     if connected:
         transport = connection.get("transportType") or legacy.get("transportType")
@@ -575,8 +589,15 @@ def monitor(config, requested=False):
     state["last_trigger"] = "manual" if requested else (connection_reason or ("interrupted" if pending_recovery else "daily"))
     atomic_json(path, state)
     try:
-        # Unlike --force, the automatic path always builds the last installed or pending snapshot.
+        # Both manual and automatic attempts capture the latest project source afresh.
         result = run(config, renew_now=True)
+    except StaleDeviceBuild as error:
+        state["last_result"] = "superseded"
+        state["last_completed_at"] = now().isoformat()
+        atomic_json(path, state)
+        result = {"status": "newer_version_installed", "message": str(error)}
+        print(json.dumps(result))
+        return result
     except Exception:
         state["last_result"] = "failed"
         state["last_completed_at"] = now().isoformat()
@@ -650,7 +671,7 @@ def main():
     action.add_argument("--status", action="store_true")
     action.add_argument("--force", action="store_true")
     action.add_argument("--monitor", action="store_true", help=argparse.SUPPRESS)
-    action.add_argument("--renew-now", action="store_true", help="Attempt renewal of the last installed snapshot now.")
+    action.add_argument("--renew-now", action="store_true", help="Build the latest project source and attempt renewal now.")
     action.add_argument("--enable-auto", action="store_true")
     action.add_argument("--disable-auto", action="store_true")
     args = parser.parse_args()
@@ -688,6 +709,8 @@ def main():
             monitor(config)
         elif args.renew_now:
             result = monitor(config, requested=True)
+            if result.get("status") == "newer_version_installed":
+                raise SystemExit(75)
             if result.get("status") in {"waiting_for_device", "device_probe_unavailable"}:
                 print(json.dumps(result))
                 raise SystemExit(75)
@@ -702,5 +725,6 @@ if __name__ == "__main__":
         # A failure is not an installation: retain the last successful expiry so retries cannot
         # silently replace it with an older profile. Details stay in a separate ignored file.
         atomic_json(LOCAL / "signing-error.json", {"status": "failed", "checked_at": now().isoformat(), "reason": str(error)})
+        print(str(error), file=sys.stderr)
         print("Signing could not finish. See Local/signing-error.json and Local/signing-build.log.", file=sys.stderr)
         sys.exit(1)

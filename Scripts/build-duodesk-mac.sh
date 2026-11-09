@@ -67,6 +67,9 @@ fi
 app="$output/DUO你电脑.app"
 stage="$work/DUO你电脑.app"
 mkdir -p "$stage/Contents/MacOS" "$stage/Contents/Resources"
+mkdir -p "$stage/Contents/Library/LaunchDaemons" "$stage/Contents/Library/LaunchAgents"
+cp Packaging/com.duodesk.host.boot.plist "$stage/Contents/Library/LaunchDaemons/"
+cp Packaging/com.duodesk.host.session.plist "$stage/Contents/Library/LaunchAgents/"
 # Record the current SDK so native controls use the current macOS appearance.
 minos="$(xcrun vtool -show-build "$work/DuoDeskHost" | awk '$1 == "minos" && !seen {print $2; seen=1}')"
 xcrun vtool -set-build-version macos "$minos" "$(xcrun --sdk macosx --show-sdk-version)" \
@@ -75,6 +78,8 @@ cp Packaging/DuoHost-Info.plist "$stage/Contents/Info.plist"
 [ -z "$version" ] || /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$stage/Contents/Info.plist"
 [ -z "$build" ] || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" "$stage/Contents/Info.plist"
 cp LICENSE NOTICE "$stage/Contents/Resources/"
+cp iOSClient/Montserrat-900.ttf "$stage/Contents/Resources/"
+cp iOSClient/Montserrat-OFL.txt "$stage/Contents/Resources/"
 if [ -f "$root/Packaging/DuoAppIcon.icon/icon.json" ]; then
     # Packaging/DuoAppIcon.icon is an Icon Composer document (macOS 26/27's layered,
     # Liquid Glass format). actool compiles it into Assets.car, which macOS 26+ masks

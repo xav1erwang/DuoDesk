@@ -16,6 +16,8 @@ struct AppSettingsView: View {
     @AppStorage(StreamClient.gesturesKey) private var gesturesOn = true
     @AppStorage(StreamClient.largerPictureKey) private var largerPicture = false
     @AppStorage(StreamClient.clipboardKey) private var clipboardOn = true
+    @AppStorage(DuoDiagnostics.enabledKey) private var loggingEnabled = true
+    @State private var showingFeedback = false
     /// What this device asks the Mac for; the Mac's own cap still applies.
     @AppStorage(DuoStreamPolicy.preferredFPSKey) private var preferredFPS = DuoStreamPolicy.defaultFPS
 
@@ -51,8 +53,6 @@ struct AppSettingsView: View {
                         row {
                             Toggle("共享剪贴板", isOn: $clipboardOn)
                         }
-                        divider
-                        note("这些偏好跟随这台设备，换一台 Mac 也生效。画质与分辨率属于 Mac，在串流页的设置面板里调。")
                     }
 
                     if SillLinks.download != nil {
@@ -60,6 +60,24 @@ struct AppSettingsView: View {
                             link("下载 Mac 服务端", to: SillLinks.download)
                             divider
                             note("Mac 上运行服务端并配对后，这台设备才能连接。")
+                        }
+                    }
+
+                    group("日志") {
+                        row { Toggle("日志", isOn: $loggingEnabled) }
+                        note(DuoDiagnostics.notice)
+                        divider
+                        Button { showingFeedback = true } label: {
+                            HStack {
+                                Text("采集日志")
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.right")
+                            }
+                            .font(.system(size: 15))
+                            .foregroundStyle(Palette.accent)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
                         }
                     }
 
@@ -97,6 +115,8 @@ struct AppSettingsView: View {
             }
         }
         .readsAppearance()
+        .onChange(of: loggingEnabled) { _, value in DuoDiagnostics.shared.setEnabled(value) }
+        .sheet(isPresented: $showingFeedback) { DiagnosticFeedbackView() }
     }
 
     // MARK: Pieces

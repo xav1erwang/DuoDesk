@@ -103,6 +103,7 @@ enum Check {
                 router.sample(try sample(1), token: token, identity: id, permit: oldPermit)
                 try await wait("initial image") { presenter.isReady(token) || !errors.all.isEmpty }
                 guard errors.all.isEmpty else { throw Failure.invalid("initial renderer") }
+                let initialFlushes = await ReceiverFault.gate.state.flushes
                 router.sample(try sample(2), token: token, identity: id, permit: oldPermit)
                 try await wait("receiver enqueue held") { await ReceiverFault.gate.state.held }
                 router.enqueue(Data(), isKeyframe: false)
@@ -142,7 +143,7 @@ enum Check {
                 let delayedState = await ReceiverFault.gate.state
                 let finalSequence = await presenter.pump.lastSequence
                 let requiredFlushes = CommandLine.arguments.contains("--reset") ? 2 : 1
-                recovered = recovered && inputInvalidated && state.flushes == requiredFlushes
+                recovered = recovered && inputInvalidated && state.flushes - initialFlushes == requiredFlushes
                     && delayedState.flushes == state.flushes && finalSequence == expectedSequence
                 print("\(recovered ? "PASS" : "FAIL") held enqueue recovery: held=\(state.held), flushes=\(state.flushes), fresh=\(recovered), errors=\(errors.all.count)")
                 print("SCOPE: owned window, real renderer for initial/fresh samples, artificial pre-enqueue suspension and gap; not a real AVFoundation hang, desktop, network or Duo")

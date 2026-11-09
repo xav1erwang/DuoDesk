@@ -5,6 +5,8 @@ import StreamProtocol
 
 /// The aluminum lower half. The video view is a sibling and is never rebuilt by a mode change.
 struct DuoControlDeck: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @ObservedObject var client: StreamClient
     @Binding var latched: KeyModifiers
     let showSettings: () -> Void
@@ -15,36 +17,44 @@ struct DuoControlDeck: View {
     @State private var capsLock = false
     @State private var keyboardTouches = DuoKeyboardTouches()
 
+    private var appearance: DuoDeckAppearance {
+        DuoDeckAppearance(dark: colorScheme == .dark, highContrast: contrast == .increased)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             // The compact toolbar and safe bottom inset leave the rest to the controls.
             let room = max(0, geometry.size.height - 66 - (mode == .combined ? 6 : 0))
             let combinedHeight = min(min(240, max(200, room * 0.62)), max(0, room - min(70, room * 0.3)))
             let keyHeight = mode == .combined ? combinedHeight : room
-            VStack(spacing: 6) {
+            VStack(spacing: 0) {
                 toolbar
-                if mode.hasKeyboard {
-                    DuoKeyboardView(capsLock: $capsLock, keyboardTouches: $keyboardTouches,
-                                    inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
-                        .frame(height: keyHeight)
-                        .accessibilityIdentifier("duo.keyboard")
-                }
-                if mode.hasTrackpad {
-                    glassTrackpad
-                        .frame(maxWidth: mode == .combined ? min(geometry.size.width * 0.75, 540) : .infinity)
-                        .frame(maxHeight: .infinity)
-                        .accessibilityIdentifier("duo.trackpad")
+                    // Center the 34-point controls in their 44-point header, with 5 points
+                    // above and below. The keyboard and trackpad keep their existing frames.
+                    .frame(height: 44)
+                VStack(spacing: 6) {
+                    if mode.hasKeyboard {
+                        DuoKeyboardView(capsLock: $capsLock, keyboardTouches: $keyboardTouches,
+                                        inputReady: client.hasNativeDesktopVideo, send: client.sendFromKeyRow)
+                            .frame(height: keyHeight)
+                            .accessibilityIdentifier("duo.keyboard")
+                    }
+                    if mode.hasTrackpad {
+                        glassTrackpad
+                            .frame(maxWidth: mode == .combined ? min(geometry.size.width * 0.75, 540) : .infinity)
+                            .frame(maxHeight: .infinity)
+                            .accessibilityIdentifier("duo.trackpad")
+                    }
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.top, 4)
             .padding(.bottom, 22)
         }
         .clipped()
         .background {
-            LinearGradient(colors: [Color(white: 0.76), Color(white: 0.9), Color(white: 0.75)],
+            LinearGradient(colors: appearance.chassis,
                            startPoint: .topLeading, endPoint: .bottomTrailing)
-                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.65)).frame(height: 1) }
+                .overlay(alignment: .top) { Rectangle().fill(appearance.rim).frame(height: 1) }
         }
         .onChange(of: mode) { _, _ in
             latched = []
@@ -76,8 +86,8 @@ struct DuoControlDeck: View {
                         }
                         .font(.system(size: 12, weight: .semibold))
                         .frame(maxWidth: .infinity, minHeight: 30)
-                        .foregroundStyle(mode == item ? Color.white : Color(white: 0.22))
-                        .background(mode == item ? Color(white: 0.20) : Color.clear,
+                        .foregroundStyle(mode == item ? appearance.selectedInk : appearance.ink)
+                        .background(mode == item ? appearance.selection : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
@@ -87,8 +97,8 @@ struct DuoControlDeck: View {
                 }
             }
             .padding(2)
-            .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.5)))
+            .background(appearance.segmentWell, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(appearance.rim))
             .frame(maxWidth: 300)
             Spacer(minLength: 0)
             rateMenu
@@ -118,7 +128,7 @@ struct DuoControlDeck: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .foregroundStyle(Color(white: 0.22))
+            .foregroundStyle(appearance.ink)
             .frame(width: 48, height: 34)
             .contentShape(Rectangle())
         }
@@ -132,7 +142,7 @@ struct DuoControlDeck: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color(white: 0.25))
+                .foregroundStyle(appearance.ink)
                 .frame(width: 40, height: 34)
                 .contentShape(Rectangle())
         }
@@ -151,13 +161,14 @@ struct DuoControlDeck: View {
                      sendGesture: { client.sendGesture($0, fingers: $1) })
             .background {
                 RoundedRectangle(cornerRadius: 13)
-                    .fill(LinearGradient(colors: [Color(white: 0.69), Color(white: 0.78)],
+                    .fill(LinearGradient(colors: appearance.trackpad,
                                          startPoint: .top, endPoint: .bottom))
-                    .shadow(color: .black.opacity(0.2), radius: 1, y: -1)
-                    .shadow(color: .white.opacity(0.9), radius: 1, y: 1)
+                    .shadow(color: .black.opacity(appearance.dark ? 0.65 : 0.2), radius: 1, y: -1)
+                    .shadow(color: appearance.rim, radius: 1, y: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: 13))
-            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(Color.black.opacity(0.2), lineWidth: 0.75))
+            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(appearance.trackpadEdge,
+                                                                 lineWidth: appearance.highContrast ? 1.25 : 0.75))
             .accessibilityLabel("Mac 触控板")
             .accessibilityHint("单指移动，轻点单击，双指滚动或右键，双击后拖动")
     }
@@ -179,6 +190,8 @@ struct DuoControlDeck: View {
 }
 
 private struct DuoKeyboardView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Binding var capsLock: Bool
     @Binding var keyboardTouches: DuoKeyboardTouches
     let inputReady: Bool
@@ -235,8 +248,9 @@ private struct DuoKeyboardView: View {
             .scrollIndicators(.hidden)
             .scrollBounceBehavior(.basedOnSize)
         }
-        .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 11))
-        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.45), lineWidth: 0.7))
+        .background(Color(white: colorScheme == .dark ? 0.035 : 0.16), in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11)
+            .strokeBorder(.white.opacity(contrast == .increased ? 0.65 : colorScheme == .dark ? 0.14 : 0.45), lineWidth: 0.7))
         .disabled(!inputReady)
     }
 
@@ -396,19 +410,48 @@ private final class DuoKeyTouchControl: UIControl {
 }
 
 private struct DuoKeycapStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     let selected: Bool
     let pressed: Bool
     func makeBody(configuration: Configuration) -> some View {
         let pressed = pressed || configuration.isPressed
+        let dark = colorScheme == .dark
+        let ink = selected ? Color(red: 0.64, green: 0.98, blue: 0.77) : Color(white: dark ? 1 : 0.96)
         configuration.label
-            .foregroundStyle(selected ? Color(red: 0.64, green: 0.9, blue: 0.74) : Color(white: 0.96))
+            .foregroundStyle(ink)
+            // The backlight belongs to the legends; the key face stays dark.
+            .shadow(color: dark ? ink.opacity(pressed ? 0.65 : 0.35) : .clear, radius: pressed ? 3 : 1.5)
             .background {
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(LinearGradient(colors: [Color(white: pressed ? 0.09 : 0.24),
-                                                   Color(white: 0.09)], startPoint: .top, endPoint: .bottom))
+                    .fill(LinearGradient(colors: [Color(white: pressed ? 0.07 : dark ? 0.16 : 0.24),
+                                                   Color(white: dark ? 0.065 : 0.09)], startPoint: .top, endPoint: .bottom))
                     .shadow(color: .black.opacity(0.9), radius: 0.5, y: pressed ? 0 : 2)
             }
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(pressed ? 0.05 : 0.18), lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(.white.opacity(contrast == .increased ? 0.65 : pressed ? 0.28 : 0.18), lineWidth: 0.5))
+            .overlay(alignment: .topLeading) {
+                if selected {
+                    Circle().fill(ink).frame(width: 3, height: 3).padding(4)
+                        .accessibilityHidden(true)
+                }
+            }
             .offset(y: pressed ? 1 : 0)
     }
+}
+
+/// A single material palette keeps every deck mode in the same system appearance.
+private struct DuoDeckAppearance {
+    let dark: Bool
+    let highContrast: Bool
+    var chassis: [Color] { dark ? [Color(white: 0.13), Color(white: 0.19), Color(white: 0.105)]
+                                : [Color(white: 0.76), Color(white: 0.9), Color(white: 0.75)] }
+    var trackpad: [Color] { dark ? [Color(white: 0.17), Color(white: 0.205)]
+                                 : [Color(white: 0.69), Color(white: 0.78)] }
+    var ink: Color { Color(white: dark ? 0.94 : 0.22) }
+    var selectedInk: Color { .white }
+    var selection: Color { Color(white: dark ? 0.36 : 0.20) }
+    var segmentWell: Color { .black.opacity(dark ? 0.28 : 0.08) }
+    var rim: Color { .white.opacity(highContrast ? 0.65 : dark ? 0.16 : 0.5) }
+    var trackpadEdge: Color { dark ? .white.opacity(highContrast ? 0.65 : 0.22) : .black.opacity(0.2) }
 }

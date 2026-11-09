@@ -150,6 +150,13 @@ package final class RemoteAccess {
     /// The paired devices' key prefixes (what the app's "last connected" records are keyed by).
     package var pairedPrefixes: [String] { paired.compactMap { $0.fingerprintData.map(RemoteIdentity.shortName) } }
 
+    package func bootIdentity() throws -> BootIdentity {
+        guard let identity, let key = RemoteKey.export(identity.remote.privateKey) else {
+            throw IdentityStoreError("Mac 的身份尚未准备好，无法启用开机服务。")
+        }
+        return BootIdentity(privateKey: key, recognitionKey: identity.recognitionKey, paired: paired)
+    }
+
     /// Loads (or creates) the identity and the trust list from `store`. A failure leaves the host
     /// without an identity: no TXT tag, no kind 18, no remote door, no TLS home door;
     /// `identityProblem` says why. That includes a trust list that cannot be read: kept with an

@@ -1,4 +1,5 @@
 import Foundation
+import StreamProtocol
 
 /// Every line the host logs, for the menu bar app, whose stdout goes nowhere when Finder, `open`
 /// or a login item launches it: the last lines in a ring for its Log window, and a timestamped
@@ -64,6 +65,8 @@ package final class HostLog: @unchecked Sendable {
     package func append(_ text: String) {
         lock.lock()
         guard capacity > 0 || sink != nil else { lock.unlock(); return }
+        guard DuoDiagnostics.shared.isEnabled else { lock.unlock(); return }
+        DuoDiagnostics.shared.record(text)
         let line = Line(seq: nextSeq, date: Date(), text: text)
         nextSeq += 1
         if capacity > 0 {

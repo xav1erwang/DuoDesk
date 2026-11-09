@@ -4,16 +4,14 @@ import SillHostCore
 
 /// The Settings window's tabs, in the toolbar's order.
 enum SettingsTab: String, CaseIterable {
-    case general, devices, streaming, virtualDisplay, permissions, remoteAccess
+    case general, devices, remoteAccess, permissions
 
     var title: String {
         switch self {
         case .general: "常规"
         case .devices: "设备"
-        case .streaming: "串流"
-        case .virtualDisplay: "虚拟显示器"
         case .permissions: "权限"
-        case .remoteAccess: "远程访问"
+        case .remoteAccess: "连接"
         }
     }
 
@@ -21,8 +19,6 @@ enum SettingsTab: String, CaseIterable {
         switch self {
         case .general: "gearshape"
         case .devices: "ipad.and.iphone"
-        case .streaming: "play.rectangle"
-        case .virtualDisplay: "display"
         case .permissions: "lock.shield"
         case .remoteAccess: "globe"
         }

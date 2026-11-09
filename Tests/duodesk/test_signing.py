@@ -18,10 +18,19 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("renew", Path(__file__).resolve().parents[2] / "Signing/renew.py")
 renew = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(renew)
+import device_install
 
 
 class SigningTests(unittest.TestCase):
     def setUp(self):
+        # These suites isolate signing/snapshot behavior; device-version checks have their own
+        # simulated two-Mac regression tests in signing-device-version.
+        for stub in (patch.object(renew, "installed_version", return_value=None),
+                     patch.object(renew, "project_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "installed_version", return_value=("0.1.0", "1")),
+                     patch.object(device_install, "project_version", return_value=("0.1.0", "1"))):
+            stub.start()
+            self.addCleanup(stub.stop)
         self.config = {"team_id": "TESTTEAM01", "device_id": "00000000-0000000000000000", "bundle_id": "com.example.duodesk"}
         self.source_id = "a" * 64
         self.source_root = Path("/tmp/duodesk-approved-source")
@@ -91,7 +100,7 @@ class SigningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
-            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
             with patch.object(renew, "read_profile", return_value=self.profile), patch.object(renew.subprocess, "run") as run:
                 run.side_effect = [None, None, subprocess.CalledProcessError(1, ["devicectl"])]
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -144,6 +153,7 @@ class SigningTests(unittest.TestCase):
             failure = subprocess.CalledProcessError(1, ["xcodebuild"])
             with patch.object(sys, "argv", [str(script)]), \
                  patch.object(subprocess, "check_output", return_value=plistlib.dumps(profile)), \
+                 patch("source_snapshot.capture_snapshot", return_value=(self.source_id, self.source_root)), \
                  patch("source_snapshot.validate_snapshot", return_value=self.source_root), \
                  patch.object(subprocess, "run", side_effect=failure) as run, redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit) as exit_code:
@@ -189,7 +199,7 @@ class SigningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
-            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
             (Path(directory) / "signing-status.json").write_text(json.dumps(self.install_record(self.time + dt.timedelta(days=6))))
             older = dict(self.profile, ExpirationDate=self.time + dt.timedelta(days=4))
             with patch.object(renew, "read_profile", return_value=older), patch.object(renew.subprocess, "run") as run:
@@ -204,7 +214,7 @@ class SigningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
-            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
             expiration = self.time + dt.timedelta(days=6)
             state_path = Path(directory) / "signing-status.json"
             old = self.install_record(expiration)
@@ -222,11 +232,35 @@ class SigningTests(unittest.TestCase):
                 self.assertEqual(run.call_args_list[0].args[0][0], "/usr/bin/xcodebuild")
                 self.assertEqual(run.call_args_list[-1].args[0][1:4], ["devicectl", "device", "install"])
 
+    def test_manual_update_inside_renewal_window_requires_only_an_unexpired_profile(self):
+        for hours in (24, 0, -1):
+            with self.subTest(hours=hours), tempfile.TemporaryDirectory() as directory, \
+                 patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
+                app = Path(directory) / "Sill.app"
+                app.mkdir()
+                (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
+                expiration = self.time + dt.timedelta(hours=hours)
+                state_path = Path(directory) / "signing-status.json"
+                original = self.install_record(expiration)
+                state_path.write_text(json.dumps(original))
+                with patch.object(renew.subprocess, "run") as run:
+                    if hours > 0:
+                        result = renew.install_verified_app(app, self.config, expiration, expiration, True,
+                                                            "test-binding", Path(directory) / "build.log", self.source_id)
+                        self.assertEqual(result["expires_at"], expiration.isoformat())
+                        self.assertEqual(run.call_args_list[-1].args[0][1:4], ["devicectl", "device", "install"])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "expired"):
+                            renew.install_verified_app(app, self.config, expiration, expiration, True,
+                                                       "test-binding", Path(directory) / "build.log", self.source_id)
+                        run.assert_not_called()
+                        self.assertEqual(json.loads(state_path.read_text()), original)
+
     def test_daily_attempt_does_not_call_an_unchanged_profile_a_renewal(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
-            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
             expiration = self.time + dt.timedelta(days=6)
             state = self.install_record(expiration)
             (Path(directory) / "signing-status.json").write_text(json.dumps(state))
@@ -252,7 +286,7 @@ class SigningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(renew, "LOCAL", Path(directory)), patch.object(renew, "now", return_value=self.time):
             app = Path(directory) / "SignedBuild/Build/Products/Debug-iphoneos/Sill.app"
             app.mkdir(parents=True)
-            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"]}))
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.config["bundle_id"], "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "1"}))
             (Path(directory) / "signing-status.json").write_text(json.dumps(self.install_record(self.time + dt.timedelta(hours=24))))
             with patch.object(renew, "read_profile", return_value=self.profile) as read, \
                  patch.object(renew.subprocess, "run") as run:

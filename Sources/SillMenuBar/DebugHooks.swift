@@ -368,7 +368,7 @@ enum DebugHooks {
 
         if !AppModel.bundled, UserDefaults.standard.bool(forKey: "SillRenderStreamingOnly") {
             for (name, appearance) in appearances {
-                render(SettingsPane(tab: .streaming, model: model)
+                render(SettingsPane(tab: .general, model: model)
                         .background(Color(nsColor: .windowBackgroundColor)),
                        appearance: appearance, to: out.appendingPathComponent("pane-streaming-\(name).png"))
             }
@@ -383,16 +383,24 @@ enum DebugHooks {
         let neverChecked = updatePaneSamples()[0].pane
         for tab in SettingsTab.allCases where tab != .remoteAccess && tab != .devices {
             for (name, appearance) in appearances {
-                render(SettingsPane(tab: tab, model: model, previewUpdates: neverChecked, previewClipboardAccess: .allowed)
+                render(SettingsPane(tab: tab, model: model,
+                                    previewUpdates: Bundle.main.bundleIdentifier == "com.duodesk.host" ? nil : neverChecked,
+                                    previewClipboardAccess: .allowed)
                         .background(Color(nsColor: .windowBackgroundColor)),
                        appearance: appearance, to: out.appendingPathComponent("pane-\(tab.rawValue)-\(name).png"))
             }
         }
+        for (name, appearance) in appearances {
+            render(DiagnosticFeedbackView().background(Color(nsColor: .windowBackgroundColor)),
+                   appearance: appearance, to: out.appendingPathComponent("feedback-\(name).png"))
+            render(AboutContent().background(Color(nsColor: .windowBackgroundColor)),
+                   appearance: appearance, to: out.appendingPathComponent("about-\(name).png"))
+        }
         for sample in devicesPaneSamples() {
-            let pane = DevicesPane(status: sample.status, requirePairing: .constant(sample.requirePairing),
-                                   requirePairingProblem: nil, actions: DevicesPane.Actions(), now: previewNow)
+            let pane = DevicesPane(status: sample.status, actions: DevicesPane.Actions(), now: previewNow)
                 .formStyle(.grouped)
-                .frame(width: 520)
+                .controlSize(.small)
+                .frame(width: 440)
                 .background(Color(nsColor: .windowBackgroundColor))
             for (name, appearance) in appearances {
                 render(pane, appearance: appearance, to: out.appendingPathComponent("pane-devices-\(sample.name)-\(name).png"))
@@ -407,7 +415,8 @@ enum DebugHooks {
         for (sampleName, on, access) in clipboardSamples {
             let section = Form { ClipboardSection(shareClipboard: .constant(on), access: access) }
                 .formStyle(.grouped)
-                .frame(width: 520)
+                .controlSize(.small)
+                .frame(width: 440)
                 .background(Color(nsColor: .windowBackgroundColor))
             for (name, appearance) in appearances {
                 render(section, appearance: appearance, to: out.appendingPathComponent("pane-clipboard-\(sampleName)-\(name).png"))
@@ -416,18 +425,20 @@ enum DebugHooks {
         for sample in updatePaneSamples() {
             let section = Form { UpdatesSection(pane: sample.pane, automatic: .constant(sample.automatic)) }
                 .formStyle(.grouped)
-                .frame(width: 520)
+                .controlSize(.small)
+                .frame(width: 440)
                 .background(Color(nsColor: .windowBackgroundColor))
             for (name, appearance) in appearances {
                 render(section, appearance: appearance, to: out.appendingPathComponent("pane-updates-\(sample.name)-\(name).png"))
             }
         }
         for sample in remotePaneSamples() {
-            let pane = RemoteAccessPane(status: sample.status, remoteAccess: .constant(sample.status.remoteAccess),
-                                        internetAccess: .constant(sample.status.internetAccess), keepAvailable: .constant(true), port: 7455,
+            let pane = RemoteAccessPane(status: sample.status,
+                                        internetAccess: .constant(sample.status.internetAccess), directWireless: .constant(false), port: 7455,
                                         addressName: sample.status.addressName, actions: RemoteAccessPane.Actions())
                 .formStyle(.grouped)
-                .frame(width: 520)
+                .controlSize(.small)
+                .frame(width: 440)
                 .background(Color(nsColor: .windowBackgroundColor))
             for (name, appearance) in appearances {
                 render(pane, appearance: appearance, to: out.appendingPathComponent("pane-remote-\(sample.name)-\(name).png"))
@@ -502,8 +513,7 @@ enum DebugHooks {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
-    /// Every glyph state on a light and a dark menu bar at real size, then 6× for review, and the
-    /// SF Symbol fallback for comparison.
+    /// Every menu bar state on light and dark bars at real size, then 6× for review.
     private static func renderGlyphSheet(to url: URL) {
         let states = StatusGlyph.State.allCases
         let zoom: CGFloat = 6
@@ -531,10 +541,11 @@ enum DebugHooks {
             (dark ? NSColor(white: 0.14, alpha: 1) : NSColor(white: 0.92, alpha: 1)).setFill()
             bar.fill()
             let ink: NSColor = dark ? .white : .black
-            let images = states.map { StatusGlyph.image($0) } + [StatusGlyph.symbolFallback].compactMap { $0 }
+            let images = states.map { StatusGlyph.image($0) }
             for (i, image) in images.enumerated() {
                 let s = image.size.height > 0 ? image.size : StatusGlyph.size
-                tinted(image, ink).draw(in: NSRect(x: 20 + CGFloat(i) * 60, y: bar.minY + (30 - s.height) / 2, width: s.width, height: s.height))
+                let rendered = image.isTemplate ? tinted(image, ink) : image
+                rendered.draw(in: NSRect(x: 20 + CGFloat(i) * 60, y: bar.minY + (30 - s.height) / 2, width: s.width, height: s.height))
             }
         }
         for (i, state) in states.enumerated() {

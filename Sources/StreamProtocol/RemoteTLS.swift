@@ -26,13 +26,15 @@ public enum RemoteTLS {
     public static let sessionALPN = "sill/1"
     /// Pairing: exactly one kind 19 from the device and one kind 20 back, then close.
     public static let pairingALPN = "sill-pair/1"
+    /// Paired local devices only: a lightweight hello and echoes, never a control session.
+    public static let pathProbeALPN = "duo-path/1"
     /// What a host offers, both doors, for good (the compatibility floor, CLAUDE.md): a device from
     /// the first public build offers `sill/1` for a session and `sill-pair/1` for pairing, and only
     /// inside a `sill/1` session can a host tell it anything, kind 22 "update" included. So a later
     /// host adds a later generation beside these and never drops one: a host that no longer serves
     /// such a device still completes its `sill/1` handshake, reads its hello through the device
     /// gate and says "update"; without `sill/1` the device sees only a failed handshake and redials.
-    public static let serverALPNs = [sessionALPN, pairingALPN]
+    public static let serverALPNs = [sessionALPN, pairingALPN, pathProbeALPN]
     /// The SNI every client sends, so a dynamic DNS or MagicDNS name never crosses the network in
     /// clear. The host ignores it.
     public static let serverName = "sill"
