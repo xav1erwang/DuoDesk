@@ -8,8 +8,6 @@
   qlmanage -t -s 1024 -o . design/AppIcon.svg   # then flatten alpha before adding to the catalog
   ```
 
-  The three-direction exploration and the final board live on the design
-  canvas linked from `docs/BRIEF.md`.
 
 - The Mac app's icon comes from the same file. `Scripts/make-app.sh` renders
   it with Quick Look (`qlmanage -t -s 1024`), makes the render the one layer
@@ -33,9 +31,8 @@
   The VisionTec "V" sits centred on the screen as a watermark: Montserrat Black
   (the brand's wordmark font), outlined, cap height 210 on the grid, filled with
   a translucent glass gradient lit at its top-left so the screen shows through.
-  VisionTec's wordmark spec is in `VisionTec 品牌资源/VisionTec 文字 Logo
-  设计规范.md` (in the VisionLab repo): Montserrat 900, uppercase, 0.18em
-  tracking. Do not redraw the letter — re-outline it from the font.
+  The wordmark: Montserrat 900, uppercase, 0.18em tracking. Do not redraw the
+  letter — re-outline it from the font (`iOSClient/Montserrat-900.ttf`).
 
   `Scripts/build-duodesk-mac.sh` compiles it with `actool` into `Assets.car`
   plus `DuoAppIcon.icns` and declares both `CFBundleIconName` and
@@ -64,6 +61,3 @@
   (`Sources/SillMenuBar/StatusGlyph.swift`): the iMac outline with the tilted
   iPad, as a template image. `SillMenuBar -SillRenderPreviews <dir>` writes
   `glyphs.png` with every state on light and dark bars.
-- `screenshots/`: the App Store's iPad screenshots that the README shows, at
-  half size (1032 × 1376, JPEG). Open-source app lists link these files, so
-  keep their names.

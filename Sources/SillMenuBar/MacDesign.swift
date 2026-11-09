@@ -1,9 +1,9 @@
 // Copyright 2026 DUO你电脑 contributors. SPDX-License-Identifier: Apache-2.0
 import SwiftUI
 
-// The Mac's half of the design in `design/deep-blue-ui/`: the same tokens by
-// appearance, the same frosted panel, the same wordmark. The menu bar app's own
-// windows are drawn by us; the menu itself stays AppKit's.
+// The Mac's half of the app's design: the same tokens by appearance as the
+// client's DesignSystem, the same frosted panel, the same wordmark. The menu bar
+// app's own windows are drawn by us; the menu itself stays AppKit's.
 
 extension Color {
     init(hex: UInt32, opacity: Double = 1) {

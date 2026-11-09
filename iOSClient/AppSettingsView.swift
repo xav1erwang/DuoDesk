@@ -2,8 +2,8 @@
 import SwiftUI
 import StreamProtocol
 
-/// The app's own settings, reached from the connect screen's toolbar
-/// (design/deep-blue-ui/connect-redesign.html). What lives here is what belongs to
+/// The app's own settings, reached from the connect screen's toolbar. What lives
+/// here is what belongs to
 /// this device rather than to a connection: the switches that change how it drives
 /// the Mac, where to get the Mac's side, and the two addresses App Review asks for.
 ///

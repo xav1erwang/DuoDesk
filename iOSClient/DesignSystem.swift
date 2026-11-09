@@ -7,8 +7,8 @@ import CoreText
 //
 // One palette, two appearances. Every colour here is a dynamic UIColor, so a view
 // that asks for `Palette.text` gets the dark or the light value from the system
-// appearance without a colour scheme threaded through the call sites. The values
-// and the reasoning are in `design/deep-blue-ui/README.md`.
+// appearance without a colour scheme threaded through the call sites. These are the
+// one palette the client and the Mac menu bar app both draw from.
 
 extension UIColor {
     convenience init(hex: UInt32, alpha: CGFloat = 1) {
@@ -273,7 +273,7 @@ struct VisionTecWordmark: View {
 
 // MARK: - A Mac on the connect screen
 
-/// One Mac, as a card (design/deep-blue-ui/connect-redesign.html). The list row it
+/// One Mac, as a card. The list row it
 /// replaces showed the same two facts — the name and the kind of link — with the
 /// window count a Mac only has once you are connected.
 struct MacCard: View {

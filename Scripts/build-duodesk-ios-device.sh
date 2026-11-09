@@ -1,17 +1,8 @@
 #!/bin/bash
-# Build and install the iOS app on a connected iPhone, safely.
-#
-# Why this exists: installing the same build number over and over made iOS take
-# the delta path (`installMode=1`, a ComputedDelta), and a delta install can land
-# a bundle whose Assets.car and debug dylib are the previous ones — the app then
-# looks and behaves like the old version while `devicectl` reports success. Two
-# habits prevent it, both automated here:
-#
-#   1. Every install gets a build number nobody has installed before (the
-#      project's CURRENT_PROJECT_VERSION is bumped and committed with it).
-#   2. The installed bundle is verified against what was built — its icon's
-#      colour and its version — and the install is retried without the delta
-#      cache (uninstall, then install) when they disagree.
+# Build and install the iOS app on a connected iPhone.
+# Check the phone before advancing the source build number, so an older checkout
+# cannot overwrite a newer installation. Install and verify through the same
+# version checks used by automatic renewal. Never uninstall to retry a failure.
 #
 # Usage: Scripts/build-duodesk-ios-device.sh [--device UDID] [--team TEAM]
 #                                            [--no-bump] [--launch]
@@ -23,7 +14,14 @@ scheme=Sill
 bundle_id=com.duodesk.client
 derived=Temp/DeviceBuild
 device=""
-team="${DUODESK_TEAM_ID:-TEAMIDENT1}"
+# The team comes from DUODESK_TEAM_ID, else from the Apple Development certificate in
+# this Mac's keychain (its OU). No team identifier is kept in the repository.
+if [ -z "${DUODESK_TEAM_ID:-}" ]; then
+    DUODESK_TEAM_ID="$(security find-certificate -c 'Apple Development' -p 2>/dev/null \
+        | openssl x509 -noout -subject 2>/dev/null \
+        | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' | head -1)"
+fi
+team="${DUODESK_TEAM_ID:-}"
 bump=1
 launch=1
 
@@ -48,6 +46,9 @@ if [ -z "$device" ]; then
         | grep -oE '[0-9A-F]{8}-[0-9A-F]{16}' | head -1)"
 fi
 [ -n "$device" ] || { echo 'No paired iPhone found; connect one, or pass --device UDID.' >&2; exit 2; }
+[ -n "$team" ] || { echo 'No signing team: pass --team, set DUODESK_TEAM_ID, or sign in to Xcode with an Apple account.' >&2; exit 2; }
+
+python3 Signing/device_install.py --device "$device" --bundle-id "$bundle_id" --check-project "$root"
 
 # 1. A build number this device has not seen. The delta path keys off it.
 if [ "$bump" = 1 ]; then
@@ -73,20 +74,8 @@ app="$derived/Build/Products/Debug-iphoneos/Sill.app"
 built_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")"
 echo "Built $built_version"
 
-install_and_verify() {
-    xcrun devicectl device install app --device "$device" "$app" >/dev/null 2>&1 || return 1
-    # What the device reports: the version it now holds.
-    installed="$(xcrun devicectl device info apps --device "$device" 2>/dev/null \
-        | grep -F "$bundle_id" | grep -oE '[0-9]+ *$' | tr -d ' ' | head -1)"
-    [ "$installed" = "$built_version" ]
-}
-
-if ! install_and_verify; then
-    echo 'Install did not take the new build; clearing the delta cache and retrying.' >&2
-    xcrun devicectl device uninstall app --device "$device" "$bundle_id" >/dev/null 2>&1 || true
-    install_and_verify || { echo 'Install failed twice.' >&2; exit 1; }
-    echo 'Installed after the cache was cleared. iOS may ask you to trust the developer again.'
-fi
+python3 Signing/device_install.py --device "$device" --bundle-id "$bundle_id" \
+    --app "$app" --log "$derived/install.log"
 
 echo "Installed $bundle_id $built_version on $device"
 if [ "$launch" = 1 ]; then
