@@ -28,3 +28,20 @@ design/reel/
 
 # Python's bytecode caches (Tests/checks/module.py, which its checks' mutants.py import).
 __pycache__/
+
+# Local credentials and private captures. Ignore rules do not erase Git history.
+.netrc
+.npmrc
+.pypirc
+.ssh/
+.aws/
+.gnupg/
+id_rsa*
+id_ed25519*
+*.keystore
+*.jks
+*.kdbx
+*.ovpn
+*.har
+*.pcap
+*.pcapng

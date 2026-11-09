@@ -1,0 +1,24 @@
+title = "DuoDesk secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "private-key"
+
+[[rules.allowlists]]
+description = "Upstream shell validation checks a PEM header; there is no key body."
+condition = "AND"
+paths = ['''(^|/)Scripts/release-ios\.sh$''']
+regexTarget = "match"
+regexes = ['''^-----BEGIN PRIVATE KEY-----' "\$key"; then fail "--api-key: \$key is not an App Store Connect API key, the \.p8 file that begins -----BEGIN PRIVATE KEY-----$''']
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Public upstream keychain access-group fixture, not a credential."
+condition = "AND"
+paths = ['''(^|/)Tests/checks/keychain/main\.swift$''']
+regexTarget = "match"
+regexes = ['''^(entitledAccessGroup|accessGroup): "HG877AGTQ7\.me\.saffer\.sill\.mac"$''']
