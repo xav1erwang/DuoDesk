@@ -8,7 +8,7 @@
 
 # DUO你电脑
 
-**把 iPhone Duo 折成一台远程 Mac 笔记本**<br><sub>iPhone Duo 原生远程 Mac 桌面 · 键盘 / 触控板 / 桌面共享</sub>
+**把 iPhone Duo 折成一台远程 Mac 笔记本**<br><sub>DuoDesk · iPhone Duo 原生远程 Mac 桌面 · 键盘 / 触控板 / 桌面共享</sub>
 
 <br>
 
@@ -18,10 +18,7 @@
 
 <br>
 
-<a href="docs/INSTALL.md"><img alt="macOS 27 及以上" src="docs/images/readme/badge-0.png" height="26"></a>
-<a href="docs/INSTALL.md"><img alt="iOS 与 iPadOS 27.1 及以上" src="docs/images/readme/badge-1.png" height="26"></a>
-<a href="docs/DEVELOPMENT.md"><img alt="Swift · Apple 原生" src="docs/images/readme/badge-2.png" height="26"></a>
-<a href="LICENSE"><img alt="Apache-2.0 许可证" src="docs/images/readme/badge-3.png" height="26"></a>
+<a href="docs/INSTALL.md"><img alt="macOS 27 及以上" src="docs/images/readme/badge-0.png" height="26"></a> <a href="docs/INSTALL.md"><img alt="iOS 与 iPadOS 27.1 及以上" src="docs/images/readme/badge-1.png" height="26"></a> <a href="docs/DEVELOPMENT.md"><img alt="Swift · Apple 原生" src="docs/images/readme/badge-2.png" height="26"></a> <a href="LICENSE"><img alt="Apache-2.0 许可证" src="docs/images/readme/badge-3.png" height="26"></a>
 
 </div>
 
@@ -42,7 +39,7 @@
 
 <div align="center">
 
-### 三种输入，一套手感
+### 键盘、触控板，与你的 Mac
 
 </div>
 

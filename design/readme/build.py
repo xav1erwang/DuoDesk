@@ -2,7 +2,8 @@
 """Regenerates the images the README shows, in docs/images/readme/.
 
 This is a design tool, not part of the build: it needs macOS with Google
-Chrome (text, gradients, layout) and Pillow (cropping and the JPEGs). The
+Chrome (text, gradients, layout), Pillow (cropping and the JPEGs), and Xcode's
+ictool (the app icon). The
 wordmark is the app's own Montserrat Black at the brand's 0.18em tracking, and
 the surfaces use the deep-blue tokens in Sources/SillMenuBar/MacDesign.swift.
 
@@ -160,12 +161,6 @@ HERO_BODY = """<div class="card">
 </div>"""
 
 
-def hero(work, theme):
-    css = HERO_CSS.format(**HERO_THEMES[theme])
-    body = HERO_BODY.format(v=V, icon=work.icon.as_uri())
-    return work.render(f"hero-{theme}", body, css, 1200, 390)
-
-
 # ------------------------------------------------------- the Bilibili button
 
 CTA_CSS = """
@@ -235,7 +230,7 @@ BADGES = [
     ("macOS", "27+", "#0B63C6", "#7FE3DC"),
     ("iOS · iPadOS", "27.1+", "#0B63C6", "#7FE3DC"),
     ("Swift", "Apple native", "#0D5C8C", "#8FD9F6"),
-    ("许可", "Apache-2.0", "#0E4D66", "#9BE8E0"),
+    ("许可证", "Apache-2.0", "#0E4D66", "#9BE8E0"),
 ]
 
 
