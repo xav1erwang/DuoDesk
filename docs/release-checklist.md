@@ -36,8 +36,6 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoDesk \
 
 ## 首次公开前
 
-2026-11-09 的源码、历史、图片及 GitHub 附件复查见[公开前隐私检查](the audit notes)。远端分支、标签及旧 Actions 元数据已完成脱敏处理；GitHub 仍可通过旧提交 ID 访问原邮箱，彻底清除还需处理服务端旧对象或缓存。
-
 - [ ] 确认仓库归属为 `xav1erwang`，名称为 `DuoDesk`，公开范围符合维护者决定。
 - [ ] 推送准备好的源码，确认下载源码包和干净 clone 都可构建。
 - [ ] 运行 GitHub CI，确认 Mac、iOS 与现有检查全部通过。
@@ -58,7 +56,7 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoDesk \
 
 独立源码副本在 Xcode 27.2 下从零编译通过 macOS arm64、x86_64 及 iOS 真机 Release，并生成 DMG、ZIP 和 IPA，校验和通过。副本不含原工作区的 Local、Temp、Build 或编译缓存。控制模型 192 项、Python 续签 18 项、身份启动 31 项、更新规则 124 项、QUIC 回环 16 类场景通过，视频呈现器严格 Swift 6 并发编译通过。
 
-真实设备安装、完整桌面端到端操作和七天续签仍是首发验收项，既有测试范围见 [开发状态](the development notes)。
+真实设备安装、完整桌面端到端操作和七天续签仍是首发验收项。
 
 ## 后续 Developer ID 公证
 

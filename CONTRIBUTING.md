@@ -1,6 +1,6 @@
 # 参与开发
 
-先阅读 [开发说明](docs/DUO-DEVELOPMENT.md)，使用正式版 Xcode 27.1 或更新版本构建。保持 Apple 原生框架实现，视频、指针和编码路径避免每帧触发 SwiftUI 布局。
+先阅读 [README](README.md) 与 [开发说明](docs/DEVELOPMENT.md)，使用正式版 Xcode 27.1 或更新版本构建。保持 Apple 原生框架实现，视频、指针和编码路径避免每帧触发 SwiftUI 布局。
 
 修改键盘、布局或续签工具后运行 `Tests/duodesk/run.sh`；修改上游传输核心后运行对应的 `Tests/checks/<name>/run.sh`。提交涉及 UI 的改动时附上 Duo 半折叠、展平、合盖的验证范围；只在模拟器验证的结果请直接说明。
 
