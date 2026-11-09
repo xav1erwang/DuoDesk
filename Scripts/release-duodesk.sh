@@ -137,16 +137,18 @@ if [ "$platform" != ios ]; then
     else
         lipo "$executable" -verify_arch "$architecture"
     fi
-    zip_name="DUO-macOS-$architecture.zip"
     dmg_name="DUO-macOS-$architecture.dmg"
-    ditto -c -k --sequesterRsrc --keepParent "$app" "$work/$zip_name"
+    # The ZIP is not shipped: the DMG is the one Mac download. Notarizing the app itself still
+    # needs a container to upload, so the ZIP exists only while --notarize runs, and disappears
+    # before the assets are listed.
     if [ "$notarization" = 1 ]; then
+        zip_name="DUO-macOS-$architecture.zip"
+        ditto -c -k --sequesterRsrc --keepParent "$app" "$work/$zip_name"
         notarize "$work/$zip_name"
         xcrun stapler staple "$app"
         xcrun stapler validate "$app"
         spctl --assess --type execute --verbose=2 "$app"
         rm "$work/$zip_name"
-        ditto -c -k --sequesterRsrc --keepParent "$app" "$work/$zip_name"
     fi
     mkdir "$work/dmg"
     ditto "$app" "$work/dmg/DUO你电脑.app"
@@ -162,14 +164,18 @@ if [ "$platform" != ios ]; then
         spctl --assess --type open --context context:primary-signature --verbose=2 "$work/$dmg_name"
     fi
     hdiutil verify "$work/$dmg_name"
-    mkdir "$work/unpacked-mac"
-    ditto -x -k "$work/$zip_name" "$work/unpacked-mac"
-    codesign --verify --deep --strict "$work/unpacked-mac/DUO你电脑.app"
+    # What ships is verified as shipped: read the app back out of the DMG itself, rather than
+    # trusting the staging copy the image was built from.
+    mount_point="$work/dmg-check"
+    mkdir "$mount_point"
+    hdiutil attach -quiet -readonly -nobrowse -mountpoint "$mount_point" "$work/$dmg_name"
+    codesign --verify --deep --strict "$mount_point/DUO你电脑.app"
     if [ "$notarization" = 1 ]; then
-        xcrun stapler validate "$work/unpacked-mac/DUO你电脑.app"
-        spctl --assess --type execute --verbose=2 "$work/unpacked-mac/DUO你电脑.app"
+        xcrun stapler validate "$mount_point/DUO你电脑.app"
+        spctl --assess --type execute --verbose=2 "$mount_point/DUO你电脑.app"
     fi
-    assets+=("$zip_name" "$dmg_name")
+    hdiutil detach -quiet "$mount_point"
+    assets+=("$dmg_name")
 fi
 
 if [ "$platform" != macos ]; then

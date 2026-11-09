@@ -21,7 +21,6 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoDesk \
 每次打包使用空输出目录。再次打包同一版本时，通过 `--output Temp/Release/0.1.0-rebuild` 指定新目录，避免不同平台或 build 混入同一批产物。
 
 - `DUO-macOS-universal.dmg`
-- `DUO-macOS-universal.zip`
 - `DUO-iOS-unsigned.ipa`
 - `INSTALL.txt`
 - `SHA256SUMS`

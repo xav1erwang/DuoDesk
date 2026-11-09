@@ -67,7 +67,7 @@
 
 | 平台 | 下载文件 | 安装方式 |
 | :--- | :--- | :--- |
-| **macOS 27+** | `DUO-macOS-universal.dmg` 或 `.zip` | 将应用放入「应用程序」，首次启动按系统提示手动放行 |
+| **macOS 27+** | `DUO-macOS-universal.dmg` | 将应用放入「应用程序」，首次启动按系统提示手动放行 |
 | **iOS / iPadOS 27.1+** | `DUO-iOS-unsigned.ipa` | 使用 Sideloadly 或 AltStore Classic，用自己的 Apple 账号重签安装 |
 
 主要适配 iPhone Duo，两端需支持硬件 HEVC。Mac 包包含 Apple Silicon 与 Intel 版本。免费 Apple 账号通常每 7 天需要续签一次。
