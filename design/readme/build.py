@@ -106,15 +106,17 @@ body {{ font-family:'PingFang SC',-apple-system,sans-serif; display:flex; align-
 .card {{ position:relative; overflow:hidden; width:1200px; height:330px; display:flex;
   flex-direction:column; align-items:center; justify-content:center; {card} {ring} }}
 .vmark {{ position:absolute; right:-60px; bottom:-230px; width:480px; {vmark} }}
-.lockup {{ position:relative; display:flex; align-items:center; gap:34px }}
-.icon {{ width:112px; height:112px; display:block; {icon} }}
-.wordmark {{ font-family:'Montserrat'; font-weight:900; font-size:84px; line-height:1;
-  letter-spacing:.18em; text-indent:.18em; white-space:nowrap; {wordmark} }}
-.rule {{ position:relative; width:300px; height:1px; margin:26px 0 18px; {rule} }}
+.lockup {{ position:relative; display:flex; align-items:center; gap:36px }}
+.icon {{ width:108px; height:108px; display:block; {icon} }}
+.headline {{ display:flex; align-items:baseline; gap:14px; font-family:'PingFang SC',sans-serif;
+  font-weight:600; font-size:70px; line-height:1; letter-spacing:.01em; {headline} }}
+.headline .lat {{ font-family:'Montserrat'; font-weight:900; font-size:70px; letter-spacing:.01em;
+  {lat} }}
+.rule {{ position:relative; width:250px; height:1px; margin:24px 0 16px; {rule} }}
 .diamond {{ position:absolute; left:50%; top:-2.5px; width:6px; height:6px;
   transform:translateX(-50%) rotate(45deg); {diamond} }}
-.eyebrow {{ position:relative; font-family:'Montserrat'; font-weight:900; font-size:15px;
-  letter-spacing:.44em; text-indent:.44em; {eyebrow} }}
+.brandline {{ position:relative; font-family:'Montserrat'; font-weight:900; font-size:23px;
+  letter-spacing:.20em; text-indent:.20em; {brandline} }}
 """
 
 HERO_THEMES = {
@@ -126,12 +128,13 @@ HERO_THEMES = {
         "vmark": "fill:#FFFFFF; opacity:.035",
         "icon": "filter:drop-shadow(0 18px 40px rgba(0,0,0,.62))",
         "ring": "box-shadow:inset 0 0 0 1px rgba(105,180,255,.13)",
-        "wordmark": """background:linear-gradient(180deg,#FFFFFF 0%,#EAF7FF 44%,#9FD4F5 100%);
+        "headline": """background:linear-gradient(180deg,#FFFFFF 0%,#EAF7FF 46%,#B9DFF7 100%);
           -webkit-background-clip:text; background-clip:text; color:transparent;
           filter:drop-shadow(0 8px 28px rgba(43,214,255,.16))""",
-        "rule": "background:linear-gradient(90deg,rgba(105,180,255,.75),rgba(105,180,255,0))",
+        "lat": "color:#8FA7C2",
+        "rule": "background:linear-gradient(90deg,rgba(105,180,255,.70),transparent)",
         "diamond": "background:#2BD6FF; box-shadow:0 0 9px rgba(43,214,255,.8)",
-        "eyebrow": "color:#5E7896",
+        "brandline": "color:#B9CCE0",
     },
     "light": {
         "card": """background:
@@ -141,12 +144,13 @@ HERO_THEMES = {
         "vmark": "fill:#0B63C6; opacity:.035",
         "icon": "filter:drop-shadow(0 10px 22px rgba(12,26,42,.16))",
         "ring": "box-shadow:inset 0 0 0 1px rgba(11,99,198,.12)",
-        "wordmark": """background:linear-gradient(180deg,#12294A 0%,#0C1A2A 58%,#1B4F86 100%);
+        "headline": """background:linear-gradient(180deg,#12294A 0%,#0C1A2A 58%,#1B4F86 100%);
           -webkit-background-clip:text; background-clip:text; color:transparent;
           filter:drop-shadow(0 6px 20px rgba(11,99,198,.12))""",
-        "rule": "background:linear-gradient(90deg,rgba(11,99,198,.50),rgba(11,99,198,0))",
+        "lat": "color:#4C6076",
+        "rule": "background:linear-gradient(90deg,rgba(11,99,198,.45),transparent)",
         "diamond": "background:#0B63C6; box-shadow:0 0 7px rgba(11,99,198,.4)",
-        "eyebrow": "color:#7C93AD",
+        "brandline": "color:#3F5873",
     },
 }
 
@@ -154,10 +158,10 @@ HERO_BODY = """<div class="card">
   <svg class="vmark" viewBox="0 0 1177 1000"><path d="{v}"/></svg>
   <div class="lockup">
     <img class="icon" src="{icon}">
-    <div class="wordmark">VISIONTEC</div>
+    <div class="headline"><span class="lat">DUO</span>你电脑</div>
   </div>
   <div class="rule"><span class="diamond"></span></div>
-  <div class="eyebrow">MAC REMOTE DESKTOP</div>
+  <div class="brandline">VISIONTEC</div>
 </div>"""
 
 
@@ -166,15 +170,18 @@ HERO_BODY = """<div class="card">
 CTA_CSS = """
 body { font-family:'PingFang SC',-apple-system,sans-serif; display:flex; align-items:center;
   justify-content:center }
-.btn { display:inline-flex; align-items:center; gap:20px; padding:24px 40px 24px 28px;
-  border-radius:26px; background:linear-gradient(135deg,#0B63C6 0%,#1B8BDD 54%,#2BD6FF 132%);
-  box-shadow:0 18px 40px -14px rgba(27,139,221,.75), inset 0 0 0 1px rgba(255,255,255,.34),
-  inset 0 1px 0 rgba(255,255,255,.30) }
+.btn { display:inline-flex; align-items:center; gap:22px; padding:26px 42px 26px 28px;
+  border-radius:24px; background:linear-gradient(135deg,#0B63C6 0%,#1B8BDD 54%,#2BD6FF 132%);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.34), inset 0 1px 0 rgba(255,255,255,.30) }
 .plate { display:flex; align-items:center; justify-content:center; width:64px; height:64px;
   border-radius:19px; background:rgba(255,255,255,.18);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.34) }
 .text { display:flex; flex-direction:column; gap:6px }
-.label { font-size:27px; font-weight:600; color:#fff; letter-spacing:.02em; line-height:1 }
+.label { display:flex; align-items:baseline; gap:10px; font-size:26px; font-weight:600; color:#fff;
+  letter-spacing:.02em; line-height:1 }
+.label .brand { font-family:'Montserrat'; font-weight:900; font-size:24px; letter-spacing:.18em;
+  text-indent:.18em; color:#fff }
+.label .sep { color:rgba(255,255,255,.55); font-weight:400 }
 .sub { font-size:15px; color:rgba(255,255,255,.86); letter-spacing:.06em;
   font-family:'Montserrat','PingFang SC',sans-serif; font-weight:900 }
 .chev { color:rgba(255,255,255,.72) }
@@ -185,12 +192,13 @@ def cta(work):
     body = f"""<div class="btn">
   <span class="plate"><svg viewBox="0 0 24 24" width="33" height="33"><path fill="#fff"
     d="{BILIBILI}"/></svg></span>
-  <span class="text"><span class="label">Visiontec 主页 · 哔哩哔哩</span>
+  <span class="text"><span class="label"><span class="brand">VISIONTEC</span>主页
+  <span class="sep">·</span>哔哩哔哩</span>
   <span class="sub">SPACE.BILIBILI.COM/18564290</span></span>
   <svg class="chev" viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor"
     stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
 </div>"""
-    return work.render("cta-bilibili", body, CTA_CSS, 560, 132)
+    return work.render("cta-bilibili", body, CTA_CSS, 720, 168)
 
 
 # -------------------------------------------------------------- screenshots
@@ -276,7 +284,7 @@ def main():
                              HERO_CSS.format(**HERO_THEMES[theme]), 1200, 330)
             print(save_jpeg(im, f"hero-{theme}", 92, width=1600))
 
-        print(save_png(cta(work), "cta-bilibili"))
+        print(save_png(cta(work), "cta-bilibili", trim=True))
 
         for index, (key, value, background, _) in enumerate(BADGES):
             save_png(badge(work, index, key, value, background), f"badge-{index}", trim=True)

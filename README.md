@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/hero-dark.jpg">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/hero-light.jpg">
-  <img src="docs/images/readme/hero-light.jpg" alt="Visiontec · 文字 Logo" width="860">
+  <img src="docs/images/readme/hero-light.jpg" alt="DUO你电脑 · VISIONTEC 文字 Logo" width="860">
 </picture>
 
 # DUO你电脑
@@ -12,9 +12,7 @@
 
 <br>
 
-<a href="https://space.bilibili.com/18564290">
-  <img src="docs/images/readme/cta-bilibili.png" alt="Visiontec 主页 · 哔哩哔哩" width="300">
-</a>
+<p align="center"><a href="https://space.bilibili.com/18564290"><img src="docs/images/readme/cta-bilibili.png" alt="Visiontec 主页 · 哔哩哔哩" width="340"></a></p>
 
 <br>
 
@@ -70,9 +68,9 @@
 | **macOS 27+** | `DUO-macOS-universal.dmg` | 将应用放入「应用程序」，首次启动按系统提示手动放行 |
 | **iOS / iPadOS 27.1+** | `DUO-iOS-unsigned.ipa` | 使用 Sideloadly 或 AltStore Classic，用自己的 Apple 账号重签安装 |
 
-主要适配 iPhone Duo，两端需支持硬件 HEVC。Mac 包包含 Apple Silicon 与 Intel 版本。免费 Apple 账号通常每 7 天需要续签一次。
+主要适配 iPhone Duo，两端需支持硬件 HEVC。Mac 包包含 Apple Silicon 与 Intel 版本。免费 Apple 账号通常每 7 天需要续签一次；推荐使用 [Sideloadly](https://sideloadly.io/)、[AltStore Classic](https://altstore.io/) 或 [SideStore](https://sidestore.io/) 安装与续签。
 
-[详细安装步骤](docs/INSTALL.md) · [自动续签](Signing/README.md)
+[详细安装步骤](docs/INSTALL.md) · [签名与续签指南](Signing/README.md)
 
 <details>
 <summary><b>从源码构建</b></summary>
@@ -150,17 +148,6 @@ Mac 仍在运行时，已配对的设备连接会请求唤亮显示器；如果 
 </details>
 
 ---
-
-<div align="center">
-
-<a href="https://space.bilibili.com/18564290">
-  <img src="docs/images/readme/cta-bilibili.png" alt="Visiontec 主页 · 哔哩哔哩" width="340">
-</a>
-
-**Visiontec** 在哔哩哔哩记录远程桌面、Mac 效率与自制工具。<br>
-<sub>点击上方按钮，或前往 <a href="https://space.bilibili.com/18564290">space.bilibili.com/18564290</a></sub>
-
-</div>
 
 ## 开源与贡献
 

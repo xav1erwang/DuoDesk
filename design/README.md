@@ -62,9 +62,10 @@
   iPad, as a template image. `SillMenuBar -SillRenderPreviews <dir>` writes
   `glyphs.png` with every state on light and dark bars.
 - `readme/build.py` renders the README's images into `docs/images/readme/`:
-  the Visiontec lockup (Montserrat Black at the wordmark's 0.18em tracking,
-  the icon's own V as a watermark, the deep-blue tokens from MacTheme), the
-  Bilibili button, and the product renders cropped onto rounded plates. A
+  the product banner (the icon, "DUO你电脑", and the VISIONTEC wordmark in
+  Montserrat Black at its 0.18em tracking, with the icon's V as a watermark
+  and the deep-blue tokens from MacTheme), the Bilibili button, and the
+  product renders cropped onto rounded plates. A
   dark and a light banner are written, and `README.md` picks between them with
   `<picture>` and `prefers-color-scheme`. Needs macOS 27, Google Chrome (the
   layout and gradients), Pillow, and `ictool` for the app icon:

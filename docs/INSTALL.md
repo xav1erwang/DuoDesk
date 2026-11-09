@@ -25,13 +25,17 @@ Mac 应用要求 macOS 27 或更新版本，iOS 客户端要求 iOS / iPadOS 27.
 2. 用 USB 连接并在 iPhone 上信任电脑。按设备和工具提示启用「设置 → 隐私与安全性 → 开发者模式」，完成重启确认。
 3. 打开 Sideloadly，选择手机，把 `DUO-iOS-unsigned.ipa` 拖进去，登录自己的 Apple 账号并完成签名安装。
 4. 按手机提示在「通用 → VPN 与设备管理」中信任开发者，然后打开应用。
-5. 在 Sideloadly 中配置自动续签。电脑与设备必须在续签时可达，首次安装使用 USB 更容易排查问题。
+5. 在 Sideloadly 设置中开启自动刷新，选择要刷新的应用与计划；电脑与设备需要在续签时可达。也可以到期前重新安装同一 IPA。
 
 这些步骤依据工具官方安装方式整理，本项目当前 IPA 还需在真实设备上完成 Sideloadly 安装、启动、配对与到期续签验收。[Sideloadly 官方说明](https://sideloadly.io/)
 
 ### AltStore Classic
 
 先按 AltStore 官方流程安装 AltServer 与 AltStore Classic，再在手机的 My Apps 页面导入本项目 IPA。安装后保持 AltServer 可达并在到期前刷新签名。AltStore 本身也占一个免费开发应用名额。项目当前 IPA 的 AltStore 安装仍待真机验收。[AltStore Classic 安装入口](https://faq.altstore.io/)、[刷新与应用数量说明](https://faq.altstore.io/altstore-classic/your-altstore)
+
+### SideStore
+
+按 [SideStore 文档](https://docs.sidestore.io/)准备配对文件并完成首次安装。之后无需连接电脑，通过 Wi-Fi 刷新已安装的应用；需要 StosVPN 保持可用。项目当前 IPA 的 SideStore 安装仍待真机验收。
 
 更新时保持相同签名账号、Team 与 Bundle Identifier，覆盖安装有助于保留设置和配对。卸载或更换签名身份可能需要重新配对。
 
@@ -42,7 +46,7 @@ Mac 应用要求 macOS 27 或更新版本，iOS 客户端要求 iOS / iPadOS 27.
 3. 在 Target 的 Signing & Capabilities 中选择自己的 Team，并将 Bundle Identifier 改为你可用的唯一标识，例如 `com.yourname.duodesk`。
 4. 连接手机，选择目标设备，开启开发者模式后运行。
 
-本地持续续签工具的配置、启停与失败处理见 [Signing/README.md](../Signing/README.md)。跨到期自动续签仍需真机验收。
+安装与续签步骤见 [签名与续签指南](../Signing/README.md)。
 
 ## 首次连接
 
