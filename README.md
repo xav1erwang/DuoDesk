@@ -60,9 +60,6 @@
 
 ## 下载与安装
 
-> [!IMPORTANT]
-> 请只从本仓库的 [Releases](https://github.com/xav1erwang/DuoDesk/releases/latest) 页面下载，那里的 `DUO-macOS-universal.dmg` 与 `DUO-iOS-unsigned.ipa` 是正式发布版本。不要把其他来源的包、旧草稿或自行编译的调试包当作正式版安装。
-
 | 平台 | 下载文件 | 安装方式 |
 | :--- | :--- | :--- |
 | **macOS 27+** | `DUO-macOS-universal.dmg` | 将应用放入「应用程序」，首次启动按系统提示手动放行 |
