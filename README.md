@@ -60,17 +60,17 @@
 
 ## 下载与安装
 
-> [!NOTE]
-> [Releases](https://github.com/xav1erwang/DuoDesk/releases) 中的安装包目前仍为草稿，尚未正式发布。现在可以先按下方步骤从源码构建和安装。
+> [!IMPORTANT]
+> 请只从本仓库的 [Releases](https://github.com/xav1erwang/DuoDesk/releases/latest) 页面下载，那里的 `DUO-macOS-universal.dmg` 与 `DUO-iOS-unsigned.ipa` 是正式发布版本。不要把其他来源的包、旧草稿或自行编译的调试包当作正式版安装。
 
 | 平台 | 下载文件 | 安装方式 |
 | :--- | :--- | :--- |
 | **macOS 27+** | `DUO-macOS-universal.dmg` | 将应用放入「应用程序」，首次启动按系统提示手动放行 |
 | **iOS / iPadOS 27.1+** | `DUO-iOS-unsigned.ipa` | 使用 Sideloadly 或 AltStore Classic，用自己的 Apple 账号重签安装 |
 
-主要适配 iPhone Duo，两端需支持硬件 HEVC。Mac 包包含 Apple Silicon 与 Intel 版本。免费 Apple 账号通常每 7 天需要续签一次；推荐使用 [Sideloadly](https://sideloadly.io/)、[AltStore Classic](https://altstore.io/) 或 [SideStore](https://sidestore.io/) 安装与续签。
+[下载最新正式版](https://github.com/xav1erwang/DuoDesk/releases/latest) · [详细安装步骤](docs/INSTALL.md) · [签名与续签指南](Signing/README.md)
 
-[详细安装步骤](docs/INSTALL.md) · [签名与续签指南](Signing/README.md)
+主要适配 iPhone Duo，两端需支持硬件 HEVC。Mac 包包含 Apple Silicon 与 Intel 版本。免费 Apple 账号通常每 7 天需要续签一次；推荐使用 [Sideloadly](https://sideloadly.io/)、[AltStore Classic](https://altstore.io/) 或 [SideStore](https://sidestore.io/) 安装与续签。下载后可用同一次 Release 的 `SHA256SUMS` 校验文件。
 
 <details>
 <summary><b>从源码构建</b></summary>

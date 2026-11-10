@@ -79,8 +79,8 @@ jobs:
           retention-days: 14
           compression-level: 0
 
-  draft:
-    name: Prepare GitHub Release draft
+  publish:
+    name: Publish the GitHub Release
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -96,7 +96,7 @@ jobs:
         run: |
           cd Release
           sha256sum -c SHA256SUMS
-      - name: Create or update draft in this repository
+      - name: Create or update the official release in this repository
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -104,7 +104,7 @@ jobs:
           cat > Release/NOTES.md <<EOF
           # DuoDesk · DUO你电脑 $DUO_RELEASE_TAG
 
-          macOS 下载 DUO-macOS-universal.dmg，支持 Apple Silicon 与 Intel。当前工作流生成 ad-hoc 签名包，首次打开按 README 的系统安全设置步骤操作。
+          这是本仓库的正式发布版本。macOS 下载 DUO-macOS-universal.dmg，支持 Apple Silicon 与 Intel。当前使用 ad-hoc 签名，首次打开按 README 的系统安全设置步骤操作。
 
           iOS 下载 DUO-iOS-unsigned.ipa，使用自己的 Apple 账户和自签工具重新签名安装。也可以用 Xcode 从源码安装。免费账户需要定期续签。
 
@@ -116,9 +116,11 @@ jobs:
               exit 1
             fi
             gh release upload "$DUO_RELEASE_TAG" Release/DUO-* Release/SHA256SUMS Release/INSTALL.txt --clobber
-            gh release edit "$DUO_RELEASE_TAG" --title "DuoDesk $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
+            gh release edit "$DUO_RELEASE_TAG" --draft=false --prerelease=false \
+              --title "DuoDesk $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
           else
             gh release create "$DUO_RELEASE_TAG" Release/DUO-* Release/SHA256SUMS Release/INSTALL.txt \
-              --verify-tag --draft --title "DuoDesk $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
+              --verify-tag --title "DuoDesk $DUO_RELEASE_TAG" --notes-file Release/NOTES.md
           fi
+          gh release edit "$DUO_RELEASE_TAG" --latest
           gh release view "$DUO_RELEASE_TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

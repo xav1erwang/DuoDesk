@@ -29,9 +29,9 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoDesk \
 
 ## GitHub 自动构建
 
-`.github/workflows/ci.yml` 在主分支推送、PR 和手动触发时编译两个平台，执行控制和续签检查。`.github/workflows/release.yml` 在 `v*` 标签推送或手动指定标签时构建，使用当前仓库地址生成下载和支持链接，并创建 Draft Release。维护者确认产物后发布草稿。
+`.github/workflows/ci.yml` 在主分支推送、PR 和手动触发时编译两个平台，执行控制和续签检查。`.github/workflows/release.yml` 在 `v*` 标签推送或手动指定标签时构建，使用当前仓库地址生成下载和支持链接，并直接把 Release 发布为正式版本（非草稿、非预发布，并设为 Latest）。工作流会先校验产物与校验和，再发布。
 
-发布任务需要仓库 Actions 可用，并允许该工作流的 `contents: write` 权限。首次公开版本应在发布界面标记为预览版，并附上当前验证范围。云端运行成功记录是正式启用这套流程的验收项。
+发布任务需要仓库 Actions 可用，并允许该工作流的 `contents: write` 权限。发布出来的就是正式版，因此发布前必须核对版本说明与实际验证范围。云端运行成功记录是正式启用这套流程的验收项。
 
 ## 首次公开前
 
@@ -49,7 +49,7 @@ DUODESK_REPOSITORY_URL=https://github.com/xav1erwang/DuoDesk \
 
 ## 2026-11-04 本地准备记录
 
-源码依赖全部在本仓库，iOS 工程通过相对路径引用 Swift Package。Apache-2.0 文件与上游一致，修改声明保存在 NOTICE。已补齐双平台打包、CI、草稿 Release、安装文档及可选仓库链接，关闭旧上游发布入口，清理上游赞助与客服入口。
+源码依赖全部在本仓库，iOS 工程通过相对路径引用 Swift Package。Apache-2.0 文件与上游一致，修改声明保存在 NOTICE。已补齐双平台打包、CI、正式 Release 发布、安装文档及可选仓库链接，关闭旧上游发布入口，清理上游赞助与客服入口。
 
 定向扫描覆盖 776 个当前文件和 5,130 个可达历史 blob，约 272 MB。七类明确令牌和私钥标记检查未发现有效密钥材料，历史路径未发现 `Local/`、`Temp/` 或常见证书、描述文件。该扫描覆盖范围之外仍包括图片 OCR、全历史高熵检测与个人邮箱人工审阅。
 

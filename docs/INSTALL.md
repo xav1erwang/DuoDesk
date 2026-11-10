@@ -4,11 +4,11 @@
 
 Mac 应用要求 macOS 27 或更新版本，iOS 客户端要求 iOS / iPadOS 27.1 或更新版本。主要适配 iPhone Duo。两端均使用硬件 HEVC，通用 Mac 包包含 arm64 与 x86_64，实际兼容性仍取决于系统、硬件编码能力和对应设备验收。
 
-普通使用者下载 Release 文件即可，源码构建需要完整 Xcode 27.1 或更新版本。初次启动 Xcode 时完成许可证确认、平台组件安装，并在 Xcode 的 Locations 中选中对应的 Command Line Tools。[Apple Xcode 系统要求](https://developer.apple.com/xcode/system-requirements)
+普通使用者下载 Release 文件即可，Release 页面上的包即正式发布版本。源码构建需要完整 Xcode 27.1 或更新版本。初次启动 Xcode 时完成许可证确认、平台组件安装，并在 Xcode 的 Locations 中选中对应的 Command Line Tools。[Apple Xcode 系统要求](https://developer.apple.com/xcode/system-requirements)
 
 ## macOS
 
-1. 在本仓库 [Releases](https://github.com/xav1erwang/DuoDesk/releases) 下载 `DUO-macOS-universal.dmg`。
+1. 在本仓库 [最新正式版](https://github.com/xav1erwang/DuoDesk/releases/latest) 下载 `DUO-macOS-universal.dmg`。
 2. 打开磁盘映像，将「DUO你电脑」拖入「应用程序」，再从「应用程序」启动。
 3. 当前免费账号发布包使用 ad-hoc 签名。若系统阻止启动，先尝试打开一次，再进入「系统设置 → 隐私与安全性」，为这一个应用选择「仍要打开」。系统提示的具体措辞取决于 macOS 版本。[Apple 打开受阻应用说明](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac)
 4. 按应用指引授予屏幕录制、辅助功能和本地网络权限，必要时退出并重新打开应用。
