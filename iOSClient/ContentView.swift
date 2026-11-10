@@ -361,7 +361,10 @@ struct ContentView: View {
 ///   unsaved Mac whose door asks for pairing); `-SillForgetHomeTLS 1` (dial an older Sill.app
 ///   plainly again); `-SillCableTest 1` (this device's path counts as the USB cable for the ask);
 ///   and for the gates, which drive no UI: `-SillTapRow <name prefix>` (taps that row once, as soon
-///   as it is listed), `-SillHomeCode <digits>` and `-SillHomeLink <sill://pair…>` (typed into, or
+///   as it is listed), `-SillLeaveRows '<seconds> <name prefix>'` (Leave that many seconds after the
+///   first window list, then tap that row again once — the sequence a person makes with the Leave
+///   button and the Mac's row, which a script cannot drive alone), `-SillHomeCode <digits>` and
+///   `-SillHomeLink <sill://pair…>` (typed into, or
 ///   scanned by, the home card once the Mac shows its code), `-SillOverlayCode <digits>` (Pair This
 ///   iPad… with that code, once, over a session at home over TLS).
 /// * Real pairing, in the normal app and under `-SillLive 1` (not the mock): `-SillPairURL

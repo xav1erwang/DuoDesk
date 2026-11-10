@@ -268,6 +268,16 @@ final class StreamClient: ObservableObject {
     /// `-SillTapRow <prefix>`: the first network or Direct row whose name starts so is tapped once,
     /// as soon as it is listed (the gates drive no UI).
     var pendingTapRow = UserDefaults.standard.string(forKey: "SillTapRow")
+    /// `-SillLeaveRows '<seconds> <prefix>'`: Leave (disconnect) once the session has streamed for
+    /// that many seconds, then tap again the first network or Direct row whose name starts with
+    /// `prefix` — the sequence a person makes with the Leave button and the Mac's row. A script
+    /// cannot drive it alone: Leave is a button, and the gates put no finger on it (docs/
+    /// DEBUG harness, ContentView). Nil when the argument is absent or does not read.
+    var leaveRow: (after: Double, prefix: String)? = StreamClient.parseLeaveRow()
+    /// The Leave above has run (once per launch).
+    var leaveRowTapped = false
+    /// The Leave timer was started for this session (once per launch).
+    var leaveScheduled = false
     /// `-SillOverlayCode` was typed (once per launch).
     var overlayCodeTyped = false
     #endif
@@ -1071,6 +1081,15 @@ final class StreamClient: ObservableObject {
     /// The app is not in the background (UIApplication's notifications): the automatic reconnect dials
     /// a listed row, and a failed browser is made again, only then (issue #69). Main thread.
     private(set) var appInForeground = UIApplication.shared.applicationState != .background
+    /// The app is active (not merely in the foreground): `becameActive` rebuilds a browser a trip
+    /// through inactive may have left defunct, and only when it was actually away. Main thread.
+    private var appActive = true
+    /// When the app went inactive (`willResignActive`), 0 while it is active. A trip shorter than
+    /// `activationRebuildAfter` is not one a browser can be made defunct by. Main thread.
+    private var inactiveSince = 0.0
+    /// How long the app must have been inactive for `becameActive` to make the browsers again: long
+    /// enough to be a real trip (a call, a lock, another app), not a banner or Control Center.
+    static let activationRebuildAfter = 2.0
     #if DEBUG
     /// `-SillBrowserFail N`: each of the first N network browsers is reported failed with
     /// kDNSServiceErr_DefunctConnection (-65569) half a second after it starts, as iOS reports a
@@ -1456,6 +1475,10 @@ final class StreamClient: ObservableObject {
     private var windowOpenedAt = 0.0             // CACurrentMediaTime
     private var windowTimer: DispatchSourceTimer?
     private var pingTimer: DispatchSourceTimer?
+    /// A closed session connection was reported from the pings (`sendPing`): the ping timer runs four
+    /// times a second, and the session must be reported ended once, not at each of them. Touched on
+    /// `queue` only.
+    private var closedReported = false
     /// Four pings per one-second window, so a report has a median and a max: a single sample either
     /// landed in a stall or did not, and said nothing about the rest of the second.
     private static let pingInterval = 0.25
@@ -1510,6 +1533,62 @@ final class StreamClient: ObservableObject {
             localMeasurements.suspend()
             localProbeRecheck?.cancel()
             queue.async { self.localProbeOnQueue?.cancel(); self.localProbeOnQueue = nil }
+        }
+        // Not every return is a return from the background. Locking the screen, a call, an alert, a
+        // fold: the app goes inactive and comes back active, and `willEnterForeground` never comes.
+        // iOS can make a browser's connection to mDNSResponder defunct while it is away and report no
+        // failure for it (the same class as issue #69), so a browser left defunct then lists nothing
+        // for the rest of the launch: a Mac this device knows can no longer be reached until the app
+        // is restarted. `cameForward` above covers the background; this covers inactive.
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            appActive = false
+            inactiveSince = ProcessInfo.processInfo.systemUptime
+        }
+        for name in [UIApplication.didBecomeActiveNotification, UIScene.didActivateNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.becameActive()
+            }
+        }
+    }
+
+    /// The app is active again without having been in the background. A session whose connection went
+    /// while the app was away is ended here, so its screen does not come back as a frozen picture the
+    /// person can only leave by force-quitting. A browser a longer trip may have left defunct is made
+    /// again, so the Mac this device knows is listed and can be dialled again: without this, only a
+    /// restart found it. A brief flick through inactive (Control Center, a banner) does neither.
+    /// Main thread.
+    private func becameActive() {
+        let wasAway = !appActive
+        appActive = true
+        appInForeground = true
+        let away = wasAway ? ProcessInfo.processInfo.systemUptime - inactiveSince : 0
+        inactiveSince = 0
+        guard wasAway else { return }
+        auditSessionOnReturn()
+        guard away >= Self.activationRebuildAfter, browsing, !connected else { return }
+        rebuildIfDue(.network, cameForward: true)
+        if nearbyBrowser != nil { rebuildIfDue(.nearby, cameForward: true) }
+        discoveryChanged()
+    }
+
+    /// A session that is up when the app comes back is only kept when it still has its connection:
+    /// one whose connection has gone (its own callbacks would normally have ended it, but a
+    /// suspension can swallow them) is ended here, and the connect screen with the rows comes back.
+    /// Main thread.
+    private func auditSessionOnReturn() {
+        guard connected else { return }
+        guard let c = connection else {
+            print("session: connected with no connection on return; back to the connect screen")
+            endSession()
+            return
+        }
+        switch c.state {
+        case .failed, .cancelled:
+            print("session: its connection had gone while the app was away; back to the connect screen")
+            connectionLost(c)
+        default:
+            break
         }
     }
 
@@ -1632,7 +1711,14 @@ final class StreamClient: ObservableObject {
     private func cameForward() {
         let wasInBackground = !appInForeground
         appInForeground = true
-        guard browsing, wasInBackground else { return }
+        appActive = true    // the activation that follows this return must not rebuild a second time
+        inactiveSince = 0
+        guard wasInBackground else { return }
+        // A session the app still believes in must still have its connection: a background trip can
+        // swallow the callback that would have ended it, and its screen would come back as a frozen
+        // picture the person can only leave by force-quitting.
+        auditSessionOnReturn()
+        guard browsing, !connected else { return }
         rebuildIfDue(.network, cameForward: true)
         if nearbyBrowser != nil { rebuildIfDue(.nearby, cameForward: true) }
         if var r = reconnect {
@@ -4121,9 +4207,47 @@ final class StreamClient: ObservableObject {
         c?.cancel()
         tearDown(status: Self.lookingOnNetwork)
         updateDiscovery()
+        #if DEBUG
+        scheduleLeaveRowTap()
+        #endif
     }
 
-    /// The connection ended: the Mac went away (host quit, Wi-Fi dropped, connection reset, a
+    #if DEBUG
+    /// `-SillLeaveRows '<seconds> <prefix>'`: after Leave, tap the Mac's row again once, as a
+    /// person does to reconnect — the sequence that failed on a real Duo (Leave, then the Mac's row,
+    /// then no connection until the app was force-quit). Once per launch.
+    func scheduleLeaveRowTap() {
+        guard let leaveRow, !leaveRowTapped else { return }
+        leaveRowTapped = true
+        print("harness: left; tapping a row named \"\(leaveRow.prefix)\" again in 1 s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, let leaveRow = self.leaveRow else { return }
+            guard let mac = self.macs.first(where: { $0.route != .remote && $0.name.hasPrefix(leaveRow.prefix) }) else {
+                print("harness: no row to tap again")
+                return
+            }
+            print("harness: tapping \(mac.name) again")
+            self.connect(to: mac)
+        }
+    }
+    #endif
+
+    #if DEBUG
+    /// `-SillLeaveRows '<seconds> <prefix>'`: Leave (disconnect) that many seconds after the first
+    /// window list, then tap the Mac's row again once (`disconnect` schedules the tap). The sequence
+    /// a person makes with the Leave button and the Mac's row; a script cannot make it alone.
+    func scheduleLeaveTest() {
+        guard let leaveRow, !leaveScheduled else { return }
+        leaveScheduled = true
+        print(String(format: "harness: leaving in %.1f s, then tapping \"%@\"'s row again", leaveRow.after, leaveRow.prefix))
+        DispatchQueue.main.asyncAfter(deadline: .now() + leaveRow.after) { [weak self] in
+            guard let self, self.connected else { print("harness: leave test: not connected"); return }
+            self.disconnect()
+        }
+    }
+    #endif
+
+    /// A connection ended: the Mac went away (host quit, Wi-Fi dropped, connection reset, a
     /// goodbye), or a remote dial's winner failed before its window list. `end` overrides what the
     /// error says (a message no Sill sends). A session at home whose connection ran over the cable
     /// goes on at once over a new one when it can (`rescue`); otherwise StreamClient+Remote decides
@@ -4906,6 +5030,7 @@ final class StreamClient: ObservableObject {
                     InputScript.sessionListed(self)   // -SillInputScript: its clock starts here
                     SettingsScript.sessionListed(self)   // -SillSettingsScript: and this one's
                     if let test = UserDefaults.standard.string(forKey: "SillMoveHomeTest") { self.beginMoveHomeTest(test) }
+                    self.scheduleLeaveTest()
                     #endif
                 }
                 if firstList || sizingChanged {
@@ -5174,10 +5299,23 @@ final class StreamClient: ObservableObject {
         // A connection already closed sends nothing, and is not declared lost again at each ping:
         // while a move carries its session on (`rescue`) it stays the session's until the move
         // takes over or ends, and its liveness would otherwise report it lost four times a second.
-        // Its own state handler has already reported the close (`connectionLost`).
+        // Its own state handler reports the close (`connectionLost`) — but not always: a suspension
+        // can swallow the delivery, and then the session would sit on a dead connection for good, its
+        // screen a frozen picture only a force-quit leaves. So a closed connection still counted as
+        // this session's is reported here, once (its own guard drops the report if the session has
+        // already ended: `connection` is no longer `c`).
         switch c.state {
-        case .cancelled, .failed: return
-        default: break
+        case .cancelled, .failed:
+            guard !closedReported else { return }
+            closedReported = true
+            // `connectionLost` ignores a connection this device has already let go (`disconnect`,
+            // `tearDown`), so a session it still holds is the only one ended here — and a session
+            // over the cable that just went can still be carried on (`rescue`).
+            print("session: its connection closed while the session was still held; reporting it")
+            connectionLost(c)
+            return
+        default:
+            closedReported = false
         }
         guard c === connection, checkLiveness(c) else { return }
         var payload = Data(capacity: 8)
@@ -5372,6 +5510,15 @@ extension StreamClient {
     /// `192.0.2.1:9` (TEST-NET-1, never answers) is given up after DiscoveryPolicy.wiredWait,
     /// `127.0.0.1:1` (nothing listens) at once.
     private static let wiredTest = address(argument: "SillWiredTest")
+
+    /// `-SillLeaveRows '<seconds> <prefix>'`: Leave after that many seconds of streaming, then tap
+    /// the row whose name starts with `prefix` again (`leaveRow`).
+    static func parseLeaveRow() -> (after: Double, prefix: String)? {
+        guard let raw = UserDefaults.standard.string(forKey: "SillLeaveRows") else { return nil }
+        let words = raw.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard words.count == 2, let after = Double(words[0]), after.isFinite, after >= 0 else { return nil }
+        return (after, String(words[1]))
+    }
 
     /// A `host:port` launch argument as an address (`address(_:)`).
     private static func address(argument key: String) -> NWEndpoint? {
