@@ -38,9 +38,13 @@ cd "$root"
 # identity keeps them, so an unnamed identity falls back to the first installed,
 # non-revoked Apple Development certificate; ad-hoc only when there is none.
 if [ -z "${DUODESK_SIGN_IDENTITY:-}" ]; then
+    # `security` prints "0 valid identities found" to stdout when the keychain has none, which is
+    # every CI runner and every fresh Mac. grep then finds nothing and exits 1, and under pipefail
+    # that ended the whole build on the next line with no message. The lookup has to come back
+    # empty here, for the fallback below to decide.
     DUODESK_SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
         | grep 'Apple Development' | grep -v REVOKED | head -1 \
-        | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-F]{40}).*/\1/')"
+        | sed -E 's/^[[:space:]]*[0-9]+\) ([0-9A-F]{40}).*/\1/' || true)"
     [ -n "$DUODESK_SIGN_IDENTITY" ] || DUODESK_SIGN_IDENTITY=-
 fi
 identity="${DUODESK_SIGN_IDENTITY:--}"
